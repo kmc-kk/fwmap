@@ -1,6 +1,9 @@
 use std::fmt;
+use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BinaryInfo {
     pub path: String,
     pub arch: String,
@@ -8,7 +11,7 @@ pub struct BinaryInfo {
     pub endian: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SectionInfo {
     pub name: String,
     pub addr: u64,
@@ -17,7 +20,7 @@ pub struct SectionInfo {
     pub category: SectionCategory,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SymbolInfo {
     pub name: String,
     pub demangled_name: Option<String>,
@@ -26,14 +29,14 @@ pub struct SymbolInfo {
     pub size: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ObjectContribution {
     pub object_path: String,
     pub section_name: Option<String>,
     pub size: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ArchiveContribution {
     pub archive_path: String,
     pub member_path: Option<String>,
@@ -41,14 +44,14 @@ pub struct ArchiveContribution {
     pub size: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SectionTotal {
     pub section_name: String,
     pub size: u64,
     pub category: SectionCategory,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MemoryRegion {
     pub name: String,
     pub origin: u64,
@@ -56,7 +59,7 @@ pub struct MemoryRegion {
     pub attributes: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SectionPlacement {
     pub section_name: String,
     pub region_name: String,
@@ -66,21 +69,21 @@ pub struct SectionPlacement {
     pub has_at: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LinkerScriptInfo {
     pub path: String,
     pub regions: Vec<MemoryRegion>,
     pub placements: Vec<SectionPlacement>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RegionSectionUsage {
     pub section_name: String,
     pub addr: u64,
     pub size: u64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RegionUsageSummary {
     pub region_name: String,
     pub origin: u64,
@@ -91,7 +94,7 @@ pub struct RegionUsageSummary {
     pub sections: Vec<RegionSectionUsage>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MemorySummary {
     pub rom_bytes: u64,
     pub ram_bytes: u64,
@@ -100,7 +103,7 @@ pub struct MemorySummary {
     pub region_summaries: Vec<RegionUsageSummary>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WarningItem {
     pub level: WarningLevel,
     pub code: String,
@@ -109,7 +112,7 @@ pub struct WarningItem {
     pub related: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AnalysisResult {
     pub binary: BinaryInfo,
     pub sections: Vec<SectionInfo>,
@@ -121,7 +124,7 @@ pub struct AnalysisResult {
     pub warnings: Vec<WarningItem>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiffEntry {
     pub name: String,
     pub current: u64,
@@ -130,7 +133,7 @@ pub struct DiffEntry {
     pub change: DiffChangeKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiffResult {
     pub rom_delta: i64,
     pub ram_delta: i64,
@@ -141,7 +144,7 @@ pub struct DiffResult {
     pub archive_diffs: Vec<DiffEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 pub struct DiffSummary {
     pub section_added: usize,
     pub section_removed: usize,
@@ -157,28 +160,28 @@ pub struct DiffSummary {
     pub object_decreased: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum WarningLevel {
     Info,
     Warn,
     Error,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum WarningSource {
     Elf,
     Map,
     Analyze,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum SectionCategory {
     Rom,
     Ram,
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum DiffChangeKind {
     Added,
     Removed,
@@ -186,6 +189,33 @@ pub enum DiffChangeKind {
     Decreased,
     Unchanged,
     Moved,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ThresholdConfig {
+    pub rom_percent: f64,
+    pub ram_percent: f64,
+    pub region_default_percent: f64,
+    pub region_percent: BTreeMap<String, f64>,
+    pub symbol_growth_bytes: u64,
+    pub region_low_free_bytes: u64,
+    pub section_growth_rate: f64,
+    pub large_symbol_bytes: u64,
+}
+
+impl Default for ThresholdConfig {
+    fn default() -> Self {
+        Self {
+            rom_percent: 85.0,
+            ram_percent: 85.0,
+            region_default_percent: 85.0,
+            region_percent: BTreeMap::new(),
+            symbol_growth_bytes: 4 * 1024,
+            region_low_free_bytes: 4 * 1024,
+            section_growth_rate: 5.0,
+            large_symbol_bytes: 4 * 1024,
+        }
+    }
 }
 
 impl fmt::Display for WarningLevel {

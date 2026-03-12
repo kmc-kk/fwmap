@@ -13,6 +13,8 @@
 - Classified diff analysis for sections, symbols, objects, and archive members
 - Memory region overview and section-to-region placement summary
 - Fixed-threshold warnings
+- JSON report output
+- CI summary and warning-based exit control
 - Graceful degradation for missing symbol tables and partially broken map files
 - `--verbose` and `--version` CLI support
 - Offline HTML report generation
@@ -53,6 +55,31 @@ cargo run -- analyze \
 
 Default output path is `fwmap_report.html`.
 
+JSON report example:
+
+```bash
+cargo run -- analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --report-json report.json
+```
+
+CI-oriented example:
+
+```bash
+cargo run -- analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --prev-elf prev/app.elf \
+  --prev-map prev/app.map \
+  --ci-summary \
+  --fail-on-warning \
+  --threshold-rom 90 \
+  --threshold-ram 90 \
+  --threshold-region FLASH:92 \
+  --threshold-symbol-growth 8192
+```
+
 When previous artifacts are present, the CLI also emits a short diff summary such as:
 
 ```text
@@ -73,6 +100,31 @@ Top growth object: drivers/net.o (+8192)
 - Top Symbols: largest symbols from the ELF symbol table
 - Top Object Contributions: object sizes from the map file
 - Diff: summary cards plus top section/symbol/object growth and added/removed lists
+- JSON: machine-readable report with binary, memory, warnings, diff, and region data
+
+## JSON Schema
+
+The JSON report uses a fixed top-level shape:
+
+```json
+{
+  "schema_version": 1,
+  "binary": { "...": "..." },
+  "linker_script": { "...": "..." },
+  "section_summary": [],
+  "memory_summary": { "...": "..." },
+  "warnings": [],
+  "thresholds": { "...": "..." },
+  "top_symbols": [],
+  "top_object_contributions": [],
+  "archive_contributions": [],
+  "regions": [],
+  "diff_summary": { "...": "..." },
+  "diff": { "...": "..." }
+}
+```
+
+`diff_summary` and `diff` are `null` when no previous build is provided.
 
 ## Test Fixtures
 
@@ -97,6 +149,7 @@ cargo test
 - Linker script support is currently a subset parser aimed at common GNU ld patterns.
 - Object paths are sourced from the map file; when `--map` is omitted, symbol-to-object mapping is unavailable.
 - Region usage relies on linker script declarations plus ELF section addresses, so unusual scripts may only be partially represented.
+- JSON schema is fixed at `schema_version = 1`.
 - Demangling is not implemented.
 
 ## CLI Compatibility
@@ -105,9 +158,38 @@ cargo test
 - `--verbose` and `--version` were added without changing existing flags.
 - Phase 3 only extends diff output; existing flags and required arguments are unchanged.
 - Phase 4 adds optional `--lds` without changing existing required arguments.
+- Phase 5 adds optional reporting and threshold flags without changing existing required arguments.
 
 ## Planned Extensions
 
-- JSON output for CI
 - Region-aware placement analysis
 - Better demangling and C++ symbol analysis
+
+## CI Examples
+
+GitHub Actions:
+
+```yaml
+- name: Analyze firmware size
+  run: >
+    cargo run -- analyze
+    --elf build/app.elf
+    --map build/app.map
+    --prev-elf prev/app.elf
+    --prev-map prev/app.map
+    --report-json fwmap.json
+    --ci-summary
+    --fail-on-warning
+```
+
+GitLab CI:
+
+```yaml
+fwmap:
+  script:
+    - cargo run -- analyze --elf build/app.elf --map build/app.map --report-json fwmap.json --ci-summary
+  artifacts:
+    paths:
+      - fwmap_report.html
+      - fwmap.json
+```

@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::analyze::format_bytes;
 use crate::diff::{names_for_kind, top_increases};
-use crate::model::{AnalysisResult, DiffChangeKind, DiffEntry, DiffResult, WarningItem};
+use crate::model::{AnalysisResult, DiffChangeKind, DiffEntry, DiffResult, ThresholdConfig, WarningItem};
 
 pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, verbose: bool) {
     println!("ELF: {}", result.binary.path);
@@ -43,6 +43,34 @@ pub fn write_html_report(path: &Path, current: &AnalysisResult, diff: Option<&Di
     fs::write(path, html).map_err(|err| format!("failed to write HTML report '{}': {err}", path.display()))
 }
 
+pub fn write_json_report(
+    path: &Path,
+    current: &AnalysisResult,
+    diff: Option<&DiffResult>,
+    thresholds: &ThresholdConfig,
+) -> Result<(), String> {
+    let json = build_json(current, diff, thresholds)?;
+    fs::write(path, json).map_err(|err| format!("failed to write JSON report '{}': {err}", path.display()))
+}
+
+pub fn print_ci_summary(current: &AnalysisResult, diff: Option<&DiffResult>) {
+    if let Some(diff) = diff {
+        println!("ROM: {:+} bytes", diff.rom_delta);
+        println!("RAM: {:+} bytes", diff.ram_delta);
+        println!("Warnings: {}", current.warnings.len());
+        if let Some(entry) = top_increases(&diff.section_diffs, 1).first() {
+            println!("Top section growth: {} ({:+})", entry.name, entry.delta);
+        }
+        if let Some(entry) = top_increases(&diff.symbol_diffs, 1).first() {
+            println!("Top symbol growth: {} ({:+})", entry.name, entry.delta);
+        }
+    } else {
+        println!("ROM: {}", current.memory.rom_bytes);
+        println!("RAM: {}", current.memory.ram_bytes);
+        println!("Warnings: {}", current.warnings.len());
+    }
+}
+
 fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>fwmap report</title><style>{}</style></head><body>{}</body></html>",
@@ -62,6 +90,25 @@ fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
         ]
         .join("")
     )
+}
+
+fn build_json(current: &AnalysisResult, diff: Option<&DiffResult>, thresholds: &ThresholdConfig) -> Result<String, String> {
+    let payload = serde_json::json!({
+        "schema_version": 1,
+        "binary": &current.binary,
+        "linker_script": &current.linker_script,
+        "section_summary": &current.memory.section_totals,
+        "memory_summary": &current.memory,
+        "warnings": &current.warnings,
+        "thresholds": thresholds,
+        "top_symbols": current.symbols.iter().take(50).collect::<Vec<_>>(),
+        "top_object_contributions": current.object_contributions.iter().take(30).collect::<Vec<_>>(),
+        "archive_contributions": current.archive_contributions.iter().take(30).collect::<Vec<_>>(),
+        "regions": &current.memory.region_summaries,
+        "diff_summary": diff.map(|item| &item.summary),
+        "diff": diff,
+    });
+    serde_json::to_string_pretty(&payload).map_err(|err| format!("failed to serialize JSON report: {err}"))
 }
 
 fn style_block() -> &'static str {
@@ -346,11 +393,11 @@ fn escape(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::write_html_report;
+    use super::{write_html_report, write_json_report};
     use crate::model::{
         AnalysisResult, BinaryInfo, DiffChangeKind, DiffEntry, DiffResult, DiffSummary, MemoryRegion, MemorySummary,
-        RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionTotal, SymbolInfo, WarningItem,
-        WarningLevel, WarningSource,
+        RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionTotal, SymbolInfo, ThresholdConfig,
+        WarningItem, WarningLevel, WarningSource,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -426,6 +473,22 @@ mod tests {
         assert!(html.contains("Added Symbols"));
         assert!(html.contains("Top Symbol Growth"));
         assert!(html.contains("Memory Regions Overview"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn json_contains_thresholds_and_regions() {
+        let path = std::env::temp_dir().join(format!(
+            "fwmap-report-{}.json",
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let analysis = sample_analysis();
+        let thresholds = ThresholdConfig::default();
+        write_json_report(&path, &analysis, None, &thresholds).unwrap();
+        let json = fs::read_to_string(&path).unwrap();
+        assert!(json.contains("\"schema_version\""));
+        assert!(json.contains("\"thresholds\""));
+        assert!(json.contains("\"regions\""));
         let _ = fs::remove_file(path);
     }
 

@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use crate::analyze::{analyze_paths, evaluate_warnings};
 use crate::diff::{diff_results, top_increases};
-use crate::render::{print_cli_summary, write_html_report};
+use crate::model::ThresholdConfig;
+use crate::render::{print_ci_summary, print_cli_summary, write_html_report, write_json_report};
 
 const DEFAULT_OUT: &str = "fwmap_report.html";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -25,11 +26,15 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
             prev_elf,
             prev_map,
             out,
+            report_json,
+            ci_summary,
+            fail_on_warning,
+            thresholds,
             verbose,
         } => {
-            let mut current = analyze_paths(&elf, map.as_deref(), lds.as_deref())?;
+            let mut current = analyze_paths(&elf, map.as_deref(), lds.as_deref(), &thresholds)?;
             let diff = if let Some(prev_elf) = prev_elf.as_deref() {
-                let previous = analyze_paths(prev_elf, prev_map.as_deref(), lds.as_deref())?;
+                let previous = analyze_paths(prev_elf, prev_map.as_deref(), lds.as_deref(), &thresholds)?;
                 let diff = diff_results(&current, &previous);
                 let mut warnings = current
                     .warnings
@@ -37,23 +42,38 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
                     .filter(|warning| warning.source != crate::model::WarningSource::Analyze)
                     .cloned()
                     .collect::<Vec<_>>();
-                warnings.extend(evaluate_warnings(&current, Some(&diff)));
+                warnings.extend(evaluate_warnings(&current, Some(&diff), &thresholds));
                 current.warnings = warnings;
                 Some(diff)
             } else {
                 None
             };
-            print_cli_summary(&current, diff.as_ref(), verbose);
-            if let Some(diff) = diff.as_ref() {
-                if let Some(symbol) = top_increases(&diff.symbol_diffs, 1).first() {
-                    println!("Top growth symbol: {} ({:+})", symbol.name, symbol.delta);
-                }
-                if let Some(object) = top_increases(&diff.object_diffs, 1).first() {
-                    println!("Top growth object: {} ({:+})", object.name, object.delta);
+            if ci_summary {
+                print_ci_summary(&current, diff.as_ref());
+            } else {
+                print_cli_summary(&current, diff.as_ref(), verbose);
+                if let Some(diff) = diff.as_ref() {
+                    if let Some(symbol) = top_increases(&diff.symbol_diffs, 1).first() {
+                        println!("Top growth symbol: {} ({:+})", symbol.name, symbol.delta);
+                    }
+                    if let Some(object) = top_increases(&diff.object_diffs, 1).first() {
+                        println!("Top growth object: {} ({:+})", object.name, object.delta);
+                    }
                 }
             }
             write_html_report(&out, &current, diff.as_ref())?;
-            println!("Report: {}", out.display());
+            if let Some(path) = report_json.as_deref() {
+                write_json_report(path, &current, diff.as_ref(), &thresholds)?;
+                if !ci_summary {
+                    println!("JSON: {}", path.display());
+                }
+            }
+            if !ci_summary {
+                println!("Report: {}", out.display());
+            }
+            if fail_on_warning && !current.warnings.is_empty() {
+                return Err(format!("warning threshold exceeded: {} warning(s) triggered", current.warnings.len()));
+            }
             Ok(())
         }
     }
@@ -70,6 +90,10 @@ enum Command {
         prev_elf: Option<PathBuf>,
         prev_map: Option<PathBuf>,
         out: PathBuf,
+        report_json: Option<PathBuf>,
+        ci_summary: bool,
+        fail_on_warning: bool,
+        thresholds: ThresholdConfig,
         verbose: bool,
     },
 }
@@ -91,6 +115,10 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut prev_elf = None;
     let mut prev_map = None;
     let mut out = PathBuf::from(DEFAULT_OUT);
+    let mut report_json = None;
+    let mut ci_summary = false;
+    let mut fail_on_warning = false;
+    let mut thresholds = ThresholdConfig::default();
     let mut verbose = false;
     let mut index = 2usize;
     while index < args.len() {
@@ -101,9 +129,34 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                 index += 1;
                 continue;
             }
+            "--ci-summary" => {
+                ci_summary = true;
+                index += 1;
+                continue;
+            }
+            "--fail-on-warning" => {
+                fail_on_warning = true;
+                index += 1;
+                continue;
+            }
             "--help" | "-h" => return Ok(Command::Help),
             "--version" | "-V" => return Ok(Command::Version),
-            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" => {
+            "--threshold-rom" | "--threshold-ram" | "--threshold-symbol-growth" | "--threshold-region" => {
+                let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
+                match key.as_str() {
+                    "--threshold-rom" => thresholds.rom_percent = parse_percent(value, key)?,
+                    "--threshold-ram" => thresholds.ram_percent = parse_percent(value, key)?,
+                    "--threshold-symbol-growth" => thresholds.symbol_growth_bytes = parse_u64(value, key)?,
+                    "--threshold-region" => {
+                        let (name, percent) = parse_region_threshold(value)?;
+                        thresholds.region_percent.insert(name, percent);
+                    }
+                    _ => {}
+                }
+                index += 2;
+                continue;
+            }
+            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--elf" => elf = Some(PathBuf::from(value)),
@@ -112,6 +165,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                     "--prev-elf" => prev_elf = Some(PathBuf::from(value)),
                     "--prev-map" => prev_map = Some(PathBuf::from(value)),
                     "--out" => out = PathBuf::from(value),
+                    "--report-json" => report_json = Some(PathBuf::from(value)),
                     _ => {}
                 }
                 index += 2;
@@ -143,6 +197,10 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         prev_elf,
         prev_map,
         out,
+        report_json,
+        ci_summary,
+        fail_on_warning,
+        thresholds,
         verbose,
     })
 }
@@ -166,7 +224,7 @@ fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--verbose]
+fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--verbose]
 
 Options:
   --elf       Input ELF file (required)
@@ -175,15 +233,42 @@ Options:
   --prev-elf  Previous ELF file for diff
   --prev-map  Previous map file for diff
   --out       Output HTML path (default: fwmap_report.html)
+  --report-json Write JSON report to the given path
+  --ci-summary Print compact CI-friendly summary
+  --fail-on-warning Return non-zero if warnings are present
+  --threshold-rom Percent threshold for ROM warnings
+  --threshold-ram Percent threshold for RAM warnings
+  --threshold-region name:percent threshold for a region warning
+  --threshold-symbol-growth Bytes threshold for symbol growth warning
   --verbose   Print detailed warnings to the console
   --version   Show version
   --help      Show this help"
     )
 }
 
+fn parse_percent(value: &str, key: &str) -> Result<f64, String> {
+    let parsed = value.parse::<f64>().map_err(|_| format!("invalid percent for {key}: {value}"))?;
+    if !(0.0..=100.0).contains(&parsed) {
+        return Err(format!("percent for {key} must be between 0 and 100: {value}"));
+    }
+    Ok(parsed)
+}
+
+fn parse_u64(value: &str, key: &str) -> Result<u64, String> {
+    value.parse::<u64>().map_err(|_| format!("invalid integer for {key}: {value}"))
+}
+
+fn parse_region_threshold(value: &str) -> Result<(String, f64), String> {
+    let (name, percent) = value
+        .split_once(':')
+        .ok_or_else(|| format!("invalid region threshold '{value}', expected <name:percent>"))?;
+    Ok((name.to_string(), parse_percent(percent, "--threshold-region")?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{parse_args, Command};
+    use std::path::PathBuf;
 
     #[test]
     fn help_without_args() {
@@ -222,5 +307,43 @@ mod tests {
     fn parses_version_flag() {
         let cmd = parse_args(vec!["fwmap".to_string(), "--version".to_string()]).unwrap();
         assert!(matches!(cmd, Command::Version));
+    }
+
+    #[test]
+    fn parses_json_and_threshold_flags() {
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "analyze".to_string(),
+            "--elf".to_string(),
+            "Cargo.toml".to_string(),
+            "--report-json".to_string(),
+            "out.json".to_string(),
+            "--threshold-rom".to_string(),
+            "90".to_string(),
+            "--threshold-region".to_string(),
+            "FLASH:92".to_string(),
+            "--threshold-symbol-growth".to_string(),
+            "8192".to_string(),
+            "--ci-summary".to_string(),
+            "--fail-on-warning".to_string(),
+        ])
+        .unwrap();
+        match cmd {
+            Command::Analyze {
+                report_json,
+                ci_summary,
+                fail_on_warning,
+                thresholds,
+                ..
+            } => {
+                assert_eq!(report_json.unwrap(), PathBuf::from("out.json"));
+                assert!(ci_summary);
+                assert!(fail_on_warning);
+                assert_eq!(thresholds.rom_percent, 90.0);
+                assert_eq!(thresholds.region_percent.get("FLASH"), Some(&92.0));
+                assert_eq!(thresholds.symbol_growth_bytes, 8192);
+            }
+            _ => panic!("expected analyze command"),
+        }
     }
 }

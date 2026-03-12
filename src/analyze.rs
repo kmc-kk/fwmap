@@ -4,18 +4,16 @@ use std::path::Path;
 use crate::ingest::{elf, lds, map};
 use crate::model::{
     AnalysisResult, ArchiveContribution, DiffResult, MemoryRegion, MemorySummary, ObjectContribution, RegionSectionUsage,
-    RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SymbolInfo, WarningItem,
-    WarningLevel, WarningSource,
+    RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SymbolInfo, ThresholdConfig,
+    WarningItem, WarningLevel, WarningSource,
 };
 
-const ROM_USAGE_THRESHOLD: f64 = 0.85;
-const RAM_USAGE_THRESHOLD: f64 = 0.85;
-const REGION_USAGE_THRESHOLD: f64 = 0.85;
-const REGION_LOW_FREE_THRESHOLD: u64 = 4 * 1024;
-const LARGE_SYMBOL_THRESHOLD: u64 = 4 * 1024;
-const GROWTH_RATE_THRESHOLD: f64 = 0.05;
-
-pub fn analyze_paths(elf_path: &Path, map_path: Option<&Path>, lds_path: Option<&Path>) -> Result<AnalysisResult, String> {
+pub fn analyze_paths(
+    elf_path: &Path,
+    map_path: Option<&Path>,
+    lds_path: Option<&Path>,
+    thresholds: &ThresholdConfig,
+) -> Result<AnalysisResult, String> {
     let elf = elf::parse_elf(elf_path)?;
     let map_data = match map_path {
         Some(path) => Some(map::parse_map(path)?),
@@ -53,7 +51,7 @@ pub fn analyze_paths(elf_path: &Path, map_path: Option<&Path>, lds_path: Option<
         memory,
         warnings,
     };
-    result.warnings.extend(evaluate_warnings(&result, None));
+    result.warnings.extend(evaluate_warnings(&result, None, thresholds));
     Ok(result)
 }
 
@@ -93,16 +91,16 @@ pub fn sorted_symbols(mut symbols: Vec<SymbolInfo>) -> Vec<SymbolInfo> {
     symbols
 }
 
-pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>) -> Vec<WarningItem> {
+pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>, thresholds: &ThresholdConfig) -> Vec<WarningItem> {
     let mut warnings = Vec::new();
     let rom_capacity = memory_capacity(&current.memory.memory_regions, &["rom", "flash"]);
     if let Some(capacity) = rom_capacity {
         let ratio = current.memory.rom_bytes as f64 / capacity as f64;
-        if ratio >= ROM_USAGE_THRESHOLD {
+        if ratio * 100.0 >= thresholds.rom_percent {
             warnings.push(WarningItem {
                 level: WarningLevel::Warn,
                 code: "ROM_THRESHOLD".to_string(),
-                message: format!("ROM usage exceeded {:.0}% ({:.1}%)", ROM_USAGE_THRESHOLD * 100.0, ratio * 100.0),
+                message: format!("ROM usage exceeded {:.0}% ({:.1}%)", thresholds.rom_percent, ratio * 100.0),
                 source: WarningSource::Analyze,
                 related: Some("rom".to_string()),
             });
@@ -111,11 +109,11 @@ pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>) ->
     let ram_capacity = memory_capacity(&current.memory.memory_regions, &["ram"]);
     if let Some(capacity) = ram_capacity {
         let ratio = current.memory.ram_bytes as f64 / capacity as f64;
-        if ratio >= RAM_USAGE_THRESHOLD {
+        if ratio * 100.0 >= thresholds.ram_percent {
             warnings.push(WarningItem {
                 level: WarningLevel::Warn,
                 code: "RAM_THRESHOLD".to_string(),
-                message: format!("RAM usage exceeded {:.0}% ({:.1}%)", RAM_USAGE_THRESHOLD * 100.0, ratio * 100.0),
+                message: format!("RAM usage exceeded {:.0}% ({:.1}%)", thresholds.ram_percent, ratio * 100.0),
                 source: WarningSource::Analyze,
                 related: Some("ram".to_string()),
             });
@@ -123,16 +121,22 @@ pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>) ->
     }
 
     for region in &current.memory.region_summaries {
-        if region.usage_ratio >= REGION_USAGE_THRESHOLD {
+        let region_threshold = thresholds
+            .region_percent
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(&region.region_name))
+            .map(|(_, value)| *value)
+            .unwrap_or(thresholds.region_default_percent);
+        if region.usage_ratio * 100.0 >= region_threshold {
             warnings.push(WarningItem {
                 level: WarningLevel::Warn,
                 code: "REGION_THRESHOLD".to_string(),
-                message: format!("Region {} usage exceeded {:.0}% ({:.1}%)", region.region_name, REGION_USAGE_THRESHOLD * 100.0, region.usage_ratio * 100.0),
+                message: format!("Region {} usage exceeded {:.0}% ({:.1}%)", region.region_name, region_threshold, region.usage_ratio * 100.0),
                 source: WarningSource::Analyze,
                 related: Some(region.region_name.clone()),
             });
         }
-        if region.free <= REGION_LOW_FREE_THRESHOLD {
+        if region.free <= thresholds.region_low_free_bytes {
             warnings.push(WarningItem {
                 level: WarningLevel::Warn,
                 code: "REGION_LOW_FREE".to_string(),
@@ -162,7 +166,7 @@ pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>) ->
         }
     }
 
-    for symbol in current.symbols.iter().filter(|item| item.size >= LARGE_SYMBOL_THRESHOLD).take(5) {
+    for symbol in current.symbols.iter().filter(|item| item.size >= thresholds.large_symbol_bytes).take(5) {
         warnings.push(WarningItem {
             level: WarningLevel::Warn,
             code: "LARGE_SYMBOL".to_string(),
@@ -176,7 +180,7 @@ pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>) ->
         for name in [".data", ".bss"] {
             if let Some(entry) = diff.section_diffs.iter().find(|entry| entry.name == name && entry.previous > 0) {
                 let growth = entry.delta as f64 / entry.previous as f64;
-                if growth >= GROWTH_RATE_THRESHOLD {
+                if growth * 100.0 >= thresholds.section_growth_rate {
                     warnings.push(WarningItem {
                         level: WarningLevel::Warn,
                         code: format!("{}_GROWTH", name.trim_start_matches('.').to_uppercase()),
@@ -187,7 +191,11 @@ pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>) ->
                 }
             }
         }
-        if let Some(entry) = diff.symbol_diffs.iter().find(|entry| entry.delta >= LARGE_SYMBOL_THRESHOLD as i64) {
+        if let Some(entry) = diff
+            .symbol_diffs
+            .iter()
+            .find(|entry| entry.delta >= thresholds.symbol_growth_bytes as i64)
+        {
             warnings.push(WarningItem {
                 level: WarningLevel::Warn,
                 code: "SYMBOL_SPIKE".to_string(),
@@ -299,7 +307,7 @@ mod tests {
     use crate::diff::diff_results;
     use crate::model::{
         AnalysisResult, BinaryInfo, DiffChangeKind, DiffResult, DiffSummary, LinkerScriptInfo, MemoryRegion,
-        MemorySummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SymbolInfo,
+        MemorySummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SymbolInfo, ThresholdConfig,
     };
 
     #[test]
@@ -470,7 +478,7 @@ mod tests {
             object_diffs: Vec::new(),
             archive_diffs: Vec::new(),
         };
-        let warnings = evaluate_warnings(&current, Some(&diff));
+        let warnings = evaluate_warnings(&current, Some(&diff), &ThresholdConfig::default());
         assert!(warnings.iter().any(|w| w.code == "ROM_THRESHOLD"));
         assert!(warnings.iter().any(|w| w.code == "RAM_THRESHOLD"));
         assert!(warnings.iter().any(|w| w.code == "REGION_THRESHOLD"));
@@ -478,6 +486,43 @@ mod tests {
         assert!(warnings.iter().any(|w| w.code == "DATA_GROWTH"));
         assert!(warnings.iter().any(|w| w.code == "SYMBOL_SPIKE"));
         assert!(warnings.iter().any(|w| w.code == "SECTION_REGION_MISMATCH"));
+    }
+
+    #[test]
+    fn respects_custom_thresholds() {
+        let current = stub_analysis(90, 50, &[(".data", 42)], &[("blob", 2048)]);
+        let diff = DiffResult {
+            rom_delta: 0,
+            ram_delta: 0,
+            summary: DiffSummary::default(),
+            section_diffs: vec![crate::model::DiffEntry {
+                name: ".data".to_string(),
+                current: 42,
+                previous: 41,
+                delta: 1,
+                change: DiffChangeKind::Increased,
+            }],
+            symbol_diffs: vec![crate::model::DiffEntry {
+                name: "blob".to_string(),
+                current: 2048,
+                previous: 0,
+                delta: 2048,
+                change: DiffChangeKind::Added,
+            }],
+            object_diffs: Vec::new(),
+            archive_diffs: Vec::new(),
+        };
+        let thresholds = ThresholdConfig {
+            rom_percent: 95.0,
+            ram_percent: 95.0,
+            region_default_percent: 95.0,
+            symbol_growth_bytes: 4096,
+            section_growth_rate: 10.0,
+            ..ThresholdConfig::default()
+        };
+        let warnings = evaluate_warnings(&current, Some(&diff), &thresholds);
+        assert!(!warnings.iter().any(|w| w.code == "SYMBOL_SPIKE"));
+        assert!(!warnings.iter().any(|w| w.code == "DATA_GROWTH"));
     }
 
     fn stub_analysis(rom: u64, ram: u64, sections: &[(&str, u64)], symbols: &[(&str, u64)]) -> AnalysisResult {
