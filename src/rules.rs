@@ -1,5 +1,8 @@
 use crate::analyze::format_bytes;
-use crate::model::{AnalysisResult, DiffResult, ThresholdConfig, WarningItem, WarningLevel, WarningSource};
+use crate::model::{
+    AnalysisResult, CustomRule, DiffResult, RuleKind, RuleSeverityConfig, ThresholdConfig, WarningItem, WarningLevel,
+    WarningSource,
+};
 
 pub trait Rule {
     fn evaluate(&self, context: &RuleContext<'_>) -> Vec<RuleResult>;
@@ -9,6 +12,7 @@ pub struct RuleContext<'a> {
     pub current: &'a AnalysisResult,
     pub diff: Option<&'a DiffResult>,
     pub thresholds: &'a ThresholdConfig,
+    pub custom_rules: &'a [CustomRule],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +45,7 @@ pub fn evaluate_default_rules(context: &RuleContext<'_>) -> Vec<WarningItem> {
     rules
         .into_iter()
         .flat_map(|rule| rule.evaluate(context))
+        .chain(evaluate_custom_rules(context))
         .map(to_warning_item)
         .collect()
 }
@@ -57,6 +62,136 @@ fn to_warning_item(result: RuleResult) -> WarningItem {
         source: WarningSource::Analyze,
         related: result.related,
     }
+}
+
+fn evaluate_custom_rules(context: &RuleContext<'_>) -> Vec<RuleResult> {
+    context
+        .custom_rules
+        .iter()
+        .filter(|rule| rule.enabled)
+        .flat_map(|rule| evaluate_custom_rule(context, rule))
+        .collect()
+}
+
+fn evaluate_custom_rule(context: &RuleContext<'_>, rule: &CustomRule) -> Vec<RuleResult> {
+    match rule.kind {
+        RuleKind::RegionUsage => evaluate_custom_region_usage(context, rule),
+        RuleKind::SectionDelta => evaluate_custom_section_delta(context, rule),
+        RuleKind::SymbolDelta => evaluate_custom_symbol_delta(context, rule),
+        RuleKind::SymbolMatch => evaluate_custom_symbol_match(context, rule),
+        RuleKind::ObjectMatch => evaluate_custom_object_match(context, rule),
+    }
+}
+
+fn evaluate_custom_region_usage(context: &RuleContext<'_>, rule: &CustomRule) -> Vec<RuleResult> {
+    let Some(region_name) = rule.region.as_deref() else {
+        return Vec::new();
+    };
+    let Some(threshold) = rule.warn_if_greater_than else {
+        return Vec::new();
+    };
+    let threshold = normalize_ratio_or_percent(threshold);
+    context
+        .current
+        .memory
+        .region_summaries
+        .iter()
+        .filter(|region| region.region_name.eq_ignore_ascii_case(region_name))
+        .filter(|region| apply_name_filters(&region.region_name, &rule.allowlist, &rule.denylist))
+        .filter_map(|region| {
+            let usage = region.usage_ratio * 100.0;
+            (usage >= threshold).then(|| custom_rule_result(rule, Some(region.region_name.clone())))
+        })
+        .collect()
+}
+
+fn evaluate_custom_section_delta(context: &RuleContext<'_>, rule: &CustomRule) -> Vec<RuleResult> {
+    let Some(diff) = context.diff else {
+        return Vec::new();
+    };
+    let Some(section_name) = rule.section.as_deref() else {
+        return Vec::new();
+    };
+    let Some(threshold) = rule.warn_if_delta_bytes_gt else {
+        return Vec::new();
+    };
+    diff.section_diffs
+        .iter()
+        .filter(|entry| entry.name == section_name)
+        .filter(|entry| entry.delta > threshold)
+        .filter(|entry| apply_name_filters(&entry.name, &rule.allowlist, &rule.denylist))
+        .map(|entry| custom_rule_result(rule, Some(entry.name.clone())))
+        .collect()
+}
+
+fn evaluate_custom_symbol_delta(context: &RuleContext<'_>, rule: &CustomRule) -> Vec<RuleResult> {
+    let Some(diff) = context.diff else {
+        return Vec::new();
+    };
+    let Some(symbol_name) = rule.symbol.as_deref() else {
+        return Vec::new();
+    };
+    let Some(threshold) = rule.warn_if_delta_bytes_gt else {
+        return Vec::new();
+    };
+    diff.symbol_diffs
+        .iter()
+        .filter(|entry| entry.name == symbol_name)
+        .filter(|entry| entry.delta > threshold)
+        .filter(|entry| apply_name_filters(&entry.name, &rule.allowlist, &rule.denylist))
+        .map(|entry| custom_rule_result(rule, Some(entry.name.clone())))
+        .collect()
+}
+
+fn evaluate_custom_symbol_match(context: &RuleContext<'_>, rule: &CustomRule) -> Vec<RuleResult> {
+    let Some(symbol_name) = rule.symbol.as_deref() else {
+        return Vec::new();
+    };
+    context
+        .current
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.name == symbol_name)
+        .filter(|symbol| apply_name_filters(&symbol.name, &rule.allowlist, &rule.denylist))
+        .map(|symbol| custom_rule_result(rule, Some(symbol.name.clone())))
+        .collect()
+}
+
+fn evaluate_custom_object_match(context: &RuleContext<'_>, rule: &CustomRule) -> Vec<RuleResult> {
+    let Some(object_name) = rule.object.as_deref() else {
+        return Vec::new();
+    };
+    context
+        .current
+        .object_contributions
+        .iter()
+        .filter(|item| item.object_path == object_name)
+        .filter(|item| apply_name_filters(&item.object_path, &rule.allowlist, &rule.denylist))
+        .map(|item| custom_rule_result(rule, Some(item.object_path.clone())))
+        .collect()
+}
+
+fn custom_rule_result(rule: &CustomRule, related: Option<String>) -> RuleResult {
+    RuleResult {
+        code: rule.id.clone(),
+        severity: match rule.severity {
+            RuleSeverityConfig::Info => RuleSeverity::Info,
+            RuleSeverityConfig::Warn => RuleSeverity::Warn,
+            RuleSeverityConfig::Error => RuleSeverity::Error,
+        },
+        message: rule.message.clone(),
+        related,
+    }
+}
+
+fn apply_name_filters(name: &str, allowlist: &[String], denylist: &[String]) -> bool {
+    let allowed = allowlist.is_empty() || allowlist.iter().any(|item| item == name);
+    let denied = denylist.iter().any(|item| item == name);
+    allowed && !denied
+}
+
+fn normalize_ratio_or_percent(value: f64) -> f64 {
+    if value <= 1.0 { value * 100.0 } else { value }
 }
 
 struct RomUsageHighRule;
@@ -269,7 +404,7 @@ mod tests {
     use crate::model::{
         AnalysisResult, BinaryInfo, DiffChangeKind, DiffEntry, DiffResult, DiffSummary, LinkerScriptInfo, MemoryRegion,
         MemorySummary, RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SymbolInfo,
-        ThresholdConfig,
+        ThresholdConfig, WarningLevel,
     };
 
     #[test]
@@ -324,6 +459,7 @@ mod tests {
             current: &current,
             diff: Some(&diff),
             thresholds: &ThresholdConfig::default(),
+            custom_rules: &[],
         };
         let warnings = evaluate_default_rules(&context);
         for code in [
@@ -376,10 +512,39 @@ mod tests {
             current: &current,
             diff: Some(&diff),
             thresholds: &thresholds,
+            custom_rules: &[],
         };
         let warnings = evaluate_default_rules(&context);
         assert!(!warnings.iter().any(|warning| warning.code == "SYMBOL_SPIKE"));
         assert!(!warnings.iter().any(|warning| warning.code == "DATA_GROWTH"));
+    }
+
+    #[test]
+    fn custom_rules_can_raise_error_severity() {
+        let current = stub_analysis();
+        let custom_rules = vec![crate::model::CustomRule {
+            id: "blob-is-forbidden".to_string(),
+            kind: crate::model::RuleKind::SymbolMatch,
+            severity: crate::model::RuleSeverityConfig::Error,
+            message: "blob symbol must not exist".to_string(),
+            enabled: true,
+            region: None,
+            section: None,
+            symbol: Some("blob".to_string()),
+            object: None,
+            warn_if_greater_than: None,
+            warn_if_delta_bytes_gt: None,
+            allowlist: Vec::new(),
+            denylist: Vec::new(),
+        }];
+        let context = RuleContext {
+            current: &current,
+            diff: None,
+            thresholds: &ThresholdConfig::default(),
+            custom_rules: &custom_rules,
+        };
+        let warnings = evaluate_default_rules(&context);
+        assert!(warnings.iter().any(|warning| warning.code == "blob-is-forbidden" && warning.level == WarningLevel::Error));
     }
 
     fn stub_analysis() -> AnalysisResult {

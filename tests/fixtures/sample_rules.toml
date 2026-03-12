@@ -1,0 +1,31 @@
+schema_version = 1
+
+[thresholds]
+rom_usage_warn = 0.90
+ram_usage_warn = 0.88
+symbol_growth_warn_bytes = 8192
+large_symbol_warn_bytes = 8192
+section_growth_warn_percent = 10
+
+[[rules]]
+id = "flash-near-full"
+kind = "region_usage"
+region = "FLASH"
+warn_if_greater_than = 0.92
+severity = "warn"
+message = "FLASH usage is above 92%"
+
+[[rules]]
+id = "tls-data-growth"
+kind = "section_delta"
+section = ".data"
+warn_if_delta_bytes_gt = 2048
+severity = "warn"
+message = ".data increased by more than 2KB"
+
+[[rules]]
+id = "forbid-g-rx-ring"
+kind = "symbol_match"
+symbol = "_ZN3net9g_rx_ringE"
+severity = "error"
+message = "network ring symbol is forbidden in this build"

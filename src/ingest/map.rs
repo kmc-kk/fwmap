@@ -21,18 +21,28 @@ pub fn parse_map_str(text: &str) -> MapIngestResult {
     let lines = text.lines().collect::<Vec<_>>();
     let mut index = 0usize;
     let mut current_section: Option<String> = None;
+    let mut in_discarded = false;
 
     while index < lines.len() {
         let line = lines[index].trim_end();
         let trimmed = line.trim();
         if trimmed == "Memory Configuration" {
+            in_discarded = false;
             index += 1;
             parse_memory_configuration(&lines, &mut index, &mut result);
             continue;
         }
+        if trimmed == "Discarded input sections" {
+            in_discarded = true;
+            index += 1;
+            continue;
+        }
+        if in_discarded && (trimmed.starts_with("Linker script") || trimmed.starts_with("Memory Configuration")) {
+            in_discarded = false;
+        }
         if let Some(section_name) = parse_output_section(line) {
             current_section = Some(section_name.to_string());
-        } else if let Some((size, path)) = parse_contribution_line(line) {
+        } else if !in_discarded && let Some((size, path)) = parse_contribution_line(line) {
             let section_name = current_section.clone();
             result.object_contributions.push(ObjectContribution {
                 object_path: path.to_string(),
@@ -218,5 +228,19 @@ mod tests {
     fn keeps_loading_when_output_section_has_load_address() {
         let result = parse_map_str(include_str!("../../tests/fixtures/load_address.map"));
         assert!(result.object_contributions.iter().any(|item| item.object_path.ends_with("load.o")));
+    }
+
+    #[test]
+    fn ignores_discarded_sections_block() {
+        let result = parse_map_str(include_str!("../../tests/fixtures/discarded_sections.map"));
+        assert!(result.object_contributions.iter().any(|item| item.object_path.ends_with("main.o")));
+        assert!(!result.object_contributions.iter().any(|item| item.object_path.ends_with("unused.o")));
+    }
+
+    #[test]
+    fn preserves_non_ascii_object_paths() {
+        let result = parse_map_str(include_str!("../../tests/fixtures/non_ascii.map"));
+        assert!(result.object_contributions.iter().any(|item| item.object_path.contains("naïve_utf8.o")));
+        assert!(result.object_contributions.iter().any(|item| item.object_path.contains("cpp_長名.o")));
     }
 }

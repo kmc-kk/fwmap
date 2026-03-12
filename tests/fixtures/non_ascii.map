@@ -1,0 +1,12 @@
+Memory Configuration
+
+Name             Origin             Length             Attributes
+FLASH            0x08000000         0x00020000         xr
+
+Linker script and memory map
+
+.rodata         0x08000100       0x00000020
+ .rodata        0x08000100       0x00000020 build/naïve_utf8.o
+
+.text           0x08000200       0x00000018
+ .text          0x08000200       0x00000018 build/cpp_長名.o

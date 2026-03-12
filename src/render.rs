@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::analyze::format_bytes;
+use crate::demangle::display_name;
 use crate::diff::{names_for_kind, top_increases};
 use crate::model::{AnalysisResult, DiffChangeKind, DiffEntry, DiffResult, ThresholdConfig, WarningItem};
 
@@ -62,7 +63,13 @@ pub fn print_ci_summary(current: &AnalysisResult, diff: Option<&DiffResult>) {
             println!("Top section growth: {} ({:+})", entry.name, entry.delta);
         }
         if let Some(entry) = top_increases(&diff.symbol_diffs, 1).first() {
-            println!("Top symbol growth: {} ({:+})", entry.name, entry.delta);
+            let display = current
+                .symbols
+                .iter()
+                .find(|symbol| symbol.name == entry.name)
+                .map(display_name)
+                .unwrap_or(&entry.name);
+            println!("Top symbol growth: {} ({:+})", display, entry.delta);
         }
     } else {
         println!("ROM: {}", current.memory.rom_bytes);
@@ -275,9 +282,16 @@ fn top_symbols(current: &AnalysisResult) -> String {
         .iter()
         .take(50)
         .map(|symbol| {
+            let display = display_name(symbol);
+            let raw = if display != symbol.name {
+                format!("<div class=\"muted mono\">{}</div>", escape(&symbol.name))
+            } else {
+                String::new()
+            };
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                escape(&symbol.name),
+                "<tr><td>{}{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                escape(display),
+                raw,
                 escape(symbol.section_name.as_deref().unwrap_or("-")),
                 escape(symbol.object_path.as_deref().unwrap_or("-")),
                 format_bytes(symbol.size)
@@ -418,6 +432,22 @@ mod tests {
     }
 
     #[test]
+    fn html_prefers_demangled_symbol_names() {
+        let path = std::env::temp_dir().join(format!(
+            "fwmap-report-demangle-{}.html",
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let mut analysis = sample_analysis();
+        analysis.symbols[0].name = "_ZN3foo3barEv".to_string();
+        analysis.symbols[0].demangled_name = Some("foo::bar()".to_string());
+        write_html_report(&path, &analysis, None).unwrap();
+        let html = fs::read_to_string(&path).unwrap();
+        assert!(html.contains("foo::bar()"));
+        assert!(html.contains("_ZN3foo3barEv"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn html_contains_diff_and_warnings() {
         let path = std::env::temp_dir().join(format!(
             "fwmap-report-diff-{}.html",
@@ -489,6 +519,7 @@ mod tests {
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"thresholds\""));
         assert!(json.contains("\"regions\""));
+        assert!(json.contains("\"demangled_name\""));
         let _ = fs::remove_file(path);
     }
 

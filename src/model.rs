@@ -1,7 +1,7 @@
 use std::fmt;
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BinaryInfo {
@@ -203,6 +203,73 @@ pub struct ThresholdConfig {
     pub large_symbol_bytes: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DemangleMode {
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RuleConfigFile {
+    #[serde(default = "default_rule_schema_version")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub thresholds: RuleThresholdOverrides,
+    #[serde(default)]
+    pub rules: Vec<CustomRule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct RuleThresholdOverrides {
+    pub rom_usage_warn: Option<f64>,
+    pub ram_usage_warn: Option<f64>,
+    pub symbol_growth_warn_bytes: Option<u64>,
+    pub large_symbol_warn_bytes: Option<u64>,
+    pub section_growth_warn_percent: Option<f64>,
+    pub region_low_free_warn_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CustomRule {
+    pub id: String,
+    pub kind: RuleKind,
+    pub severity: RuleSeverityConfig,
+    pub message: String,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    pub region: Option<String>,
+    pub section: Option<String>,
+    pub symbol: Option<String>,
+    pub object: Option<String>,
+    pub warn_if_greater_than: Option<f64>,
+    pub warn_if_delta_bytes_gt: Option<i64>,
+    #[serde(default)]
+    pub allowlist: Vec<String>,
+    #[serde(default)]
+    pub denylist: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleKind {
+    RegionUsage,
+    SectionDelta,
+    SymbolDelta,
+    SymbolMatch,
+    ObjectMatch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuleSeverityConfig {
+    Info,
+    Warn,
+    Error,
+}
+
 impl Default for ThresholdConfig {
     fn default() -> Self {
         Self {
@@ -216,6 +283,14 @@ impl Default for ThresholdConfig {
             large_symbol_bytes: 4 * 1024,
         }
     }
+}
+
+fn default_rule_schema_version() -> u32 {
+    1
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 impl fmt::Display for WarningLevel {

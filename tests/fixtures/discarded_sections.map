@@ -1,0 +1,14 @@
+Discarded input sections
+
+ .text.unused  0x00000000       0x20 build/unused.o
+ .rodata.dead  0x00000000       0x10 build/unused.o
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+FLASH            0x08000000         0x00020000         xr
+
+Linker script and memory map
+
+.text           0x08000000       0x00000030
+ .text          0x08000000       0x00000030 build/main.o

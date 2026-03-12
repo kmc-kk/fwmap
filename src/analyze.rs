@@ -1,19 +1,37 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::demangle::apply_demangling;
 use crate::ingest::{elf, lds, map};
 use crate::model::{
-    AnalysisResult, ArchiveContribution, DiffResult, MemoryRegion, MemorySummary, ObjectContribution, RegionSectionUsage,
-    RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SymbolInfo, ThresholdConfig,
-    WarningItem,
+    AnalysisResult, ArchiveContribution, CustomRule, DemangleMode, DiffResult, MemoryRegion, MemorySummary,
+    ObjectContribution, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement,
+    SectionTotal, SymbolInfo, ThresholdConfig, WarningItem, WarningLevel, WarningSource,
 };
 use crate::rules::{evaluate_default_rules, RuleContext};
+
+#[derive(Debug, Clone)]
+pub struct AnalyzeOptions {
+    pub thresholds: ThresholdConfig,
+    pub demangle: DemangleMode,
+    pub custom_rules: Vec<CustomRule>,
+}
+
+impl Default for AnalyzeOptions {
+    fn default() -> Self {
+        Self {
+            thresholds: ThresholdConfig::default(),
+            demangle: DemangleMode::Auto,
+            custom_rules: Vec::new(),
+        }
+    }
+}
 
 pub fn analyze_paths(
     elf_path: &Path,
     map_path: Option<&Path>,
     lds_path: Option<&Path>,
-    thresholds: &ThresholdConfig,
+    options: &AnalyzeOptions,
 ) -> Result<AnalysisResult, String> {
     let elf = elf::parse_elf(elf_path)?;
     let map_data = match map_path {
@@ -34,6 +52,9 @@ pub fn analyze_paths(
         .map(|item| item.linker_script.placements.as_slice())
         .unwrap_or(&[]);
     let memory = build_memory_summary(&elf.sections, region_input, placements);
+    let mut symbols = elf.symbols;
+    apply_demangling(&mut symbols, options.demangle);
+
     let mut warnings = elf.warnings;
     if let Some(map_data) = map_data.as_ref() {
         warnings.extend(map_data.warnings.clone());
@@ -45,14 +66,15 @@ pub fn analyze_paths(
     let mut result = AnalysisResult {
         binary: elf.binary,
         sections: elf.sections,
-        symbols: sorted_symbols(elf.symbols),
+        symbols: sorted_symbols(symbols),
         object_contributions: aggregate_objects(map_data.as_ref().map(|item| item.object_contributions.as_slice()).unwrap_or(&[])),
         archive_contributions: aggregate_archives(map_data.as_ref().map(|item| item.archive_contributions.as_slice()).unwrap_or(&[])),
         linker_script: lds_data.map(|item| item.linker_script),
         memory,
         warnings,
     };
-    result.warnings.extend(evaluate_warnings(&result, None, thresholds));
+    result.warnings.extend(evaluate_quality_checks(&result));
+    result.warnings.extend(evaluate_warnings(&result, None, &options.thresholds, &options.custom_rules));
     Ok(result)
 }
 
@@ -92,16 +114,58 @@ pub fn sorted_symbols(mut symbols: Vec<SymbolInfo>) -> Vec<SymbolInfo> {
     symbols
 }
 
-pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>, thresholds: &ThresholdConfig) -> Vec<WarningItem> {
+pub fn evaluate_warnings(
+    current: &AnalysisResult,
+    diff: Option<&DiffResult>,
+    thresholds: &ThresholdConfig,
+    custom_rules: &[CustomRule],
+) -> Vec<WarningItem> {
     evaluate_default_rules(&RuleContext {
         current,
         diff,
         thresholds,
+        custom_rules,
     })
 }
 
 pub fn format_bytes(bytes: u64) -> String {
     format!("{bytes} bytes ({:.2} KiB)", bytes as f64 / 1024.0)
+}
+
+fn evaluate_quality_checks(current: &AnalysisResult) -> Vec<WarningItem> {
+    let mut warnings = Vec::new();
+
+    let region_used_sum = current.memory.region_summaries.iter().map(|item| item.used).sum::<u64>();
+    let section_sum = current.sections.iter().map(|item| item.size).sum::<u64>();
+    if !current.memory.region_summaries.is_empty() && region_used_sum < section_sum / 2 {
+        warnings.push(WarningItem {
+            level: WarningLevel::Info,
+            code: "REGION_COVERAGE_PARTIAL".to_string(),
+            message: format!(
+                "Region summaries cover {} while sections total {}; placement data may be partial",
+                format_bytes(region_used_sum),
+                format_bytes(section_sum)
+            ),
+            source: WarningSource::Analyze,
+            related: None,
+        });
+    }
+
+    for symbol in &current.symbols {
+        if let Some(section_name) = symbol.section_name.as_deref() {
+            if !current.sections.iter().any(|section| section.name == section_name) {
+                warnings.push(WarningItem {
+                    level: WarningLevel::Info,
+                    code: "SYMBOL_UNKNOWN_SECTION".to_string(),
+                    message: format!("Symbol {} references unknown section {}", symbol.name, section_name),
+                    source: WarningSource::Analyze,
+                    related: Some(symbol.name.clone()),
+                });
+            }
+        }
+    }
+
+    warnings
 }
 
 fn aggregate_objects(items: &[ObjectContribution]) -> Vec<ObjectContribution> {
@@ -185,7 +249,7 @@ fn section_in_region(section: &SectionInfo, region: &MemoryRegion, placements: &
 
 #[cfg(test)]
 mod tests {
-    use super::{build_memory_summary, evaluate_warnings, sorted_symbols};
+    use super::{build_memory_summary, evaluate_warnings, sorted_symbols, AnalyzeOptions};
     use crate::diff::diff_results;
     use crate::model::{
         AnalysisResult, BinaryInfo, DiffChangeKind, DiffResult, DiffSummary, LinkerScriptInfo, MemoryRegion,
@@ -360,7 +424,7 @@ mod tests {
             object_diffs: Vec::new(),
             archive_diffs: Vec::new(),
         };
-        let warnings = evaluate_warnings(&current, Some(&diff), &ThresholdConfig::default());
+        let warnings = evaluate_warnings(&current, Some(&diff), &ThresholdConfig::default(), &[]);
         assert!(warnings.iter().any(|w| w.code == "ROM_THRESHOLD"));
         assert!(warnings.iter().any(|w| w.code == "RAM_THRESHOLD"));
         assert!(warnings.iter().any(|w| w.code == "REGION_THRESHOLD"));
@@ -402,9 +466,16 @@ mod tests {
             section_growth_rate: 10.0,
             ..ThresholdConfig::default()
         };
-        let warnings = evaluate_warnings(&current, Some(&diff), &thresholds);
+        let warnings = evaluate_warnings(&current, Some(&diff), &thresholds, &[]);
         assert!(!warnings.iter().any(|w| w.code == "SYMBOL_SPIKE"));
         assert!(!warnings.iter().any(|w| w.code == "DATA_GROWTH"));
+    }
+
+    #[test]
+    fn analyze_options_default_matches_previous_behavior() {
+        let options = AnalyzeOptions::default();
+        assert_eq!(options.thresholds.rom_percent, ThresholdConfig::default().rom_percent);
+        assert!(options.custom_rules.is_empty());
     }
 
     fn stub_analysis(rom: u64, ram: u64, sections: &[(&str, u64)], symbols: &[(&str, u64)]) -> AnalysisResult {

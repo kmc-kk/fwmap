@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use crate::analyze::{analyze_paths, evaluate_warnings};
+use crate::analyze::{analyze_paths, evaluate_warnings, AnalyzeOptions};
 use crate::diff::{diff_results, top_increases};
-use crate::model::ThresholdConfig;
+use crate::demangle::display_name;
+use crate::model::{DemangleMode, ThresholdConfig};
+use crate::rule_config::{apply_threshold_overrides, load_rule_config};
 use crate::render::{print_ci_summary, print_cli_summary, write_html_report, write_json_report};
 
 const DEFAULT_OUT: &str = "fwmap_report.html";
@@ -30,11 +32,24 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
             ci_summary,
             fail_on_warning,
             thresholds,
+            rules,
+            demangle,
             verbose,
         } => {
-            let mut current = analyze_paths(&elf, map.as_deref(), lds.as_deref(), &thresholds)?;
+            let mut options = AnalyzeOptions {
+                thresholds,
+                demangle,
+                custom_rules: Vec::new(),
+            };
+            if let Some(rule_path) = rules.as_deref() {
+                let config = load_rule_config(rule_path)?;
+                apply_threshold_overrides(&mut options.thresholds, &config.thresholds);
+                options.custom_rules = config.rules;
+            }
+
+            let mut current = analyze_paths(&elf, map.as_deref(), lds.as_deref(), &options)?;
             let diff = if let Some(prev_elf) = prev_elf.as_deref() {
-                let previous = analyze_paths(prev_elf, prev_map.as_deref(), lds.as_deref(), &thresholds)?;
+                let previous = analyze_paths(prev_elf, prev_map.as_deref(), lds.as_deref(), &options)?;
                 let diff = diff_results(&current, &previous);
                 let mut warnings = current
                     .warnings
@@ -42,7 +57,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
                     .filter(|warning| warning.source != crate::model::WarningSource::Analyze)
                     .cloned()
                     .collect::<Vec<_>>();
-                warnings.extend(evaluate_warnings(&current, Some(&diff), &thresholds));
+                warnings.extend(evaluate_warnings(&current, Some(&diff), &options.thresholds, &options.custom_rules));
                 current.warnings = warnings;
                 Some(diff)
             } else {
@@ -54,7 +69,13 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
                 print_cli_summary(&current, diff.as_ref(), verbose);
                 if let Some(diff) = diff.as_ref() {
                     if let Some(symbol) = top_increases(&diff.symbol_diffs, 1).first() {
-                        println!("Top growth symbol: {} ({:+})", symbol.name, symbol.delta);
+                        let display = current
+                            .symbols
+                            .iter()
+                            .find(|item| item.name == symbol.name)
+                            .map(display_name)
+                            .unwrap_or(&symbol.name);
+                        println!("Top growth symbol: {} ({:+})", display, symbol.delta);
                     }
                     if let Some(object) = top_increases(&diff.object_diffs, 1).first() {
                         println!("Top growth object: {} ({:+})", object.name, object.delta);
@@ -63,7 +84,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
             }
             write_html_report(&out, &current, diff.as_ref())?;
             if let Some(path) = report_json.as_deref() {
-                write_json_report(path, &current, diff.as_ref(), &thresholds)?;
+                write_json_report(path, &current, diff.as_ref(), &options.thresholds)?;
                 if !ci_summary {
                     println!("JSON: {}", path.display());
                 }
@@ -94,6 +115,8 @@ enum Command {
         ci_summary: bool,
         fail_on_warning: bool,
         thresholds: ThresholdConfig,
+        rules: Option<PathBuf>,
+        demangle: DemangleMode,
         verbose: bool,
     },
 }
@@ -119,6 +142,8 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut ci_summary = false;
     let mut fail_on_warning = false;
     let mut thresholds = ThresholdConfig::default();
+    let mut rules = None;
+    let mut demangle = DemangleMode::Auto;
     let mut verbose = false;
     let mut index = 2usize;
     while index < args.len() {
@@ -156,7 +181,22 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                 index += 2;
                 continue;
             }
-            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" => {
+            "--demangle=auto" => {
+                demangle = DemangleMode::Auto;
+                index += 1;
+                continue;
+            }
+            "--demangle=on" => {
+                demangle = DemangleMode::On;
+                index += 1;
+                continue;
+            }
+            "--demangle=off" => {
+                demangle = DemangleMode::Off;
+                index += 1;
+                continue;
+            }
+            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--rules" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--elf" => elf = Some(PathBuf::from(value)),
@@ -166,6 +206,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                     "--prev-map" => prev_map = Some(PathBuf::from(value)),
                     "--out" => out = PathBuf::from(value),
                     "--report-json" => report_json = Some(PathBuf::from(value)),
+                    "--rules" => rules = Some(PathBuf::from(value)),
                     _ => {}
                 }
                 index += 2;
@@ -189,6 +230,9 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     if let Some(path) = prev_map.as_deref() {
         ensure_exists(path, "previous map")?;
     }
+    if let Some(path) = rules.as_deref() {
+        ensure_exists(path, "rules")?;
+    }
 
     Ok(Command::Analyze {
         elf,
@@ -201,6 +245,8 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         ci_summary,
         fail_on_warning,
         thresholds,
+        rules,
+        demangle,
         verbose,
     })
 }
@@ -224,7 +270,7 @@ fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--verbose]
+fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--rules <path>] [--demangle=auto|on|off] [--verbose]
 
 Options:
   --elf       Input ELF file (required)
@@ -234,6 +280,8 @@ Options:
   --prev-map  Previous map file for diff
   --out       Output HTML path (default: fwmap_report.html)
   --report-json Write JSON report to the given path
+  --rules     Load TOML rule configuration from the given path
+  --demangle=auto|on|off Control C++ symbol demangling
   --ci-summary Print compact CI-friendly summary
   --fail-on-warning Return non-zero if warnings are present
   --threshold-rom Percent threshold for ROM warnings
@@ -268,6 +316,7 @@ fn parse_region_threshold(value: &str) -> Result<(String, f64), String> {
 #[cfg(test)]
 mod tests {
     use super::{parse_args, Command};
+    use crate::model::DemangleMode;
     use std::path::PathBuf;
 
     #[test]
@@ -324,6 +373,9 @@ mod tests {
             "FLASH:92".to_string(),
             "--threshold-symbol-growth".to_string(),
             "8192".to_string(),
+            "--rules".to_string(),
+            "Cargo.toml".to_string(),
+            "--demangle=on".to_string(),
             "--ci-summary".to_string(),
             "--fail-on-warning".to_string(),
         ])
@@ -332,13 +384,17 @@ mod tests {
             Command::Analyze {
                 report_json,
                 ci_summary,
+                rules,
+                demangle,
                 fail_on_warning,
                 thresholds,
                 ..
             } => {
                 assert_eq!(report_json.unwrap(), PathBuf::from("out.json"));
+                assert_eq!(rules.unwrap(), PathBuf::from("Cargo.toml"));
                 assert!(ci_summary);
                 assert!(fail_on_warning);
+                assert!(matches!(demangle, DemangleMode::On));
                 assert_eq!(thresholds.rom_percent, 90.0);
                 assert_eq!(thresholds.region_percent.get("FLASH"), Some(&92.0));
                 assert_eq!(thresholds.symbol_growth_bytes, 8192);

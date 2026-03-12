@@ -11,4 +11,7 @@ This directory contains small text fixtures used by parser and regression tests.
 - `load_address.map`: output section with `load address`
 - `unparsed_block.map`: ignorable common-symbol block
 - `mixed_case_regions.map`: region names in upper case
+- `discarded_sections.map`: discarded sections block that should not count as contributions
+- `non_ascii.map`: UTF-8 object paths and long non-ASCII names
+- `sample_rules.toml`: external Phase 7 rule configuration example
 - `sample.ld`: linker script subset for region and placement tests
