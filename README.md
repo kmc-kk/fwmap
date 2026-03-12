@@ -17,7 +17,8 @@
 - External TOML rule configuration
 - C++ symbol demangling control
 - JSON report output
-- CI summary and warning-based exit control
+- CI summary in text / markdown / JSON formats
+- warning-based exit control
 - Graceful degradation for missing symbol tables and partially broken map files
 - `--verbose` and `--version` CLI support
 - Offline HTML report generation
@@ -77,7 +78,8 @@ cargo run -- analyze \
   --map build/app.map \
   --prev-elf prev/app.elf \
   --prev-map prev/app.map \
-  --ci-summary \
+  --ci-format markdown \
+  --ci-out fwmap_ci.md \
   --fail-on-warning \
   --threshold-rom 90 \
   --threshold-ram 90 \
@@ -108,6 +110,7 @@ Top growth object: drivers/net.o (+8192)
 - Top Object Contributions: object sizes from the map file
 - Diff: summary cards plus top section/symbol/object growth and added/removed lists
 - JSON: machine-readable report with binary, memory, warnings, diff, and region data
+- CI summary: compact text / markdown / JSON output for CI logs and PR comments
 
 ## JSON Schema
 
@@ -186,6 +189,26 @@ message = "DTCM usage is above 90%"
 
 Use `--demangle=auto|on|off` to control C++ symbol demangling. `auto` only attempts Itanium-style names, `on` forces a demangle attempt, and `off` preserves raw symbol names.
 
+## CI Output
+
+Use `--ci-format text|markdown|json` to select CI summary output. `--ci-summary` remains available as a shorthand for text output. Use `--ci-out <path>` to write the CI summary to a file.
+
+```bash
+cargo run -- analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --prev-elf prev/app.elf \
+  --prev-map prev/app.map \
+  --ci-format markdown \
+  --ci-out fwmap_ci.md
+```
+
+Exit codes:
+
+- `0`: analysis succeeded and no error-severity rule fired
+- `1`: execution/input error, or `--fail-on-warning` triggered on non-error warnings
+- `2`: analysis succeeded and at least one error-severity rule fired
+
 ## Development
 
 ```bash
@@ -208,7 +231,7 @@ cargo test
 ## CLI Compatibility
 
 - Existing `fwmap analyze --elf ...` usage remains valid.
-- `--verbose`, `--version`, `--lds`, `--report-json`, `--ci-summary`, `--fail-on-warning`, `--rules`, and `--demangle=...` are additive options.
+- `--verbose`, `--version`, `--lds`, `--report-json`, `--ci-summary`, `--ci-format`, `--ci-out`, `--fail-on-warning`, `--rules`, and `--demangle=...` are additive options.
 - Existing required arguments remain unchanged.
 
 ## Planned Extensions
@@ -227,9 +250,10 @@ GitHub Actions:
     --map build/app.map
     --prev-elf prev/app.elf
     --prev-map prev/app.map
+    --rules tests/fixtures/sample_rules.toml
     --report-json fwmap.json
-    --ci-summary
-    --fail-on-warning
+    --ci-format markdown
+    --ci-out fwmap_ci.md
 ```
 
 GitLab CI:
@@ -237,9 +261,10 @@ GitLab CI:
 ```yaml
 fwmap:
   script:
-    - cargo run -- analyze --elf build/app.elf --map build/app.map --report-json fwmap.json --ci-summary
+    - cargo run -- analyze --elf build/app.elf --map build/app.map --report-json fwmap.json --ci-format json --ci-out fwmap_ci.json
   artifacts:
     paths:
+      - fwmap_ci.json
       - fwmap_report.html
       - fwmap.json
 ```

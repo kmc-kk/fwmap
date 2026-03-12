@@ -212,6 +212,13 @@ pub enum DemangleMode {
     Off,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CiFormat {
+    Text,
+    Markdown,
+    Json,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuleConfigFile {
     #[serde(default = "default_rule_schema_version")]

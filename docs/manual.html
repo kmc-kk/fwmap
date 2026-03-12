@@ -130,16 +130,19 @@ Report: build/fwmap_diff_report.html</code></pre>
   <p><code>auto</code> は Itanium ABI らしい名前だけを対象にし、<code>on</code> は積極的に変換を試し、<code>off</code> は raw 名のまま表示します。</p>
 
   <h3>手順 7: CI 向けの短い要約を出す</h3>
-  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --prev-map prev/app.map --ci-summary</code></pre>
+  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --prev-map prev/app.map --ci-format markdown --ci-out build/fwmap_ci.md</code></pre>
   <pre><code>ROM: +12345 bytes
 RAM: +2048 bytes
 Warnings: 2
+Errors: 1
 Top section growth: .bss (+8192)
-Top symbol growth: g_rx_ring (+4096)</code></pre>
+Top symbol growth: g_rx_ring (+4096)
+Triggered rules: forbid-g-rx-ring(error), REGION_THRESHOLD(warn)</code></pre>
+  <p><code>--ci-format</code> では <code>text</code>、<code>markdown</code>、<code>json</code> を選べます。<code>--ci-summary</code> は text 形式の簡易指定としてそのまま使えます。</p>
 
   <h3>手順 8: warning が出たら失敗にする</h3>
   <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --fail-on-warning</code></pre>
-  <p>warning が 1 件以上あれば非 0 終了になります。</p>
+  <p>error severity の rule が 1 件以上あれば終了コード 2 になります。<code>--fail-on-warning</code> 指定時に warn / info の warning があれば終了コード 1 になります。</p>
 
   <h3>手順 9: しきい値を調整する</h3>
   <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --threshold-rom 90 --threshold-ram 90 --threshold-region FLASH:92 --threshold-symbol-growth 8192</code></pre>
@@ -185,6 +188,8 @@ message = ".data increased by more than 2KB"</code></pre>
       <tr><td><code>--rules &lt;path&gt;</code></td><td>任意</td><td>外部 TOML ルール設定</td></tr>
       <tr><td><code>--demangle=auto|on|off</code></td><td>任意</td><td>C++ symbol demangle 制御</td></tr>
       <tr><td><code>--ci-summary</code></td><td>任意</td><td>CI 向けの短い要約を表示</td></tr>
+      <tr><td><code>--ci-format &lt;text|markdown|json&gt;</code></td><td>任意</td><td>CI 要約の出力形式</td></tr>
+      <tr><td><code>--ci-out &lt;path&gt;</code></td><td>任意</td><td>CI 要約の出力先</td></tr>
       <tr><td><code>--fail-on-warning</code></td><td>任意</td><td>warning があれば非 0 終了</td></tr>
       <tr><td><code>--threshold-rom &lt;percent&gt;</code></td><td>任意</td><td>ROM warning しきい値</td></tr>
       <tr><td><code>--threshold-ram &lt;percent&gt;</code></td><td>任意</td><td>RAM warning しきい値</td></tr>
@@ -201,6 +206,7 @@ message = ".data increased by more than 2KB"</code></pre>
     <li>標準出力: 通常サマリまたは CI 向け短縮サマリ</li>
     <li>HTML: 人が読むための詳細レポート</li>
     <li>JSON: 機械可読な固定 schema のレポート</li>
+    <li>CI summary: text / markdown / JSON の短い要約</li>
   </ul>
   <p>JSON の top-level key は <code>schema_version</code>, <code>binary</code>, <code>memory_summary</code>, <code>warnings</code>, <code>thresholds</code>, <code>regions</code>, <code>diff_summary</code>, <code>diff</code> などです。<code>top_symbols</code> には raw 名の <code>name</code> と表示用の <code>demangled_name</code> が両方含まれます。</p>
 

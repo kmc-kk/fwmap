@@ -1,8 +1,15 @@
 use std::process;
 
 fn main() {
-    if let Err(err) = fwmap::cli::run(std::env::args()) {
-        eprintln!("error: {err}");
-        process::exit(1);
+    match fwmap::cli::run(std::env::args()) {
+        Ok(code) => {
+            if code != 0 {
+                process::exit(code);
+            }
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            process::exit(1);
+        }
     }
 }

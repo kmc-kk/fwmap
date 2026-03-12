@@ -148,7 +148,8 @@ fwmap analyze \
   --map build/app.map \
   --prev-elf prev/app.elf \
   --prev-map prev/app.map \
-  --ci-summary
+  --ci-format markdown \
+  --ci-out build/fwmap_ci.md
 ```
 
 ### warning が出たら失敗にする
@@ -336,7 +337,7 @@ fwmap analyze \
 
 ### 5.7 CI 向けの短い要約を出す
 
-ログを短く保ちたい場合は `--ci-summary` を使います。
+ログや PR コメント向けに短い要約を出したい場合は `--ci-format` を使います。`--ci-summary` は text 形式の簡易指定としてそのまま使えます。
 
 ```bash
 fwmap analyze \
@@ -344,7 +345,8 @@ fwmap analyze \
   --map build/app.map \
   --prev-elf prev/app.elf \
   --prev-map prev/app.map \
-  --ci-summary
+  --ci-format markdown \
+  --ci-out build/fwmap_ci.md
 ```
 
 出力例:
@@ -353,8 +355,10 @@ fwmap analyze \
 ROM: +12345 bytes
 RAM: +2048 bytes
 Warnings: 2
+Errors: 1
 Top section growth: .bss (+8192)
 Top symbol growth: g_rx_ring (+4096)
+Triggered rules: forbid-g-rx-ring(error), REGION_THRESHOLD(warn)
 ```
 
 用途:
@@ -362,6 +366,14 @@ Top symbol growth: g_rx_ring (+4096)
 - GitHub Actions のログを短く保つ
 - GitLab CI の job log で一画面に収める
 - 人がまず差分だけを素早く確認する
+- markdown を PR / MR コメントへそのまま貼る
+- JSON を別ジョブで機械判定する
+
+利用できる形式:
+
+- `text`
+- `markdown`
+- `json`
 
 ### 5.8 warning が出たら job を失敗にする
 
@@ -377,7 +389,8 @@ fwmap analyze \
 挙動:
 
 - warning が 0 件なら終了コード 0
-- warning が 1 件以上なら非 0
+- error severity の rule が 1 件以上あれば終了コード 2
+- `--fail-on-warning` 指定時に warn / info の warning があれば終了コード 1
 
 使いどころ:
 
@@ -541,6 +554,8 @@ fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --
 | `--rules <path>` | 任意 | 外部 TOML ルール設定 |
 | `--demangle=auto|on|off` | 任意 | C++ symbol demangle 制御 |
 | `--ci-summary` | 任意 | CI 向けの短い要約を表示 |
+| `--ci-format <text|markdown|json>` | 任意 | CI 要約の出力形式 |
+| `--ci-out <path>` | 任意 | CI 要約の出力先 |
 | `--fail-on-warning` | 任意 | warning があれば非 0 終了 |
 | `--threshold-rom <percent>` | 任意 | ROM warning しきい値 |
 | `--threshold-ram <percent>` | 任意 | RAM warning しきい値 |
@@ -557,6 +572,7 @@ fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --
 - 標準出力: 実行サマリ
 - HTML: 単一ファイルのレポート
 - JSON: 機械可読なレポート
+- CI summary: text / markdown / JSON の短い要約
 
 ### 標準出力の例
 
@@ -589,6 +605,19 @@ RAM: +2048 bytes
 Warnings: 2
 Top section growth: .bss (+8192)
 Top symbol growth: g_rx_ring (+4096)
+```
+
+markdown あり:
+
+```markdown
+# fwmap CI Summary
+
+| Metric | Value |
+| --- | --- |
+| ROM delta | +12345 bytes |
+| RAM delta | +2048 bytes |
+| Warnings | 2 |
+| Errors | 1 |
 ```
 
 ### JSON の主な構造

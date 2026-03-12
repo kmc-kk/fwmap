@@ -3,23 +3,23 @@ use std::path::{Path, PathBuf};
 use crate::analyze::{analyze_paths, evaluate_warnings, AnalyzeOptions};
 use crate::diff::{diff_results, top_increases};
 use crate::demangle::display_name;
-use crate::model::{DemangleMode, ThresholdConfig};
+use crate::model::{CiFormat, DemangleMode, ThresholdConfig, WarningLevel};
 use crate::rule_config::{apply_threshold_overrides, load_rule_config};
-use crate::render::{print_ci_summary, print_cli_summary, write_html_report, write_json_report};
+use crate::render::{print_ci_summary, print_cli_summary, write_ci_summary, write_html_report, write_json_report};
 
 const DEFAULT_OUT: &str = "fwmap_report.html";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
+pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
     let parsed = parse_args(args.into_iter().collect())?;
     match parsed {
         Command::Help => {
             print_help();
-            Ok(())
+            Ok(0)
         }
         Command::Version => {
             println!("fwmap {VERSION}");
-            Ok(())
+            Ok(0)
         }
         Command::Analyze {
             elf,
@@ -30,6 +30,8 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
             out,
             report_json,
             ci_summary,
+            ci_format,
+            ci_out,
             fail_on_warning,
             thresholds,
             rules,
@@ -63,8 +65,12 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
             } else {
                 None
             };
-            if ci_summary {
-                print_ci_summary(&current, diff.as_ref());
+            let ci_format = ci_format.or(if ci_summary { Some(CiFormat::Text) } else { None });
+            if let Some(format) = ci_format {
+                print_ci_summary(&current, diff.as_ref(), format)?;
+                if let Some(path) = ci_out.as_deref() {
+                    write_ci_summary(path, &current, diff.as_ref(), format)?;
+                }
             } else {
                 print_cli_summary(&current, diff.as_ref(), verbose);
                 if let Some(diff) = diff.as_ref() {
@@ -92,10 +98,13 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
             if !ci_summary {
                 println!("Report: {}", out.display());
             }
-            if fail_on_warning && !current.warnings.is_empty() {
-                return Err(format!("warning threshold exceeded: {} warning(s) triggered", current.warnings.len()));
+            if current.warnings.iter().any(|warning| warning.level == WarningLevel::Error) {
+                return Ok(2);
             }
-            Ok(())
+            if fail_on_warning && !current.warnings.is_empty() {
+                return Ok(1);
+            }
+            Ok(0)
         }
     }
 }
@@ -113,6 +122,8 @@ enum Command {
         out: PathBuf,
         report_json: Option<PathBuf>,
         ci_summary: bool,
+        ci_format: Option<CiFormat>,
+        ci_out: Option<PathBuf>,
         fail_on_warning: bool,
         thresholds: ThresholdConfig,
         rules: Option<PathBuf>,
@@ -140,6 +151,8 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut out = PathBuf::from(DEFAULT_OUT);
     let mut report_json = None;
     let mut ci_summary = false;
+    let mut ci_format = None;
+    let mut ci_out = None;
     let mut fail_on_warning = false;
     let mut thresholds = ThresholdConfig::default();
     let mut rules = None;
@@ -157,6 +170,12 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
             "--ci-summary" => {
                 ci_summary = true;
                 index += 1;
+                continue;
+            }
+            "--ci-format" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --ci-format".to_string())?;
+                ci_format = Some(parse_ci_format(value)?);
+                index += 2;
                 continue;
             }
             "--fail-on-warning" => {
@@ -196,7 +215,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                 index += 1;
                 continue;
             }
-            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--rules" => {
+            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--rules" | "--ci-out" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--elf" => elf = Some(PathBuf::from(value)),
@@ -207,6 +226,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                     "--out" => out = PathBuf::from(value),
                     "--report-json" => report_json = Some(PathBuf::from(value)),
                     "--rules" => rules = Some(PathBuf::from(value)),
+                    "--ci-out" => ci_out = Some(PathBuf::from(value)),
                     _ => {}
                 }
                 index += 2;
@@ -243,6 +263,8 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         out,
         report_json,
         ci_summary,
+        ci_format,
+        ci_out,
         fail_on_warning,
         thresholds,
         rules,
@@ -283,6 +305,8 @@ Options:
   --rules     Load TOML rule configuration from the given path
   --demangle=auto|on|off Control C++ symbol demangling
   --ci-summary Print compact CI-friendly summary
+  --ci-format text|markdown|json Select CI summary format
+  --ci-out    Write CI summary to the given path
   --fail-on-warning Return non-zero if warnings are present
   --threshold-rom Percent threshold for ROM warnings
   --threshold-ram Percent threshold for RAM warnings
@@ -313,10 +337,19 @@ fn parse_region_threshold(value: &str) -> Result<(String, f64), String> {
     Ok((name.to_string(), parse_percent(percent, "--threshold-region")?))
 }
 
+fn parse_ci_format(value: &str) -> Result<CiFormat, String> {
+    match value {
+        "text" => Ok(CiFormat::Text),
+        "markdown" => Ok(CiFormat::Markdown),
+        "json" => Ok(CiFormat::Json),
+        _ => Err(format!("invalid ci format '{value}', expected text|markdown|json")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{parse_args, Command};
-    use crate::model::DemangleMode;
+    use crate::model::{CiFormat, DemangleMode};
     use std::path::PathBuf;
 
     #[test]
@@ -367,6 +400,10 @@ mod tests {
             "Cargo.toml".to_string(),
             "--report-json".to_string(),
             "out.json".to_string(),
+            "--ci-format".to_string(),
+            "markdown".to_string(),
+            "--ci-out".to_string(),
+            "ci.md".to_string(),
             "--threshold-rom".to_string(),
             "90".to_string(),
             "--threshold-region".to_string(),
@@ -384,6 +421,8 @@ mod tests {
             Command::Analyze {
                 report_json,
                 ci_summary,
+                ci_format,
+                ci_out,
                 rules,
                 demangle,
                 fail_on_warning,
@@ -391,6 +430,8 @@ mod tests {
                 ..
             } => {
                 assert_eq!(report_json.unwrap(), PathBuf::from("out.json"));
+                assert!(matches!(ci_format, Some(CiFormat::Markdown)));
+                assert_eq!(ci_out.unwrap(), PathBuf::from("ci.md"));
                 assert_eq!(rules.unwrap(), PathBuf::from("Cargo.toml"));
                 assert!(ci_summary);
                 assert!(fail_on_warning);

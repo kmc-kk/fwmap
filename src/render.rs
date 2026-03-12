@@ -4,7 +4,7 @@ use std::path::Path;
 use crate::analyze::format_bytes;
 use crate::demangle::display_name;
 use crate::diff::{names_for_kind, top_increases};
-use crate::model::{AnalysisResult, DiffChangeKind, DiffEntry, DiffResult, ThresholdConfig, WarningItem};
+use crate::model::{AnalysisResult, CiFormat, DiffChangeKind, DiffEntry, DiffResult, ThresholdConfig, WarningItem, WarningLevel};
 
 pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, verbose: bool) {
     println!("ELF: {}", result.binary.path);
@@ -54,27 +54,26 @@ pub fn write_json_report(
     fs::write(path, json).map_err(|err| format!("failed to write JSON report '{}': {err}", path.display()))
 }
 
-pub fn print_ci_summary(current: &AnalysisResult, diff: Option<&DiffResult>) {
-    if let Some(diff) = diff {
-        println!("ROM: {:+} bytes", diff.rom_delta);
-        println!("RAM: {:+} bytes", diff.ram_delta);
-        println!("Warnings: {}", current.warnings.len());
-        if let Some(entry) = top_increases(&diff.section_diffs, 1).first() {
-            println!("Top section growth: {} ({:+})", entry.name, entry.delta);
-        }
-        if let Some(entry) = top_increases(&diff.symbol_diffs, 1).first() {
-            let display = current
-                .symbols
-                .iter()
-                .find(|symbol| symbol.name == entry.name)
-                .map(display_name)
-                .unwrap_or(&entry.name);
-            println!("Top symbol growth: {} ({:+})", display, entry.delta);
-        }
-    } else {
-        println!("ROM: {}", current.memory.rom_bytes);
-        println!("RAM: {}", current.memory.ram_bytes);
-        println!("Warnings: {}", current.warnings.len());
+pub fn print_ci_summary(current: &AnalysisResult, diff: Option<&DiffResult>, format: CiFormat) -> Result<(), String> {
+    println!("{}", build_ci_summary(current, diff, format)?);
+    Ok(())
+}
+
+pub fn write_ci_summary(
+    path: &Path,
+    current: &AnalysisResult,
+    diff: Option<&DiffResult>,
+    format: CiFormat,
+) -> Result<(), String> {
+    let content = build_ci_summary(current, diff, format)?;
+    fs::write(path, content).map_err(|err| format!("failed to write CI summary '{}': {err}", path.display()))
+}
+
+pub fn build_ci_summary(current: &AnalysisResult, diff: Option<&DiffResult>, format: CiFormat) -> Result<String, String> {
+    match format {
+        CiFormat::Text => Ok(build_ci_text(current, diff)),
+        CiFormat::Markdown => Ok(build_ci_markdown(current, diff)),
+        CiFormat::Json => build_ci_json(current, diff),
     }
 }
 
@@ -116,6 +115,126 @@ fn build_json(current: &AnalysisResult, diff: Option<&DiffResult>, thresholds: &
         "diff": diff,
     });
     serde_json::to_string_pretty(&payload).map_err(|err| format!("failed to serialize JSON report: {err}"))
+}
+
+fn build_ci_text(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
+    let mut lines = Vec::new();
+    if let Some(diff) = diff {
+        lines.push(format!("ROM: {:+} bytes", diff.rom_delta));
+        lines.push(format!("RAM: {:+} bytes", diff.ram_delta));
+    } else {
+        lines.push(format!("ROM: {}", format_bytes(current.memory.rom_bytes)));
+        lines.push(format!("RAM: {}", format_bytes(current.memory.ram_bytes)));
+    }
+    lines.push(format!("Warnings: {}", current.warnings.len()));
+    lines.push(format!("Errors: {}", current.warnings.iter().filter(|item| item.level == WarningLevel::Error).count()));
+
+    if let Some(region) = current.memory.region_summaries.first() {
+        lines.push(format!("Top region usage: {} ({:.1}%)", region.region_name, region.usage_ratio * 100.0));
+    }
+    if let Some(entry) = diff.and_then(|item| top_increases(&item.section_diffs, 1).first().cloned()) {
+        lines.push(format!("Top section growth: {} ({:+})", entry.name, entry.delta));
+    }
+    if let Some(entry) = diff.and_then(|item| top_increases(&item.object_diffs, 1).first().cloned()) {
+        lines.push(format!("Top object growth: {} ({:+})", entry.name, entry.delta));
+    }
+    if let Some(entry) = diff.and_then(|item| top_increases(&item.symbol_diffs, 1).first().cloned()) {
+        let display = current
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == entry.name)
+            .map(display_name)
+            .unwrap_or(&entry.name);
+        lines.push(format!("Top symbol growth: {} ({:+})", display, entry.delta));
+    }
+    if !current.warnings.is_empty() {
+        let triggered = current
+            .warnings
+            .iter()
+            .map(|item| format!("{}({})", item.code, item.level))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("Triggered rules: {triggered}"));
+    }
+    lines.join("\n")
+}
+
+fn build_ci_markdown(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
+    let mut out = Vec::new();
+    out.push("# fwmap CI Summary".to_string());
+    out.push(String::new());
+    out.push("| Metric | Value |".to_string());
+    out.push("| --- | --- |".to_string());
+    if let Some(diff) = diff {
+        out.push(format!("| ROM delta | {:+} bytes |", diff.rom_delta));
+        out.push(format!("| RAM delta | {:+} bytes |", diff.ram_delta));
+    } else {
+        out.push(format!("| ROM | {} |", format_bytes(current.memory.rom_bytes)));
+        out.push(format!("| RAM | {} |", format_bytes(current.memory.ram_bytes)));
+    }
+    out.push(format!("| Warnings | {} |", current.warnings.len()));
+    out.push(format!(
+        "| Errors | {} |",
+        current.warnings.iter().filter(|item| item.level == WarningLevel::Error).count()
+    ));
+    out.push(String::new());
+
+    let mut growths = Vec::new();
+    if let Some(entry) = diff.and_then(|item| top_increases(&item.section_diffs, 1).first().cloned()) {
+        growths.push(format!("- Top section growth: `{}` ({:+})", entry.name, entry.delta));
+    }
+    if let Some(entry) = diff.and_then(|item| top_increases(&item.object_diffs, 1).first().cloned()) {
+        growths.push(format!("- Top object growth: `{}` ({:+})", entry.name, entry.delta));
+    }
+    if let Some(entry) = diff.and_then(|item| top_increases(&item.symbol_diffs, 1).first().cloned()) {
+        let display = current
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == entry.name)
+            .map(display_name)
+            .unwrap_or(&entry.name);
+        growths.push(format!("- Top symbol growth: `{}` ({:+})", display, entry.delta));
+    }
+    if !growths.is_empty() {
+        out.push("## Growth".to_string());
+        out.extend(growths);
+        out.push(String::new());
+    }
+
+    out.push("## Rule Results".to_string());
+    if current.warnings.is_empty() {
+        out.push("- No warnings.".to_string());
+    } else {
+        out.extend(current.warnings.iter().map(|item| {
+            format!(
+                "- `{}` [{}] {}",
+                item.code,
+                item.level,
+                item.related.as_deref().unwrap_or(&item.message)
+            )
+        }));
+    }
+    out.join("\n")
+}
+
+fn build_ci_json(current: &AnalysisResult, diff: Option<&DiffResult>) -> Result<String, String> {
+    let payload = serde_json::json!({
+        "schema_version": 1,
+        "summary": {
+            "rom_bytes": current.memory.rom_bytes,
+            "ram_bytes": current.memory.ram_bytes,
+            "rom_delta": diff.map(|item| item.rom_delta),
+            "ram_delta": diff.map(|item| item.ram_delta),
+            "warning_count": current.warnings.len(),
+            "error_count": current.warnings.iter().filter(|item| item.level == WarningLevel::Error).count(),
+        },
+        "top_region": current.memory.region_summaries.first(),
+        "top_section_growth": diff.and_then(|item| top_increases(&item.section_diffs, 1).first().cloned()),
+        "top_object_growth": diff.and_then(|item| top_increases(&item.object_diffs, 1).first().cloned()),
+        "top_symbol_growth": diff.and_then(|item| top_increases(&item.symbol_diffs, 1).first().cloned()),
+        "rules": &current.warnings,
+    });
+    serde_json::to_string_pretty(&payload).map_err(|err| format!("failed to serialize CI JSON summary: {err}"))
 }
 
 fn style_block() -> &'static str {
@@ -407,11 +526,11 @@ fn escape(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{write_html_report, write_json_report};
+    use super::{build_ci_summary, write_html_report, write_json_report};
     use crate::model::{
-        AnalysisResult, BinaryInfo, DiffChangeKind, DiffEntry, DiffResult, DiffSummary, MemoryRegion, MemorySummary,
-        RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionTotal, SymbolInfo, ThresholdConfig,
-        WarningItem, WarningLevel, WarningSource,
+        AnalysisResult, BinaryInfo, CiFormat, DiffChangeKind, DiffEntry, DiffResult, DiffSummary, MemoryRegion,
+        MemorySummary, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionTotal, SymbolInfo,
+        ThresholdConfig, WarningItem, WarningLevel, WarningSource,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -521,6 +640,51 @@ mod tests {
         assert!(json.contains("\"regions\""));
         assert!(json.contains("\"demangled_name\""));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn ci_summary_supports_text_markdown_and_json() {
+        let mut analysis = sample_analysis();
+        analysis.warnings.push(WarningItem {
+            level: WarningLevel::Error,
+            code: "forbid-main".to_string(),
+            message: "main symbol is forbidden".to_string(),
+            source: WarningSource::Analyze,
+            related: Some("main".to_string()),
+        });
+        let diff = DiffResult {
+            rom_delta: 16,
+            ram_delta: 4,
+            summary: DiffSummary::default(),
+            section_diffs: vec![DiffEntry {
+                name: ".text".to_string(),
+                current: 128,
+                previous: 112,
+                delta: 16,
+                change: DiffChangeKind::Increased,
+            }],
+            symbol_diffs: vec![DiffEntry {
+                name: "main".to_string(),
+                current: 64,
+                previous: 48,
+                delta: 16,
+                change: DiffChangeKind::Increased,
+            }],
+            object_diffs: vec![DiffEntry {
+                name: "main.o".to_string(),
+                current: 64,
+                previous: 48,
+                delta: 16,
+                change: DiffChangeKind::Increased,
+            }],
+            archive_diffs: Vec::new(),
+        };
+        let text = build_ci_summary(&analysis, Some(&diff), CiFormat::Text).unwrap();
+        assert!(text.contains("Errors: 1"));
+        let markdown = build_ci_summary(&analysis, Some(&diff), CiFormat::Markdown).unwrap();
+        assert!(markdown.contains("# fwmap CI Summary"));
+        let json = build_ci_summary(&analysis, Some(&diff), CiFormat::Json).unwrap();
+        assert!(json.contains("\"error_count\""));
     }
 
     fn sample_analysis() -> AnalysisResult {
