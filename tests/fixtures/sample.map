@@ -1,0 +1,17 @@
+Memory Configuration
+
+Name             Origin             Length             Attributes
+rom              0x00000000         0x00020000         xr
+ram              0x20000000         0x00008000         xrw
+
+Linker script and memory map
+
+.text           0x00000000       0x40
+ .text          0x00000000       0x20 build/main.o
+ .text.startup  0x00000020       0x20 libapp.a(startup.o)
+.rodata         0x00000040       0x10
+ .rodata        0x00000040       0x10 build/main.o
+.data           0x20000000       0x08
+ .data          0x20000000       0x08 build/data.o
+.bss            0x20000008       0x18
+ .bss           0x20000008       0x18 build/data.o

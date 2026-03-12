@@ -1,0 +1,10 @@
+Memory Configuration
+
+Name             Origin             Length             Attributes
+rom              0x00000000         0x00010000         xr
+
+Linker script and memory map
+
+.text           0x00000000       0x20
+ nonsense line that should trigger warning
+ .text          0x00000000       0x20 build/main.o

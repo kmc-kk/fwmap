@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>fwmap Manual</title>
+  <style>
+    body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      margin: 36px;
+      color: #1f2933;
+      line-height: 1.55;
+      font-size: 14px;
+    }
+    h1, h2, h3 {
+      color: #102a43;
+      margin-top: 1.4em;
+      margin-bottom: 0.4em;
+    }
+    h1 {
+      border-bottom: 3px solid #d9e2ec;
+      padding-bottom: 0.3em;
+    }
+    code, pre {
+      font-family: Consolas, "Courier New", monospace;
+    }
+    pre {
+      background: #f7f9fb;
+      border: 1px solid #d9e2ec;
+      padding: 12px;
+      overflow: auto;
+      border-radius: 6px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 1em 0;
+    }
+    th, td {
+      border: 1px solid #d9e2ec;
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f0f4f8;
+    }
+    ul, ol {
+      padding-left: 1.4em;
+    }
+    .muted {
+      color: #52606d;
+    }
+  </style>
+</head>
+<body>
+  <h1>fwmap Manual</h1>
+  <p><code>fwmap</code> is a local CLI tool for embedded firmware size analysis. It reads an <code>ELF</code> file and an optional GNU ld style <code>map</code> file, then generates a single HTML report that highlights ROM/RAM usage, large symbols, object contributions, and differences from a previous build.</p>
+
+  <h2>Overview</h2>
+  <p>This prototype is intended for fast local verification. It focuses on practical questions: which sections consume ROM or RAM, which symbols are largest, which object files contribute most, and what increased compared with the previous build.</p>
+
+  <h2>Supported Scope</h2>
+  <ul>
+    <li>ELF32 / ELF64</li>
+    <li>Little-endian ELF as the main target</li>
+    <li>GNU ld style map files</li>
+    <li>Single HTML report output</li>
+    <li>Optional diff against a previous build</li>
+    <li>Fixed-threshold warnings</li>
+  </ul>
+  <p>Current limitations include missing linker script parsing, no demangling, heuristic ROM/RAM estimation, and partial support for less common map variants.</p>
+
+  <h2>Installation and Build</h2>
+  <p>Requirements:</p>
+  <ul>
+    <li>Rust toolchain</li>
+    <li>Windows, Linux, or macOS</li>
+  </ul>
+  <pre><code>cargo build</code></pre>
+  <pre><code>cargo test</code></pre>
+
+  <h2>Basic Usage</h2>
+  <h3>Analyze an ELF only</h3>
+  <pre><code>fwmap analyze --elf build/app.elf</code></pre>
+  <p>If <code>--out</code> is omitted, the report is written to <code>fwmap_report.html</code>.</p>
+
+  <h3>Analyze an ELF with a map file</h3>
+  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --out report.html</code></pre>
+
+  <h3>Analyze with previous-build diff</h3>
+  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --prev-map prev/app.map --out report.html</code></pre>
+
+  <h2>CLI Options</h2>
+  <table>
+    <thead>
+      <tr><th>Option</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>--elf &lt;path&gt;</code></td><td>Yes</td><td>Current ELF file</td></tr>
+      <tr><td><code>--map &lt;path&gt;</code></td><td>No</td><td>Current GNU ld map file</td></tr>
+      <tr><td><code>--prev-elf &lt;path&gt;</code></td><td>No</td><td>Previous ELF file for diff</td></tr>
+      <tr><td><code>--prev-map &lt;path&gt;</code></td><td>No</td><td>Previous map file for diff</td></tr>
+      <tr><td><code>--out &lt;path&gt;</code></td><td>No</td><td>Output HTML path</td></tr>
+      <tr><td><code>--help</code></td><td>No</td><td>Show help</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Output</h2>
+  <p><code>fwmap</code> produces a CLI summary on standard output and one HTML report file. The report contains Header, Overview, Warnings, Memory Summary, Section Breakdown, Top Symbols, Top Object Contributions, Diff, and Footer sections.</p>
+
+  <h2>Reading the Report</h2>
+  <h3>Overview</h3>
+  <p>Shows binary path, architecture, ELF class, endian, total section count, ROM total, RAM total, warning count, and optional ROM/RAM diff.</p>
+
+  <h3>Warnings</h3>
+  <ul>
+    <li>ROM usage over 85%</li>
+    <li>RAM usage over 85%</li>
+    <li>Large symbol at or above 4 KiB</li>
+    <li><code>.data</code> growth over 5%</li>
+    <li><code>.bss</code> growth over 5%</li>
+    <li>Large symbol growth spike in diff</li>
+    <li>Non-fatal map parse issues</li>
+  </ul>
+
+  <h3>Memory Summary</h3>
+  <p>Sections are sorted by size and classified as <code>ROM</code>, <code>RAM</code>, or <code>Other</code>. ROM includes <code>.text</code>, <code>.rodata</code>, and read-only allocated sections. RAM includes <code>.data</code>, <code>.bss</code>, and writable allocated sections.</p>
+
+  <h3>Section Breakdown</h3>
+  <p>Shows section name, address, size, and flags.</p>
+
+  <h3>Top Symbols</h3>
+  <p>Shows up to 50 largest symbols from the ELF symbol table with section and object information when available.</p>
+
+  <h3>Top Object Contributions</h3>
+  <p>Available when a map file is provided. This is useful for spotting which object files are dominating image size.</p>
+
+  <h3>Diff</h3>
+  <p>When previous inputs are provided, the report compares ROM, RAM, section sizes, symbol sizes, object contributions, and added or removed symbols.</p>
+
+  <h2>Error Handling</h2>
+  <p>Typical user-facing errors include missing ELF/map files, non-ELF input, unsupported ELF metadata, and write failures for the HTML report. Map parse failures are retained as warnings whenever partial output is still possible.</p>
+
+  <h2>Internal Structure</h2>
+  <ul>
+    <li><code>cli</code>: argument parsing and execution flow</li>
+    <li><code>ingest</code>: ELF and map readers</li>
+    <li><code>model</code>: shared data structures</li>
+    <li><code>analyze</code>: summaries, diffs, warnings</li>
+    <li><code>render</code>: CLI summary and HTML output</li>
+  </ul>
+
+  <h2>Typical Workflows</h2>
+  <h3>Quick local size check</h3>
+  <pre><code>fwmap analyze --elf build/app.elf</code></pre>
+  <h3>Investigate object growth</h3>
+  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map</code></pre>
+  <h3>Compare two builds</h3>
+  <pre><code>fwmap analyze --elf current/app.elf --map current/app.map --prev-elf previous/app.elf --prev-map previous/app.map --out diff_report.html</code></pre>
+
+  <h2>Known Constraints</h2>
+  <ul>
+    <li>Some GNU ld map variants may only be partially parsed</li>
+    <li>Archive/member aggregation is based on map line patterns</li>
+    <li>Exact memory-region usage is not available without linker script interpretation</li>
+    <li>Dynamic symbols and DWARF-based source attribution are out of scope</li>
+  </ul>
+
+  <h2>Future Expansion</h2>
+  <ul>
+    <li>Linker script parsing</li>
+    <li>Memory region visualization</li>
+    <li>JSON output for CI pipelines</li>
+    <li>Better archive aggregation</li>
+    <li>Demangling improvements</li>
+    <li>C++ template bloat analysis</li>
+  </ul>
+
+  <p class="muted">Generated for the current fwmap MVP implementation.</p>
+</body>
+</html>
