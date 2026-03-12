@@ -56,7 +56,7 @@
 <body>
   <h1>fwmap マニュアル</h1>
   <p><code>fwmap</code> は、組込みファームウェアの <code>ELF</code>、GNU ld 系 <code>map</code>、linker script を解析し、サイズ・差分・memory region 配置を可視化するローカル CLI ツールです。</p>
-  <p>この版では、実際の操作手順が追えるように、日常作業を想定した具体例つきで説明します。</p>
+  <p>この版では Phase 5 の機能を反映し、JSON 出力、CI 向け要約、しきい値指定、warning ベースの終了コード制御も含めて説明します。</p>
 
   <h2>1. 何ができるか</h2>
   <ul>
@@ -65,6 +65,7 @@
     <li>どの object file がサイズに効いているか把握する</li>
     <li>前回ビルドとの差分を分類付きで確認する</li>
     <li>FLASH / RAM などの region 使用率を確認する</li>
+    <li>CI で機械判定できる JSON と短い要約を出す</li>
   </ul>
 
   <h2>2. 事前に用意するファイル</h2>
@@ -113,6 +114,26 @@ Report: build/fwmap_diff_report.html</code></pre>
   [map:MAP_LINE_SKIPPED] Skipped unparsed map line 120: COMMON ...</code></pre>
   <p><code>source</code> で発生元、<code>code</code> で warning の種類を確認できます。</p>
 
+  <h3>手順 6: JSON を出力して CI やスクリプトで使う</h3>
+  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --lds linker/app.ld --report-json build/fwmap_report.json</code></pre>
+  <p>JSON には binary、memory summary、warnings、thresholds、top symbols、top object contributions、regions、diff 情報が含まれます。</p>
+
+  <h3>手順 7: CI 向けの短い要約を出す</h3>
+  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --prev-map prev/app.map --ci-summary</code></pre>
+  <pre><code>ROM: +12345 bytes
+RAM: +2048 bytes
+Warnings: 2
+Top section growth: .bss (+8192)
+Top symbol growth: g_rx_ring (+4096)</code></pre>
+
+  <h3>手順 8: warning が出たら失敗にする</h3>
+  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --fail-on-warning</code></pre>
+  <p>warning が 1 件以上あれば非 0 終了になります。</p>
+
+  <h3>手順 9: しきい値を調整する</h3>
+  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --threshold-rom 90 --threshold-ram 90 --threshold-region FLASH:92 --threshold-symbol-growth 8192</code></pre>
+  <p>この例では ROM/RAM/FLASH/symbol growth の warning 発火条件を変更しています。</p>
+
   <h2>4. CLI オプション</h2>
   <table>
     <thead>
@@ -125,13 +146,28 @@ Report: build/fwmap_diff_report.html</code></pre>
       <tr><td><code>--prev-elf &lt;path&gt;</code></td><td>任意</td><td>比較用の前回 ELF</td></tr>
       <tr><td><code>--prev-map &lt;path&gt;</code></td><td>任意</td><td>比較用の前回 map</td></tr>
       <tr><td><code>--out &lt;path&gt;</code></td><td>任意</td><td>HTML 出力先</td></tr>
+      <tr><td><code>--report-json &lt;path&gt;</code></td><td>任意</td><td>JSON 出力先</td></tr>
+      <tr><td><code>--ci-summary</code></td><td>任意</td><td>CI 向けの短い要約を表示</td></tr>
+      <tr><td><code>--fail-on-warning</code></td><td>任意</td><td>warning があれば非 0 終了</td></tr>
+      <tr><td><code>--threshold-rom &lt;percent&gt;</code></td><td>任意</td><td>ROM warning しきい値</td></tr>
+      <tr><td><code>--threshold-ram &lt;percent&gt;</code></td><td>任意</td><td>RAM warning しきい値</td></tr>
+      <tr><td><code>--threshold-region &lt;name:percent&gt;</code></td><td>任意</td><td>region ごとの warning しきい値</td></tr>
+      <tr><td><code>--threshold-symbol-growth &lt;bytes&gt;</code></td><td>任意</td><td>symbol growth warning しきい値</td></tr>
       <tr><td><code>--verbose</code></td><td>任意</td><td>warning 詳細を標準出力へ表示</td></tr>
       <tr><td><code>--version</code></td><td>任意</td><td>バージョン表示</td></tr>
       <tr><td><code>--help</code></td><td>任意</td><td>ヘルプ表示</td></tr>
     </tbody>
   </table>
 
-  <h2>5. HTML レポートの見方</h2>
+  <h2>5. 出力の種類</h2>
+  <ul>
+    <li>標準出力: 通常サマリまたは CI 向け短縮サマリ</li>
+    <li>HTML: 人が読むための詳細レポート</li>
+    <li>JSON: 機械可読な固定 schema のレポート</li>
+  </ul>
+  <p>JSON の top-level key は <code>schema_version</code>, <code>binary</code>, <code>memory_summary</code>, <code>warnings</code>, <code>thresholds</code>, <code>regions</code>, <code>diff_summary</code>, <code>diff</code> などです。</p>
+
+  <h2>6. HTML レポートの見方</h2>
   <ol>
     <li>Overview: 全体概要</li>
     <li>Warnings: 問題点と読み飛ばし情報</li>
@@ -144,7 +180,7 @@ Report: build/fwmap_diff_report.html</code></pre>
     <li>Diff: 増減一覧と追加削除</li>
   </ol>
 
-  <h2>6. よくある確認パターン</h2>
+  <h2>7. よくある確認パターン</h2>
   <h3>RAM が急に増えた</h3>
   <p><code>Top Symbol Growth</code> と <code>Top Object Growth</code> を見て、<code>.bss</code> / <code>.data</code> diff を確認します。</p>
   <h3>FLASH が逼迫している</h3>
@@ -152,13 +188,14 @@ Report: build/fwmap_diff_report.html</code></pre>
   <h3>map が少し壊れている</h3>
   <p>解析は可能な範囲で継続し、読み飛ばした箇所を warning に残します。まず HTML が生成されるか、次に <code>MAP_LINE_SKIPPED</code> を確認してください。</p>
 
-  <h2>7. 既知の制約</h2>
+  <h2>8. 既知の制約</h2>
   <ul>
     <li>ELF は現在 <code>SHT_SYMTAB</code> を中心に参照</li>
     <li>map は GNU ld の典型出力を優先</li>
     <li>linker script は subset 対応で、完全構文対応ではない</li>
     <li>region 使用量は linker script と ELF section address の組み合わせに依存する</li>
-    <li>JSON 出力や CI 向け exit code 制御は未実装</li>
+    <li>高度なルールエンジン分離は未実装</li>
+    <li>JSON schema は現時点で <code>schema_version = 1</code></li>
   </ul>
 
   <p class="muted">現行実装に合わせて、具体的な使用手順を含めて更新したマニュアルです。</p>

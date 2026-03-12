@@ -4,7 +4,7 @@
 
 `fwmap` は、組込みファームウェアの `ELF` と GNU ld 系 `map` を解析し、ROM/RAM 使用量、主要シンボル、object 寄与、前回ビルドとの差分を可視化するローカル CLI ツールです。
 
-現行版は Phase 4 まで実装済みで、単純なサイズ表示だけでなく、差分原因の追跡と memory region の可視化を主機能として扱います。
+現行版は Phase 5 まで実装済みで、単純なサイズ表示だけでなく、差分原因の追跡、memory region の可視化、JSON 出力、CI 向け要約を主機能として扱います。
 
 このツールで把握しやすい内容:
 
@@ -14,6 +14,7 @@
 - 前回ビルドから何が増えたか、減ったか
 - 追加・削除・増加・減少のどれに当たるか
 - linker script 上の region と section 配置がどうなっているか
+- CI で機械判定できる JSON と短い要約を得る
 
 ## 2. 対応範囲
 
@@ -25,16 +26,19 @@
 - GNU ld linker script subset 解析
 - memory region overview
 - section と region の対応表示
+- JSON 出力
+- CI 向け要約出力
+- warning ベースの終了コード制御
+- しきい値カスタマイズ
 - 固定しきい値ベースの warning
 - `--verbose` / `--version`
 
 現時点で未対応または限定的な内容:
 
-- JSON 出力
-- CI 向け exit code 制御
 - demangle 改善
 - DWARF を用いたソース行解析
 - linker script の完全構文対応
+- 高度なルールエンジン分離
 
 ## 3. ビルドとテスト
 
@@ -107,6 +111,35 @@ fwmap analyze --elf build/app.elf --verbose
 
 `--out` を省略した場合は `fwmap_report.html` が出力されます。
 
+### JSON レポートを出力
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --report-json build/fwmap_report.json
+```
+
+### CI 向けに短い要約だけを出す
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --prev-elf prev/app.elf \
+  --prev-map prev/app.map \
+  --ci-summary
+```
+
+### warning が出たら失敗にする
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --fail-on-warning
+```
+
 ## 5. 実際の使用手順
 
 この章では、日常的な使い方を具体的な流れで説明します。
@@ -133,6 +166,15 @@ project/
     app.elf
     app.map
 ```
+
+### 5.1.1 CI で使う場合に追加で考えること
+
+CI で使う場合は以下も決めておくと運用しやすくなります。
+
+- HTML だけ保存するか
+- JSON も artifact として保存するか
+- warning を失敗扱いにするか
+- しきい値をどこまで厳しくするか
 
 ### 5.2 まず ELF だけで確認する
 
@@ -240,7 +282,112 @@ Report: build/fwmap_diff_report.html
 3. さらに `Top growth object` を見る
 4. HTML の `Diff` セクションで `Added` / `Removed` / `Increased` を確認する
 
-### 5.6 warning を詳しく見たい場合
+### 5.6 JSON を出力して CI やスクリプトで使う
+
+JSON を出すと、人が HTML を見るだけでなく、機械的な判定や後処理がしやすくなります。
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --lds linker/app.ld \
+  --report-json build/fwmap_report.json
+```
+
+出力される主な内容:
+
+- binary metadata
+- linker script 情報
+- section summary
+- memory summary
+- warnings
+- thresholds
+- top symbols
+- top object contributions
+- regions
+- diff summary
+- diff 本体
+
+具体例:
+
+- CI の後段で `fwmap_report.json` を読んで集計する
+- warning 件数を別ツールで通知する
+- `diff_summary` を使って増減件数だけダッシュボード化する
+
+### 5.7 CI 向けの短い要約を出す
+
+ログを短く保ちたい場合は `--ci-summary` を使います。
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --prev-elf prev/app.elf \
+  --prev-map prev/app.map \
+  --ci-summary
+```
+
+出力例:
+
+```text
+ROM: +12345 bytes
+RAM: +2048 bytes
+Warnings: 2
+Top section growth: .bss (+8192)
+Top symbol growth: g_rx_ring (+4096)
+```
+
+用途:
+
+- GitHub Actions のログを短く保つ
+- GitLab CI の job log で一画面に収める
+- 人がまず差分だけを素早く確認する
+
+### 5.8 warning が出たら job を失敗にする
+
+warning を見逃したくない場合は `--fail-on-warning` を付けます。
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --fail-on-warning
+```
+
+挙動:
+
+- warning が 0 件なら終了コード 0
+- warning が 1 件以上なら非 0
+
+使いどころ:
+
+- サイズ劣化を CI で即座に止めたいとき
+- Release build だけ厳しく判定したいとき
+
+### 5.9 しきい値を調整する
+
+しきい値は CLI から変更できます。
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --threshold-rom 90 \
+  --threshold-ram 90 \
+  --threshold-region FLASH:92 \
+  --threshold-symbol-growth 8192
+```
+
+この例の意味:
+
+- ROM は 90% から warning
+- RAM は 90% から warning
+- `FLASH` は 92% から warning
+- symbol growth は 8192 bytes 以上で warning
+
+CI では、開発初期は緩く、リリース前は厳しくすると運用しやすいです。
+
+### 5.10 warning を詳しく見たい場合
 
 標準出力に warning を詳細表示したい場合:
 
@@ -267,7 +414,7 @@ Warnings:
 - `code`: warning 種別
 - `message`: 具体的な理由
 
-### 5.7 HTML の保存先を分ける
+### 5.11 HTML の保存先を分ける
 
 複数条件でレポートを比較したい場合は、出力先を分けます。
 
@@ -297,16 +444,24 @@ fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --
 | `--prev-elf <path>` | 任意 | 比較用の前回 ELF |
 | `--prev-map <path>` | 任意 | 比較用の前回 map |
 | `--out <path>` | 任意 | HTML 出力先 |
+| `--report-json <path>` | 任意 | JSON 出力先 |
+| `--ci-summary` | 任意 | CI 向けの短い要約を表示 |
+| `--fail-on-warning` | 任意 | warning があれば非 0 終了 |
+| `--threshold-rom <percent>` | 任意 | ROM warning しきい値 |
+| `--threshold-ram <percent>` | 任意 | RAM warning しきい値 |
+| `--threshold-region <name:percent>` | 任意 | region ごとの warning しきい値 |
+| `--threshold-symbol-growth <bytes>` | 任意 | symbol growth warning しきい値 |
 | `--verbose` | 任意 | warning 詳細を標準出力へ表示 |
 | `--version` | 任意 | バージョン表示 |
 | `--help` | 任意 | ヘルプ表示 |
 
 ## 7. 出力内容
 
-`fwmap` は次の 2 種類を出力します。
+`fwmap` は次の 3 種類を出力できます。
 
 - 標準出力: 実行サマリ
 - HTML: 単一ファイルのレポート
+- JSON: 機械可読なレポート
 
 ### 標準出力の例
 
@@ -331,6 +486,36 @@ Top growth object: drivers/net.o (+768)
 Report: fwmap_report.html
 ```
 
+CI summary あり:
+
+```text
+ROM: +12345 bytes
+RAM: +2048 bytes
+Warnings: 2
+Top section growth: .bss (+8192)
+Top symbol growth: g_rx_ring (+4096)
+```
+
+### JSON の主な構造
+
+JSON は固定 schema で出力されます。
+
+主な top-level key:
+
+- `schema_version`
+- `binary`
+- `linker_script`
+- `section_summary`
+- `memory_summary`
+- `warnings`
+- `thresholds`
+- `top_symbols`
+- `top_object_contributions`
+- `archive_contributions`
+- `regions`
+- `diff_summary`
+- `diff`
+
 ## 8. HTML レポートの見方
 
 HTML は以下の順で構成されます。
@@ -339,11 +524,13 @@ HTML は以下の順で構成されます。
 2. Overview
 3. Warnings
 4. Memory Summary
-5. Section Breakdown
-6. Top Symbols
-7. Top Object Contributions
-8. Diff
-9. Footer
+5. Memory Regions Overview
+6. Region Sections
+7. Section Breakdown
+8. Top Symbols
+9. Top Object Contributions
+10. Diff
+11. Footer
 
 ### 8.1 Overview
 
@@ -412,17 +599,6 @@ region ごとの section 一覧を表示します。
 
 - どの section が `FLASH` / `RAM` / その他 region に載っているか確認する
 - 想定外の配置を見つける
-
-### 8.6 Section Breakdown
-
-section ごとの詳細:
-
-- 名前
-- アドレス
-- サイズ
-- flags
-
-メモリ配置の概況を目視確認する用途です。
 
 ### 8.7 Section Breakdown
 
@@ -602,13 +778,13 @@ fwmap analyze \
 - archive/member の表記揺れは主要ケース対応に留まる
 - linker script は subset 対応であり、複雑な式や完全構文には未対応
 - region 使用量は linker script と ELF section address を組み合わせた推定を含む
+- JSON schema は現時点で `schema_version = 1`
 - ROM/RAM はヒューリスティック集計
 
 ## 14. 今後の予定
 
 ロードマップ上の次候補:
 
-- Phase 5: JSON 出力と CI 連携
 - Phase 6: ルールエンジン分離
 
 ## 15. テスト資産
