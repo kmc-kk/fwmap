@@ -156,7 +156,7 @@ cargo run -- analyze \
   --rules tests/fixtures/sample_rules.toml
 ```
 
-Supported Phase 7 custom rule kinds:
+Supported custom rule kinds:
 
 - `region_usage`
 - `section_delta`
@@ -208,12 +208,8 @@ cargo test
 ## CLI Compatibility
 
 - Existing `fwmap analyze --elf ...` usage remains valid.
-- `--verbose` and `--version` were added without changing existing flags.
-- Phase 3 only extends diff output; existing flags and required arguments are unchanged.
-- Phase 4 adds optional `--lds` without changing existing required arguments.
-- Phase 5 adds optional reporting and threshold flags without changing existing required arguments.
-- Phase 6 restructures warning evaluation internally without changing existing CLI flags.
-- Phase 7 adds optional `--rules` and `--demangle=...` flags without changing existing required arguments.
+- `--verbose`, `--version`, `--lds`, `--report-json`, `--ci-summary`, `--fail-on-warning`, `--rules`, and `--demangle=...` are additive options.
+- Existing required arguments remain unchanged.
 
 ## Planned Extensions
 

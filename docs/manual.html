@@ -56,7 +56,7 @@
 <body>
   <h1>fwmap マニュアル</h1>
   <p><code>fwmap</code> は、組込みファームウェアの <code>ELF</code>、GNU ld 系 <code>map</code>、linker script を解析し、サイズ・差分・memory region 配置を可視化するローカル CLI ツールです。</p>
-  <p>この版では Phase 6 の機能を反映し、JSON 出力、CI 向け要約、しきい値指定、warning ベースの終了コード制御、ルールベース warning 判定まで含めて説明します。</p>
+  <p>この版では、JSON 出力、CI 向け要約、しきい値指定、warning ベースの終了コード制御、外部ルール設定、C++ symbol demangle まで含めて説明します。</p>
 
   <h2>1. 何ができるか</h2>
   <ul>
@@ -67,6 +67,7 @@
     <li>FLASH / RAM などの region 使用率を確認する</li>
     <li>CI で機械判定できる JSON と短い要約を出す</li>
     <li>warning を rule code 単位で追跡する</li>
+    <li>C++ symbol を読みやすい名前で表示する</li>
   </ul>
 
   <h2>2. 事前に用意するファイル</h2>
@@ -120,6 +121,14 @@ Report: build/fwmap_diff_report.html</code></pre>
   <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --lds linker/app.ld --report-json build/fwmap_report.json</code></pre>
   <p>JSON には binary、memory summary、warnings、thresholds、top symbols、top object contributions、regions、diff 情報が含まれます。</p>
 
+  <h3>手順 6.1: 外部ルール設定を読み込む</h3>
+  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --rules tests/fixtures/sample_rules.toml</code></pre>
+  <p>TOML ルールファイルから threshold override と custom rule を読み込みます。壊れた設定や必須項目不足は解析前に明確なエラーになります。</p>
+
+  <h3>手順 6.2: C++ symbol を demangle する</h3>
+  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --demangle=on</code></pre>
+  <p><code>auto</code> は Itanium ABI らしい名前だけを対象にし、<code>on</code> は積極的に変換を試し、<code>off</code> は raw 名のまま表示します。</p>
+
   <h3>手順 7: CI 向けの短い要約を出す</h3>
   <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --prev-map prev/app.map --ci-summary</code></pre>
   <pre><code>ROM: +12345 bytes
@@ -136,50 +145,29 @@ Top symbol growth: g_rx_ring (+4096)</code></pre>
   <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --threshold-rom 90 --threshold-ram 90 --threshold-region FLASH:92 --threshold-symbol-growth 8192</code></pre>
   <p>この例では ROM/RAM/FLASH/symbol growth の warning 発火条件を変更しています。</p>
 
-  <h3>手順 10: 外部ルール設定の書き方を設計するときの考え方</h3>
-  <p>現行版では外部ファイルから warning ルールを読み込む機能はまだ実装されていません。ただし Phase 6 で warning 判定は <code>rules</code> モジュールに分離されており、将来的には外部設定へ拡張しやすい構造になっています。</p>
-  <p>将来の設定ファイルは、1 rule に 1 つの <code>code</code> を対応させ、<code>enabled</code>、<code>severity</code>、<code>threshold_percent</code>、<code>threshold_bytes</code>、<code>entity</code> を持つ形が扱いやすいです。</p>
+  <h3>手順 10: 外部ルールファイルを書く</h3>
   <pre><code>schema_version = 1
 
-[[rules]]
-code = "ROM_THRESHOLD"
-enabled = true
-severity = "warn"
-threshold_percent = 90
+[thresholds]
+rom_usage_warn = 0.90
+ram_usage_warn = 0.88
 
 [[rules]]
-code = "RAM_THRESHOLD"
-enabled = true
+id = "flash-near-full"
+kind = "region_usage"
+region = "FLASH"
+warn_if_greater_than = 0.92
 severity = "warn"
-threshold_percent = 90
+message = "FLASH usage is above 92%"
 
 [[rules]]
-code = "REGION_THRESHOLD"
-enabled = true
+id = "tls-data-growth"
+kind = "section_delta"
+section = ".data"
+warn_if_delta_bytes_gt = 2048
 severity = "warn"
-entity = "FLASH"
-threshold_percent = 92
-
-[[rules]]
-code = "REGION_LOW_FREE"
-enabled = true
-severity = "warn"
-entity = "RAM"
-threshold_bytes = 4096
-
-[[rules]]
-code = "LARGE_SYMBOL"
-enabled = true
-severity = "warn"
-threshold_bytes = 8192
-
-[[rules]]
-code = "SYMBOL_SPIKE"
-enabled = true
-severity = "warn"
-threshold_bytes = 8192</code></pre>
-  <p>現行 CLI では <code>ROM_THRESHOLD</code> は <code>--threshold-rom</code>、<code>RAM_THRESHOLD</code> は <code>--threshold-ram</code>、<code>REGION_THRESHOLD</code> は <code>--threshold-region</code>、<code>SYMBOL_SPIKE</code> は <code>--threshold-symbol-growth</code> で相当します。</p>
-  <p>まだ未対応なのは、<code>LARGE_SYMBOL</code> のしきい値変更、<code>DATA_GROWTH</code> / <code>BSS_GROWTH</code> の外部変更、<code>severity</code> の切替、rule 単位の enable / disable です。</p>
+message = ".data increased by more than 2KB"</code></pre>
+  <p>現行版で対応している <code>kind</code> は <code>region_usage</code>、<code>section_delta</code>、<code>symbol_delta</code>、<code>symbol_match</code>、<code>object_match</code> です。</p>
 
   <h2>4. CLI オプション</h2>
   <table>
@@ -194,6 +182,8 @@ threshold_bytes = 8192</code></pre>
       <tr><td><code>--prev-map &lt;path&gt;</code></td><td>任意</td><td>比較用の前回 map</td></tr>
       <tr><td><code>--out &lt;path&gt;</code></td><td>任意</td><td>HTML 出力先</td></tr>
       <tr><td><code>--report-json &lt;path&gt;</code></td><td>任意</td><td>JSON 出力先</td></tr>
+      <tr><td><code>--rules &lt;path&gt;</code></td><td>任意</td><td>外部 TOML ルール設定</td></tr>
+      <tr><td><code>--demangle=auto|on|off</code></td><td>任意</td><td>C++ symbol demangle 制御</td></tr>
       <tr><td><code>--ci-summary</code></td><td>任意</td><td>CI 向けの短い要約を表示</td></tr>
       <tr><td><code>--fail-on-warning</code></td><td>任意</td><td>warning があれば非 0 終了</td></tr>
       <tr><td><code>--threshold-rom &lt;percent&gt;</code></td><td>任意</td><td>ROM warning しきい値</td></tr>
@@ -212,7 +202,7 @@ threshold_bytes = 8192</code></pre>
     <li>HTML: 人が読むための詳細レポート</li>
     <li>JSON: 機械可読な固定 schema のレポート</li>
   </ul>
-  <p>JSON の top-level key は <code>schema_version</code>, <code>binary</code>, <code>memory_summary</code>, <code>warnings</code>, <code>thresholds</code>, <code>regions</code>, <code>diff_summary</code>, <code>diff</code> などです。</p>
+  <p>JSON の top-level key は <code>schema_version</code>, <code>binary</code>, <code>memory_summary</code>, <code>warnings</code>, <code>thresholds</code>, <code>regions</code>, <code>diff_summary</code>, <code>diff</code> などです。<code>top_symbols</code> には raw 名の <code>name</code> と表示用の <code>demangled_name</code> が両方含まれます。</p>
 
   <h2>6. HTML レポートの見方</h2>
   <ol>
@@ -226,13 +216,17 @@ threshold_bytes = 8192</code></pre>
     <li>Top Object Contributions: 大きい object</li>
     <li>Diff: 増減一覧と追加削除</li>
   </ol>
-  <p>Phase 6 以降は warning 判定がルール単位で分離されているため、同じ <code>code</code> を軸に CLI、HTML、JSON を横断して追跡しやすくなっています。</p>
+  <p>warning 判定はルール単位で分離され、外部 TOML ルールも読み込めるため、同じ <code>code</code> を軸に CLI、HTML、JSON を横断して追跡しやすくなっています。</p>
 
   <h2>7. よくある確認パターン</h2>
   <h3>RAM が急に増えた</h3>
   <p><code>Top Symbol Growth</code> と <code>Top Object Growth</code> を見て、<code>.bss</code> / <code>.data</code> diff を確認します。</p>
+  <h3>C++ symbol が読みにくい</h3>
+  <p><code>--demangle=on</code> を付けて再実行します。比較キーは raw symbol 名のままなので、差分の安定性は維持されます。</p>
   <h3>同じ warning が繰り返し出る</h3>
   <p><code>code</code> と <code>related</code> を見て、同一 region なのか同一 symbol なのかを先に切り分けます。たとえば <code>REGION_THRESHOLD</code> と <code>FLASH</code> が固定なら linker script やコード配置、<code>LARGE_SYMBOL</code> と <code>g_rx_ring</code> が固定なら静的バッファ定義を優先して確認します。</p>
+  <h3>チーム独自ルールを足したい</h3>
+  <p><code>--rules</code> で TOML を読み込みます。まずは <code>region_usage</code> や <code>section_delta</code> から始めると運用しやすいです。</p>
   <h3>FLASH が逼迫している</h3>
   <p><code>Memory Regions Overview</code> の <code>FLASH</code> 使用率と <code>Top Section Growth</code> を確認します。</p>
   <h3>map が少し壊れている</h3>
@@ -244,10 +238,11 @@ threshold_bytes = 8192</code></pre>
     <li>map は GNU ld の典型出力を優先</li>
     <li>linker script は subset 対応で、完全構文対応ではない</li>
     <li>region 使用量は linker script と ELF section address の組み合わせに依存する</li>
-    <li>warning ルールは内部実装で固定されており、外部設定ファイル読み込みは未対応</li>
+    <li>demangle は現在 Itanium ABI 系の軽量対応</li>
+    <li>外部ルール設定は TOML 固定で、対応 <code>kind</code> は現在の実装範囲に限られる</li>
     <li>JSON schema は現時点で <code>schema_version = 1</code></li>
   </ul>
 
-  <p class="muted">現行実装に合わせて、具体的な使用手順と Phase 6 の warning rule 運用を含めて更新したマニュアルです。</p>
+  <p class="muted">現行実装に合わせて、具体的な使用手順、外部ルール設定、demangle 運用を含めて更新したマニュアルです。</p>
 </body>
 </html>
