@@ -5,8 +5,9 @@ use crate::ingest::{elf, lds, map};
 use crate::model::{
     AnalysisResult, ArchiveContribution, DiffResult, MemoryRegion, MemorySummary, ObjectContribution, RegionSectionUsage,
     RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SymbolInfo, ThresholdConfig,
-    WarningItem, WarningLevel, WarningSource,
+    WarningItem,
 };
+use crate::rules::{evaluate_default_rules, RuleContext};
 
 pub fn analyze_paths(
     elf_path: &Path,
@@ -92,134 +93,15 @@ pub fn sorted_symbols(mut symbols: Vec<SymbolInfo>) -> Vec<SymbolInfo> {
 }
 
 pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>, thresholds: &ThresholdConfig) -> Vec<WarningItem> {
-    let mut warnings = Vec::new();
-    let rom_capacity = memory_capacity(&current.memory.memory_regions, &["rom", "flash"]);
-    if let Some(capacity) = rom_capacity {
-        let ratio = current.memory.rom_bytes as f64 / capacity as f64;
-        if ratio * 100.0 >= thresholds.rom_percent {
-            warnings.push(WarningItem {
-                level: WarningLevel::Warn,
-                code: "ROM_THRESHOLD".to_string(),
-                message: format!("ROM usage exceeded {:.0}% ({:.1}%)", thresholds.rom_percent, ratio * 100.0),
-                source: WarningSource::Analyze,
-                related: Some("rom".to_string()),
-            });
-        }
-    }
-    let ram_capacity = memory_capacity(&current.memory.memory_regions, &["ram"]);
-    if let Some(capacity) = ram_capacity {
-        let ratio = current.memory.ram_bytes as f64 / capacity as f64;
-        if ratio * 100.0 >= thresholds.ram_percent {
-            warnings.push(WarningItem {
-                level: WarningLevel::Warn,
-                code: "RAM_THRESHOLD".to_string(),
-                message: format!("RAM usage exceeded {:.0}% ({:.1}%)", thresholds.ram_percent, ratio * 100.0),
-                source: WarningSource::Analyze,
-                related: Some("ram".to_string()),
-            });
-        }
-    }
-
-    for region in &current.memory.region_summaries {
-        let region_threshold = thresholds
-            .region_percent
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(&region.region_name))
-            .map(|(_, value)| *value)
-            .unwrap_or(thresholds.region_default_percent);
-        if region.usage_ratio * 100.0 >= region_threshold {
-            warnings.push(WarningItem {
-                level: WarningLevel::Warn,
-                code: "REGION_THRESHOLD".to_string(),
-                message: format!("Region {} usage exceeded {:.0}% ({:.1}%)", region.region_name, region_threshold, region.usage_ratio * 100.0),
-                source: WarningSource::Analyze,
-                related: Some(region.region_name.clone()),
-            });
-        }
-        if region.free <= thresholds.region_low_free_bytes {
-            warnings.push(WarningItem {
-                level: WarningLevel::Warn,
-                code: "REGION_LOW_FREE".to_string(),
-                message: format!("Region {} free space is low ({})", region.region_name, format_bytes(region.free)),
-                source: WarningSource::Analyze,
-                related: Some(region.region_name.clone()),
-            });
-        }
-    }
-
-    if let Some(lds) = &current.linker_script {
-        for placement in &lds.placements {
-            if let Some(section) = current.sections.iter().find(|section| section.name == placement.section_name) {
-                if let Some(region) = lds.regions.iter().find(|region| region.name == placement.region_name) {
-                    let in_range = section.addr >= region.origin && section.addr.saturating_add(section.size) <= region.origin.saturating_add(region.length);
-                    if !in_range {
-                        warnings.push(WarningItem {
-                            level: WarningLevel::Warn,
-                            code: "SECTION_REGION_MISMATCH".to_string(),
-                            message: format!("Section {} is assigned to region {} but its address is outside the region range", section.name, region.name),
-                            source: WarningSource::Analyze,
-                            related: Some(section.name.clone()),
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    for symbol in current.symbols.iter().filter(|item| item.size >= thresholds.large_symbol_bytes).take(5) {
-        warnings.push(WarningItem {
-            level: WarningLevel::Warn,
-            code: "LARGE_SYMBOL".to_string(),
-            message: format!("Large symbol detected: {} ({})", symbol.name, format_bytes(symbol.size)),
-            source: WarningSource::Analyze,
-            related: Some(symbol.name.clone()),
-        });
-    }
-
-    if let Some(diff) = diff {
-        for name in [".data", ".bss"] {
-            if let Some(entry) = diff.section_diffs.iter().find(|entry| entry.name == name && entry.previous > 0) {
-                let growth = entry.delta as f64 / entry.previous as f64;
-                if growth * 100.0 >= thresholds.section_growth_rate {
-                    warnings.push(WarningItem {
-                        level: WarningLevel::Warn,
-                        code: format!("{}_GROWTH", name.trim_start_matches('.').to_uppercase()),
-                        message: format!("{name} grew by {:.1}% ({:+})", growth * 100.0, entry.delta),
-                        source: WarningSource::Analyze,
-                        related: Some(name.to_string()),
-                    });
-                }
-            }
-        }
-        if let Some(entry) = diff
-            .symbol_diffs
-            .iter()
-            .find(|entry| entry.delta >= thresholds.symbol_growth_bytes as i64)
-        {
-            warnings.push(WarningItem {
-                level: WarningLevel::Warn,
-                code: "SYMBOL_SPIKE".to_string(),
-                message: format!("Symbol growth spike: {} ({:+})", entry.name, entry.delta),
-                source: WarningSource::Analyze,
-                related: Some(entry.name.clone()),
-            });
-        }
-    }
-
-    warnings
+    evaluate_default_rules(&RuleContext {
+        current,
+        diff,
+        thresholds,
+    })
 }
 
 pub fn format_bytes(bytes: u64) -> String {
     format!("{bytes} bytes ({:.2} KiB)", bytes as f64 / 1024.0)
-}
-
-fn memory_capacity(regions: &[crate::model::MemoryRegion], names: &[&str]) -> Option<u64> {
-    let total = regions
-        .iter()
-        .filter(|region| names.iter().any(|name| region.name.eq_ignore_ascii_case(name)))
-        .map(|region| region.length)
-        .sum::<u64>();
-    (total > 0).then_some(total)
 }
 
 fn aggregate_objects(items: &[ObjectContribution]) -> Vec<ObjectContribution> {

@@ -13,6 +13,7 @@
 - Classified diff analysis for sections, symbols, objects, and archive members
 - Memory region overview and section-to-region placement summary
 - Fixed-threshold warnings
+- Rule-based warning evaluation
 - JSON report output
 - CI summary and warning-based exit control
 - Graceful degradation for missing symbol tables and partially broken map files
@@ -146,6 +147,7 @@ cargo test
 - ELF parsing currently reads the standard symbol table (`SHT_SYMTAB`) only.
 - `map` parsing targets common GNU ld output and intentionally tolerates unknown lines with warnings.
 - Warning items now retain their source and related entity so skipped input can be explained in reports and verbose CLI output.
+- Warning evaluation is separated into a rule engine so new checks can be added without rewriting core analysis flow.
 - Linker script support is currently a subset parser aimed at common GNU ld patterns.
 - Object paths are sourced from the map file; when `--map` is omitted, symbol-to-object mapping is unavailable.
 - Region usage relies on linker script declarations plus ELF section addresses, so unusual scripts may only be partially represented.
@@ -159,10 +161,11 @@ cargo test
 - Phase 3 only extends diff output; existing flags and required arguments are unchanged.
 - Phase 4 adds optional `--lds` without changing existing required arguments.
 - Phase 5 adds optional reporting and threshold flags without changing existing required arguments.
+- Phase 6 restructures warning evaluation internally without changing existing CLI flags.
 
 ## Planned Extensions
 
-- Region-aware placement analysis
+- External rule configuration
 - Better demangling and C++ symbol analysis
 
 ## CI Examples
