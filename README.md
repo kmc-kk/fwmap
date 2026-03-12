@@ -1,11 +1,11 @@
 # fwmap
 
-`fwmap` is a Rust CLI prototype that analyzes firmware `ELF` and GNU ld `map` outputs, then emits a single-file HTML report focused on ROM/RAM usage, large symbols, object contributions, and build-to-build diffs.
+`fwmap` is a Rust CLI prototype that analyzes firmware `ELF` and linker `map` outputs from GNU ld and LLVM lld, then emits a single-file HTML report focused on ROM/RAM usage, large symbols, object contributions, and build-to-build diffs.
 
 ## Scope
 
 - ELF32 / ELF64 parsing
-- GNU ld style map parsing
+- GNU ld and LLVM lld style map parsing
 - GNU ld linker script subset parsing (`MEMORY`, `SECTIONS`, `> REGION`, `AT`, `ALIGN`, `KEEP`)
 - ROM/RAM summary and section breakdown
 - Top symbols and top object contributions
@@ -21,6 +21,7 @@
 - warning-based exit control
 - SQLite-backed history recording and trend inspection
 - Graceful degradation for missing symbol tables and partially broken map files
+- Toolchain auto-detection and parser-family selection
 - `--verbose` and `--version` CLI support
 - Offline HTML report generation
 
@@ -43,6 +44,7 @@ With map information:
 cargo run -- analyze \
   --elf build/app.elf \
   --map build/app.map \
+  --toolchain auto \
   --lds linker/app.ld \
   --out report.html
 ```
@@ -77,6 +79,7 @@ cargo run -- analyze \
   --map build/app.map \
   --rules tests/fixtures/sample_rules.toml \
   --demangle=on \
+  --toolchain lld \
   --report-json report.json
 ```
 
@@ -130,6 +133,7 @@ The JSON report uses a fixed top-level shape:
 {
   "schema_version": 1,
   "binary": { "...": "..." },
+  "toolchain": { "...": "..." },
   "linker_script": { "...": "..." },
   "section_summary": [],
   "memory_summary": { "...": "..." },
@@ -155,6 +159,7 @@ The JSON report uses a fixed top-level shape:
 - [tests/fixtures/README.md](/e:/work/git/fwmap/tests/fixtures/README.md)
 - [tests/fixtures/sample_rules.toml](/e:/work/git/fwmap/tests/fixtures/sample_rules.toml)
 - [tests/fixtures/sample.ld](/e:/work/git/fwmap/tests/fixtures/sample.ld)
+- [tests/fixtures/sample_lld.map](/e:/work/git/fwmap/tests/fixtures/sample_lld.map)
 
 `tests/fixtures/` now contains 10+ small regression assets for map variations and parser failure modes. ELF parser tests still generate minimal synthetic ELF fixtures in test code so the repository stays lightweight.
 
@@ -198,6 +203,22 @@ message = "DTCM usage is above 90%"
 ## Demangling
 
 Use `--demangle=auto|on|off` to control C++ symbol demangling. `auto` only attempts Itanium-style names, `on` forces a demangle attempt, and `off` preserves raw symbol names.
+
+## Toolchains
+
+Use `--toolchain auto|gnu|lld|iar|armcc|keil` to control map parser selection.
+
+- `auto`: detect from map content and fall back to `gnu`
+- `gnu`: force the GNU ld parser
+- `lld`: force the LLVM lld parser
+- `iar`, `armcc`, `keil`: reserved placeholders that currently return a clear `not implemented` error
+
+```bash
+cargo run -- analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --toolchain auto
+```
 
 ## CI Output
 
@@ -249,7 +270,7 @@ cargo test
 ## Current Limitations
 
 - ELF parsing currently reads the standard symbol table (`SHT_SYMTAB`) only.
-- `map` parsing targets common GNU ld output and intentionally tolerates unknown lines with warnings.
+- `map` parsing targets common GNU ld / LLVM lld output and intentionally tolerates unknown lines with warnings.
 - Warning items now retain their source and related entity so skipped input can be explained in reports and verbose CLI output.
 - Warning evaluation is separated into a rule engine so new checks can be added without rewriting core analysis flow.
 - External rule files are validated before analysis starts.
@@ -259,17 +280,22 @@ cargo test
 - JSON schema is fixed at `schema_version = 1`.
 - Demangling currently prioritizes Itanium ABI names and falls back safely when conversion fails.
 - History storage currently uses a local SQLite file and focuses on summary, section, region, and rule-result metrics.
+- Toolchain auto-detection is intentionally lightweight and currently keys off GNU ld / LLVM lld map patterns only.
 
 ## CLI Compatibility
 
 - Existing `fwmap analyze --elf ...` usage remains valid.
 - `history record|list|show|trend` are additive subcommands.
-- `--verbose`, `--version`, `--lds`, `--report-json`, `--ci-summary`, `--ci-format`, `--ci-out`, `--fail-on-warning`, `--rules`, and `--demangle=...` are additive options.
+- `--verbose`, `--version`, `--lds`, `--report-json`, `--ci-summary`, `--ci-format`, `--ci-out`, `--fail-on-warning`, `--rules`, `--demangle=...`, and `--toolchain ...` are additive options.
 - Existing required arguments remain unchanged.
 
 ## Planned Extensions
 
 - Better demangling and C++ symbol analysis
+
+## Additional Docs
+
+- [Toolchain support](docs/toolchains.md)
 
 ## CI Examples
 

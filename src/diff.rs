@@ -145,7 +145,7 @@ mod tests {
     use super::{archive_member_key, diff_results, names_for_kind, object_key, section_key, symbol_key, top_increases};
     use crate::model::{
         AnalysisResult, ArchiveContribution, BinaryInfo, DiffChangeKind, MemorySummary, ObjectContribution, SectionCategory,
-        SectionTotal, SymbolInfo,
+        SectionTotal, SymbolInfo, ToolchainInfo, ToolchainKind, ToolchainSelection,
     };
 
     #[test]
@@ -195,6 +195,11 @@ mod tests {
                 arch: "ARM".to_string(),
                 elf_class: "ELF32".to_string(),
                 endian: "little-endian".to_string(),
+            },
+            toolchain: ToolchainInfo {
+                requested: ToolchainSelection::Auto,
+                detected: None,
+                resolved: ToolchainKind::Gnu,
             },
             sections: Vec::new(),
             symbols: symbols

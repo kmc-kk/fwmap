@@ -7,7 +7,7 @@ use crate::history::{
     list_builds, print_build_detail, print_build_list, print_trend, record_build, show_build, trend_metric,
     HistoryRecordInput,
 };
-use crate::model::{CiFormat, DemangleMode, ThresholdConfig, WarningLevel};
+use crate::model::{CiFormat, DemangleMode, ThresholdConfig, ToolchainSelection, WarningLevel};
 use crate::rule_config::{apply_threshold_overrides, load_rule_config};
 use crate::render::{print_ci_summary, print_cli_summary, write_ci_summary, write_html_report, write_json_report};
 
@@ -33,12 +33,14 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             thresholds,
             rules,
             demangle,
+            toolchain,
             metadata,
         } => {
             let mut options = AnalyzeOptions {
                 thresholds,
                 demangle,
                 custom_rules: Vec::new(),
+                toolchain,
             };
             if let Some(rule_path) = rules.as_deref() {
                 let config = load_rule_config(rule_path)?;
@@ -84,12 +86,14 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             thresholds,
             rules,
             demangle,
+            toolchain,
             verbose,
         } => {
             let mut options = AnalyzeOptions {
                 thresholds,
                 demangle,
                 custom_rules: Vec::new(),
+                toolchain,
             };
             if let Some(rule_path) = rules.as_deref() {
                 let config = load_rule_config(rule_path)?;
@@ -169,6 +173,7 @@ enum Command {
         thresholds: ThresholdConfig,
         rules: Option<PathBuf>,
         demangle: DemangleMode,
+        toolchain: ToolchainSelection,
         metadata: std::collections::BTreeMap<String, String>,
     },
     HistoryList {
@@ -198,6 +203,7 @@ enum Command {
         thresholds: ThresholdConfig,
         rules: Option<PathBuf>,
         demangle: DemangleMode,
+        toolchain: ToolchainSelection,
         verbose: bool,
     },
 }
@@ -230,6 +236,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut thresholds = ThresholdConfig::default();
     let mut rules = None;
     let mut demangle = DemangleMode::Auto;
+    let mut toolchain = ToolchainSelection::Auto;
     let mut verbose = false;
     let mut index = 2usize;
     while index < args.len() {
@@ -288,6 +295,12 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                 index += 1;
                 continue;
             }
+            "--toolchain" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --toolchain".to_string())?;
+                toolchain = parse_toolchain(value)?;
+                index += 2;
+                continue;
+            }
             "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--rules" | "--ci-out" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
@@ -342,6 +355,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         thresholds,
         rules,
         demangle,
+        toolchain,
         verbose,
     })
 }
@@ -365,8 +379,8 @@ fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--rules <path>] [--demangle=auto|on|off] [--verbose]
-fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--meta key=value]
+fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--verbose]
+fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--meta key=value]
 fwmap history list --db <path>
 fwmap history show --db <path> --build <id>
 fwmap history trend --db <path> --metric <rom|ram|warnings|region:NAME|section:NAME> [--last <n>]
@@ -381,6 +395,7 @@ Options:
   --report-json Write JSON report to the given path
   --rules     Load TOML rule configuration from the given path
   --demangle=auto|on|off Control C++ symbol demangling
+  --toolchain auto|gnu|lld|iar|armcc|keil Select or detect the map parser family
   --ci-summary Print compact CI-friendly summary
   --ci-format text|markdown|json Select CI summary format
   --ci-out    Write CI summary to the given path
@@ -414,6 +429,7 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
     let mut thresholds = ThresholdConfig::default();
     let mut rules = None;
     let mut demangle = DemangleMode::Auto;
+    let mut toolchain = ToolchainSelection::Auto;
     let mut metadata = std::collections::BTreeMap::new();
     let mut index = 3usize;
     while index < args.len() {
@@ -444,6 +460,11 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
             "--demangle=off" => {
                 demangle = DemangleMode::Off;
                 index += 1;
+            }
+            "--toolchain" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --toolchain".to_string())?;
+                toolchain = parse_toolchain(value)?;
+                index += 2;
             }
             "--meta" => {
                 let value = args.get(index + 1).ok_or_else(|| "missing value for --meta".to_string())?;
@@ -488,6 +509,7 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
         thresholds,
         rules,
         demangle,
+        toolchain,
         metadata,
     })
 }
@@ -571,10 +593,24 @@ fn parse_ci_format(value: &str) -> Result<CiFormat, String> {
     }
 }
 
+fn parse_toolchain(value: &str) -> Result<ToolchainSelection, String> {
+    match value {
+        "auto" => Ok(ToolchainSelection::Auto),
+        "gnu" => Ok(ToolchainSelection::Gnu),
+        "lld" => Ok(ToolchainSelection::Lld),
+        "iar" => Ok(ToolchainSelection::Iar),
+        "armcc" => Ok(ToolchainSelection::Armcc),
+        "keil" => Ok(ToolchainSelection::Keil),
+        _ => Err(format!(
+            "invalid toolchain '{value}', expected auto|gnu|lld|iar|armcc|keil"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{parse_args, Command};
-    use crate::model::{CiFormat, DemangleMode};
+    use crate::model::{CiFormat, DemangleMode, ToolchainSelection};
     use std::path::PathBuf;
 
     #[test]
@@ -706,6 +742,23 @@ mod tests {
                 assert_eq!(last, 5);
             }
             _ => panic!("expected history trend command"),
+        }
+    }
+
+    #[test]
+    fn parses_toolchain_option() {
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "analyze".to_string(),
+            "--elf".to_string(),
+            "Cargo.toml".to_string(),
+            "--toolchain".to_string(),
+            "lld".to_string(),
+        ])
+        .unwrap();
+        match cmd {
+            Command::Analyze { toolchain, .. } => assert_eq!(toolchain, ToolchainSelection::Lld),
+            _ => panic!("expected analyze command"),
         }
     }
 }

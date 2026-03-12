@@ -449,8 +449,8 @@ fn now_unix() -> i64 {
 mod tests {
     use super::{list_builds, record_build, show_build, trend_metric, HistoryRecordInput};
     use crate::model::{
-        AnalysisResult, BinaryInfo, MemorySummary, SectionCategory, SectionTotal, SymbolInfo, WarningItem, WarningLevel,
-        WarningSource,
+        AnalysisResult, BinaryInfo, MemorySummary, SectionCategory, SectionTotal, SymbolInfo, ToolchainInfo,
+        ToolchainKind, ToolchainSelection, WarningItem, WarningLevel, WarningSource,
     };
     use std::collections::BTreeMap;
     use std::fs;
@@ -516,6 +516,11 @@ mod tests {
                 arch: "ARM".to_string(),
                 elf_class: "ELF32".to_string(),
                 endian: "little-endian".to_string(),
+            },
+            toolchain: ToolchainInfo {
+                requested: ToolchainSelection::Auto,
+                detected: None,
+                resolved: ToolchainKind::Gnu,
             },
             sections: Vec::new(),
             symbols: vec![SymbolInfo {

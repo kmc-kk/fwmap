@@ -15,3 +15,4 @@ This directory contains small text fixtures used by parser and regression tests.
 - `non_ascii.map`: UTF-8 object paths and long non-ASCII names
 - `sample_rules.toml`: external Phase 7 rule configuration example
 - `sample.ld`: linker script subset for region and placement tests
+- `sample_lld.map`: LLVM lld style map snippet used for toolchain auto-detection and normalization tests

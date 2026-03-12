@@ -2,7 +2,7 @@
 
 ## 1. 概要
 
-`fwmap` は、組込みファームウェアの `ELF` と GNU ld 系 `map` を解析し、ROM/RAM 使用量、主要シンボル、object 寄与、前回ビルドとの差分を可視化するローカル CLI ツールです。
+`fwmap` は、組込みファームウェアの `ELF` と GNU ld / LLVM lld 系 `map` を解析し、ROM/RAM 使用量、主要シンボル、object 寄与、前回ビルドとの差分を可視化するローカル CLI ツールです。
 
 現行版は、単純なサイズ表示だけでなく、差分原因の追跡、memory region の可視化、JSON 出力、CI 向け要約、ルールベースの warning 判定、外部ルール設定、C++ symbol の demangle を主機能として扱います。
 
@@ -20,7 +20,7 @@
 
 - ELF32 / ELF64
 - little-endian ELF を主対象
-- GNU ld 系 map
+- GNU ld / LLVM lld 系 map
 - 単一 HTML レポート出力
 - 前回成果物との diff 比較
 - GNU ld linker script subset 解析
@@ -34,6 +34,7 @@
 - 外部 TOML ルール設定
 - C++ symbol demangle
 - SQLite ベースの履歴保存とトレンド表示
+- `--toolchain auto|gnu|lld|iar|armcc|keil`
 - `--verbose` / `--version`
 
 現時点で未対応または限定的な内容:
@@ -76,6 +77,7 @@ fwmap analyze --elf build/app.elf
 fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
+  --toolchain auto \
   --out report.html
 ```
 
@@ -139,6 +141,15 @@ fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
   --demangle=on
+```
+
+### map parser family を明示する
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --toolchain lld
 ```
 
 ### CI 向けに短い要約だけを出す
@@ -272,6 +283,26 @@ fwmap analyze \
 - その結果 `.bss` が増えている
 
 この場合は、ネットワークバッファやキュー定義を疑うのが自然です。
+
+### 5.3.1 toolchain を自動判定する
+
+`map` が GNU ld 由来か LLVM lld 由来か分からない場合は `--toolchain auto` を付けます。
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --toolchain auto \
+  --out build/fwmap_report.html
+```
+
+確認ポイント:
+
+1. 標準出力の `Toolchain` 行を見る
+2. HTML の `Overview` で resolved toolchain を見る
+3. JSON の `toolchain` を CI や後続スクリプトで確認する
+
+GNU ld と LLVM lld は同じ内部モデルに正規化されるため、以後の `Top Object Contributions` や `Diff` の見方は同じです。
 
 ### 5.4 linker script を付けて region 配置を確認する
 
@@ -627,6 +658,7 @@ fwmap history trend --db history.db --metric section:.bss --last 20
 | `--report-json <path>` | 任意 | JSON 出力先 |
 | `--rules <path>` | 任意 | 外部 TOML ルール設定 |
 | `--demangle=auto|on|off` | 任意 | C++ symbol demangle 制御 |
+| `--toolchain <auto|gnu|lld|iar|armcc|keil>` | 任意 | map parser family の自動判定または強制指定 |
 | `--ci-summary` | 任意 | CI 向けの短い要約を表示 |
 | `--ci-format <text|markdown|json>` | 任意 | CI 要約の出力形式 |
 | `--ci-out <path>` | 任意 | CI 要約の出力先 |
@@ -725,6 +757,8 @@ JSON は固定 schema で出力されます。
 - `diff`
 
 `top_symbols` の各要素は、raw 名の `name` と表示用の `demangled_name` を両方持ちます。
+
+`toolchain` には、ユーザ指定、検出結果、実際に使った parser family が入ります。
 
 ## 8. HTML レポートの見方
 
@@ -1012,6 +1046,7 @@ fwmap history trend --db history.db --metric rom --last 20
 
 - `cli`: 引数処理と実行制御
 - `ingest`: ELF / map の読み込み
+- `docs/toolchains.md`: toolchain family と parser 追加手順
 - `ingest/lds`: linker script subset 読み込み
 - `analyze`: 集計と warning 判定
 - `rules`: warning ルール評価
@@ -1039,7 +1074,7 @@ fwmap history trend --db history.db --metric rom --last 20
 ## 13. 既知の制約
 
 - ELF は現在 `SHT_SYMTAB` を中心に参照
-- map は GNU ld の典型出力を優先
+- map は GNU ld と LLVM lld を正式対応
 - object path は主に map 由来
 - archive/member の表記揺れは主要ケース対応に留まる
 - linker script は subset 対応であり、複雑な式や完全構文には未対応
@@ -1049,6 +1084,7 @@ fwmap history trend --db history.db --metric rom --last 20
 - demangle は現在 Itanium ABI 系の軽量対応
 - 外部ルール設定は TOML 固定で、対応 `kind` は現在の実装範囲に限られる
 - 履歴保存はローカル SQLite 前提で、現時点では CLI 表示中心
+- `--toolchain auto` の検出は軽量判定であり、現時点では GNU ld / LLVM lld の主要パターンに限定
 
 ## 14. 今後の予定
 
@@ -1057,6 +1093,7 @@ fwmap history trend --db history.db --metric rom --last 20
 - CI 出力強化
 - demangle の高度化
 - 履歴トレンド
+- 対応 toolchain の追加
 
 ## 15. テスト資産
 
@@ -1077,5 +1114,6 @@ fwmap history trend --db history.db --metric rom --last 20
 - `non_ascii.map`
 - `sample_rules.toml`
 - `sample.ld`
+- `sample_lld.map`
 
 ELF の一部フィクスチャはテスト内で合成生成しています。

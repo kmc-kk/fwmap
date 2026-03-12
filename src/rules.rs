@@ -404,7 +404,7 @@ mod tests {
     use crate::model::{
         AnalysisResult, BinaryInfo, DiffChangeKind, DiffEntry, DiffResult, DiffSummary, LinkerScriptInfo, MemoryRegion,
         MemorySummary, RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SymbolInfo,
-        ThresholdConfig, WarningLevel,
+        ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection, WarningLevel,
     };
 
     #[test]
@@ -554,6 +554,11 @@ mod tests {
                 arch: "ARM".to_string(),
                 elf_class: "ELF32".to_string(),
                 endian: "little-endian".to_string(),
+            },
+            toolchain: ToolchainInfo {
+                requested: ToolchainSelection::Auto,
+                detected: None,
+                resolved: ToolchainKind::Gnu,
             },
             sections: Vec::new(),
             symbols: vec![SymbolInfo {

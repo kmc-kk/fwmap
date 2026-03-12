@@ -115,6 +115,7 @@ pub struct WarningItem {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AnalysisResult {
     pub binary: BinaryInfo,
+    pub toolchain: ToolchainInfo,
     pub sections: Vec<SectionInfo>,
     pub symbols: Vec<SymbolInfo>,
     pub object_contributions: Vec<ObjectContribution>,
@@ -168,6 +169,13 @@ pub enum WarningLevel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ToolchainInfo {
+    pub requested: ToolchainSelection,
+    pub detected: Option<ToolchainKind>,
+    pub resolved: ToolchainKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum WarningSource {
     Elf,
     Map,
@@ -189,6 +197,25 @@ pub enum DiffChangeKind {
     Decreased,
     Unchanged,
     Moved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolchainSelection {
+    #[default]
+    Auto,
+    Gnu,
+    Lld,
+    Iar,
+    Armcc,
+    Keil,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolchainKind {
+    Gnu,
+    Lld,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -342,6 +369,30 @@ impl fmt::Display for DiffChangeKind {
             DiffChangeKind::Decreased => "Decreased",
             DiffChangeKind::Unchanged => "Unchanged",
             DiffChangeKind::Moved => "Moved",
+        };
+        write!(f, "{text}")
+    }
+}
+
+impl fmt::Display for ToolchainSelection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            ToolchainSelection::Auto => "auto",
+            ToolchainSelection::Gnu => "gnu",
+            ToolchainSelection::Lld => "lld",
+            ToolchainSelection::Iar => "iar",
+            ToolchainSelection::Armcc => "armcc",
+            ToolchainSelection::Keil => "keil",
+        };
+        write!(f, "{text}")
+    }
+}
+
+impl fmt::Display for ToolchainKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            ToolchainKind::Gnu => "gnu",
+            ToolchainKind::Lld => "lld",
         };
         write!(f, "{text}")
     }

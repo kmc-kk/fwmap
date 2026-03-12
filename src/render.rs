@@ -8,6 +8,7 @@ use crate::model::{AnalysisResult, CiFormat, DiffChangeKind, DiffEntry, DiffResu
 
 pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, verbose: bool) {
     println!("ELF: {}", result.binary.path);
+    println!("Toolchain: {} (requested: {})", result.toolchain.resolved, result.toolchain.requested);
     println!(
         "ROM: {} | RAM: {} | Sections: {} | Symbols: {} | Warnings: {}",
         format_bytes(result.memory.rom_bytes),
@@ -102,6 +103,7 @@ fn build_json(current: &AnalysisResult, diff: Option<&DiffResult>, thresholds: &
     let payload = serde_json::json!({
         "schema_version": 1,
         "binary": &current.binary,
+        "toolchain": &current.toolchain,
         "linker_script": &current.linker_script,
         "section_summary": &current.memory.section_totals,
         "memory_summary": &current.memory,
@@ -128,6 +130,7 @@ fn build_ci_text(current: &AnalysisResult, diff: Option<&DiffResult>) -> String 
     }
     lines.push(format!("Warnings: {}", current.warnings.len()));
     lines.push(format!("Errors: {}", current.warnings.iter().filter(|item| item.level == WarningLevel::Error).count()));
+    lines.push(format!("Toolchain: {}", current.toolchain.resolved));
 
     if let Some(region) = current.memory.region_summaries.first() {
         lines.push(format!("Top region usage: {} ({:.1}%)", region.region_name, region.usage_ratio * 100.0));
@@ -177,6 +180,7 @@ fn build_ci_markdown(current: &AnalysisResult, diff: Option<&DiffResult>) -> Str
         "| Errors | {} |",
         current.warnings.iter().filter(|item| item.level == WarningLevel::Error).count()
     ));
+    out.push(format!("| Toolchain | {} |", current.toolchain.resolved));
     out.push(String::new());
 
     let mut growths = Vec::new();
@@ -227,6 +231,7 @@ fn build_ci_json(current: &AnalysisResult, diff: Option<&DiffResult>) -> Result<
             "ram_delta": diff.map(|item| item.ram_delta),
             "warning_count": current.warnings.len(),
             "error_count": current.warnings.iter().filter(|item| item.level == WarningLevel::Error).count(),
+            "toolchain": current.toolchain.resolved,
         },
         "top_region": current.memory.region_summaries.first(),
         "top_section_growth": diff.and_then(|item| top_increases(&item.section_diffs, 1).first().cloned()),
@@ -261,10 +266,12 @@ fn overview(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
         })
         .unwrap_or_default();
     format!(
-        "<section><h2>Overview</h2><div class=\"grid\"><div class=\"card\"><strong>Binary</strong><div>{}</div></div><div class=\"card\"><strong>Format</strong><div>{} / {}</div></div><div class=\"card\"><strong>Sections</strong><div>{}</div></div><div class=\"card\"><strong>ROM</strong><div>{}</div></div><div class=\"card\"><strong>RAM</strong><div>{}</div></div><div class=\"card\"><strong>Warnings</strong><div>{}</div></div>{}</div></section>",
+        "<section><h2>Overview</h2><div class=\"grid\"><div class=\"card\"><strong>Binary</strong><div>{}</div></div><div class=\"card\"><strong>Format</strong><div>{} / {}</div></div><div class=\"card\"><strong>Toolchain</strong><div>{} <span class=\"muted\">(requested: {})</span></div></div><div class=\"card\"><strong>Sections</strong><div>{}</div></div><div class=\"card\"><strong>ROM</strong><div>{}</div></div><div class=\"card\"><strong>RAM</strong><div>{}</div></div><div class=\"card\"><strong>Warnings</strong><div>{}</div></div>{}</div></section>",
         escape(&current.binary.arch),
         escape(&current.binary.elf_class),
         escape(&current.binary.endian),
+        escape(&current.toolchain.resolved.to_string()),
+        escape(&current.toolchain.requested.to_string()),
         current.sections.len(),
         format_bytes(current.memory.rom_bytes),
         format_bytes(current.memory.ram_bytes),
@@ -530,7 +537,7 @@ mod tests {
     use crate::model::{
         AnalysisResult, BinaryInfo, CiFormat, DiffChangeKind, DiffEntry, DiffResult, DiffSummary, MemoryRegion,
         MemorySummary, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionTotal, SymbolInfo,
-        ThresholdConfig, WarningItem, WarningLevel, WarningSource,
+        ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection, WarningItem, WarningLevel, WarningSource,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -639,6 +646,7 @@ mod tests {
         assert!(json.contains("\"thresholds\""));
         assert!(json.contains("\"regions\""));
         assert!(json.contains("\"demangled_name\""));
+        assert!(json.contains("\"toolchain\""));
         let _ = fs::remove_file(path);
     }
 
@@ -681,8 +689,10 @@ mod tests {
         };
         let text = build_ci_summary(&analysis, Some(&diff), CiFormat::Text).unwrap();
         assert!(text.contains("Errors: 1"));
+        assert!(text.contains("Toolchain:"));
         let markdown = build_ci_summary(&analysis, Some(&diff), CiFormat::Markdown).unwrap();
         assert!(markdown.contains("# fwmap CI Summary"));
+        assert!(markdown.contains("| Toolchain |"));
         let json = build_ci_summary(&analysis, Some(&diff), CiFormat::Json).unwrap();
         assert!(json.contains("\"error_count\""));
     }
@@ -694,6 +704,11 @@ mod tests {
                 arch: "ARM".to_string(),
                 elf_class: "ELF32".to_string(),
                 endian: "little-endian".to_string(),
+            },
+            toolchain: ToolchainInfo {
+                requested: ToolchainSelection::Auto,
+                detected: Some(ToolchainKind::Gnu),
+                resolved: ToolchainKind::Gnu,
             },
             sections: vec![SectionInfo {
                 name: ".text".to_string(),

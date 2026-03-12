@@ -6,7 +6,8 @@ use crate::ingest::{elf, lds, map};
 use crate::model::{
     AnalysisResult, ArchiveContribution, CustomRule, DemangleMode, DiffResult, MemoryRegion, MemorySummary,
     ObjectContribution, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement,
-    SectionTotal, SymbolInfo, ThresholdConfig, WarningItem, WarningLevel, WarningSource,
+    SectionTotal, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection, WarningItem,
+    WarningLevel, WarningSource,
 };
 use crate::rules::{evaluate_default_rules, RuleContext};
 
@@ -15,6 +16,7 @@ pub struct AnalyzeOptions {
     pub thresholds: ThresholdConfig,
     pub demangle: DemangleMode,
     pub custom_rules: Vec<CustomRule>,
+    pub toolchain: ToolchainSelection,
 }
 
 impl Default for AnalyzeOptions {
@@ -23,6 +25,7 @@ impl Default for AnalyzeOptions {
             thresholds: ThresholdConfig::default(),
             demangle: DemangleMode::Auto,
             custom_rules: Vec::new(),
+            toolchain: ToolchainSelection::Auto,
         }
     }
 }
@@ -35,7 +38,7 @@ pub fn analyze_paths(
 ) -> Result<AnalysisResult, String> {
     let elf = elf::parse_elf(elf_path)?;
     let map_data = match map_path {
-        Some(path) => Some(map::parse_map(path)?),
+        Some(path) => Some(map::parse_map(path, options.toolchain)?),
         None => None,
     };
     let lds_data = match lds_path {
@@ -65,6 +68,14 @@ pub fn analyze_paths(
 
     let mut result = AnalysisResult {
         binary: elf.binary,
+        toolchain: ToolchainInfo {
+            requested: options.toolchain,
+            detected: map_data.as_ref().and_then(|item| item.detected_toolchain),
+            resolved: map_data
+                .as_ref()
+                .map(|item| item.resolved_toolchain)
+                .unwrap_or_else(|| resolve_toolchain_without_map(options.toolchain)),
+        },
         sections: elf.sections,
         symbols: sorted_symbols(symbols),
         object_contributions: aggregate_objects(map_data.as_ref().map(|item| item.object_contributions.as_slice()).unwrap_or(&[])),
@@ -76,6 +87,13 @@ pub fn analyze_paths(
     result.warnings.extend(evaluate_quality_checks(&result));
     result.warnings.extend(evaluate_warnings(&result, None, &options.thresholds, &options.custom_rules));
     Ok(result)
+}
+
+fn resolve_toolchain_without_map(selection: ToolchainSelection) -> ToolchainKind {
+    match selection {
+        ToolchainSelection::Lld => ToolchainKind::Lld,
+        _ => ToolchainKind::Gnu,
+    }
 }
 
 pub fn build_memory_summary(sections: &[SectionInfo], regions: &[MemoryRegion], placements: &[SectionPlacement]) -> MemorySummary {
@@ -254,6 +272,7 @@ mod tests {
     use crate::model::{
         AnalysisResult, BinaryInfo, DiffChangeKind, DiffResult, DiffSummary, LinkerScriptInfo, MemoryRegion,
         MemorySummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SymbolInfo, ThresholdConfig,
+        ToolchainInfo, ToolchainKind, ToolchainSelection,
     };
 
     #[test]
@@ -476,6 +495,7 @@ mod tests {
         let options = AnalyzeOptions::default();
         assert_eq!(options.thresholds.rom_percent, ThresholdConfig::default().rom_percent);
         assert!(options.custom_rules.is_empty());
+        assert_eq!(options.toolchain, ToolchainSelection::Auto);
     }
 
     fn stub_analysis(rom: u64, ram: u64, sections: &[(&str, u64)], symbols: &[(&str, u64)]) -> AnalysisResult {
@@ -485,6 +505,11 @@ mod tests {
                 arch: "ARM".to_string(),
                 elf_class: "ELF32".to_string(),
                 endian: "little-endian".to_string(),
+            },
+            toolchain: ToolchainInfo {
+                requested: ToolchainSelection::Auto,
+                detected: None,
+                resolved: ToolchainKind::Gnu,
             },
             sections: Vec::new(),
             symbols: symbols
