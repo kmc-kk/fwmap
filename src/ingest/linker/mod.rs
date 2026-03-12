@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn parses_memory_and_sections_subset() {
-        let text = include_str!("../../tests/fixtures/sample.ld");
+        let text = include_str!("../../../tests/fixtures/sample.ld");
         let result = parse_lds_str("sample.ld".to_string(), text);
         assert_eq!(result.linker_script.regions.len(), 2);
         assert!(result.linker_script.placements.iter().any(|p| p.section_name == ".text" && p.region_name == "FLASH"));

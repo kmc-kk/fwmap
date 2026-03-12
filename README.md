@@ -154,12 +154,12 @@ The JSON report uses a fixed top-level shape:
 
 ## Test Fixtures
 
-- [tests/fixtures/sample.map](/e:/work/git/fwmap/tests/fixtures/sample.map)
-- [tests/fixtures/broken.map](/e:/work/git/fwmap/tests/fixtures/broken.map)
-- [tests/fixtures/README.md](/e:/work/git/fwmap/tests/fixtures/README.md)
-- [tests/fixtures/sample_rules.toml](/e:/work/git/fwmap/tests/fixtures/sample_rules.toml)
-- [tests/fixtures/sample.ld](/e:/work/git/fwmap/tests/fixtures/sample.ld)
-- [tests/fixtures/sample_lld.map](/e:/work/git/fwmap/tests/fixtures/sample_lld.map)
+- [tests/fixtures/sample.map](tests/fixtures/sample.map)
+- [tests/fixtures/broken.map](tests/fixtures/broken.map)
+- [tests/fixtures/README.md](tests/fixtures/README.md)
+- [tests/fixtures/sample_rules.toml](tests/fixtures/sample_rules.toml)
+- [tests/fixtures/sample.ld](tests/fixtures/sample.ld)
+- [tests/fixtures/sample_lld.map](tests/fixtures/sample_lld.map)
 
 `tests/fixtures/` now contains 10+ small regression assets for map variations and parser failure modes. ELF parser tests still generate minimal synthetic ELF fixtures in test code so the repository stays lightweight.
 

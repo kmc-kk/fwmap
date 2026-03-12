@@ -1045,31 +1045,27 @@ fwmap history trend --db history.db --metric rom --last 20
 現行の主要モジュール:
 
 - `cli`: 引数処理と実行制御
-- `ingest`: ELF / map の読み込み
+- `core`: 解析、モデル、diff、rules、history などの中核ロジック
+- `ingest`: ELF / map / linker script の読み込み
+- `report`: CLI / HTML / JSON / CI 出力
+- `validation`: 解析後の整合性チェック
 - `docs/toolchains.md`: toolchain family と parser 追加手順
-- `ingest/lds`: linker script subset 読み込み
-- `analyze`: 集計と warning 判定
-- `rules`: warning ルール評価
-- `rule_config`: 外部 TOML ルール読込
-- `demangle`: C++ symbol 表示名変換
-- `history`: SQLite ベースの履歴保存とトレンド表示
-- `diff`: 差分計算と分類
-- `model`: 共通データ構造
-- `render`: CLI / HTML 出力
 
 主要ファイル:
 
-- CLI: [src/cli.rs](/e:/work/git/fwmap/src/cli.rs)
-- ELF parser: [src/ingest/elf.rs](/e:/work/git/fwmap/src/ingest/elf.rs)
-- map parser: [src/ingest/map.rs](/e:/work/git/fwmap/src/ingest/map.rs)
-- linker script parser: [src/ingest/lds.rs](/e:/work/git/fwmap/src/ingest/lds.rs)
-- analyze: [src/analyze.rs](/e:/work/git/fwmap/src/analyze.rs)
-- rules: [src/rules.rs](/e:/work/git/fwmap/src/rules.rs)
-- rule config: [src/rule_config.rs](/e:/work/git/fwmap/src/rule_config.rs)
-- demangle: [src/demangle.rs](/e:/work/git/fwmap/src/demangle.rs)
-- history: [src/history.rs](/e:/work/git/fwmap/src/history.rs)
-- diff: [src/diff.rs](/e:/work/git/fwmap/src/diff.rs)
-- render: [src/render.rs](/e:/work/git/fwmap/src/render.rs)
+- CLI: [src/cli/mod.rs](/e:/work/git/fwmap/src/cli/mod.rs)
+- ELF parser: [src/ingest/elf/mod.rs](/e:/work/git/fwmap/src/ingest/elf/mod.rs)
+- map parser: [src/ingest/map/mod.rs](/e:/work/git/fwmap/src/ingest/map/mod.rs)
+- linker script parser: [src/ingest/linker/mod.rs](/e:/work/git/fwmap/src/ingest/linker/mod.rs)
+- analyze: [src/core/analyze.rs](/e:/work/git/fwmap/src/core/analyze.rs)
+- rules: [src/core/rules.rs](/e:/work/git/fwmap/src/core/rules.rs)
+- rule config: [src/core/rule_config.rs](/e:/work/git/fwmap/src/core/rule_config.rs)
+- demangle: [src/core/demangle.rs](/e:/work/git/fwmap/src/core/demangle.rs)
+- history: [src/core/history.rs](/e:/work/git/fwmap/src/core/history.rs)
+- diff: [src/core/diff.rs](/e:/work/git/fwmap/src/core/diff.rs)
+- model: [src/core/model.rs](/e:/work/git/fwmap/src/core/model.rs)
+- render: [src/report/render.rs](/e:/work/git/fwmap/src/report/render.rs)
+- quality checks: [src/validation/quality.rs](/e:/work/git/fwmap/src/validation/quality.rs)
 
 ## 13. 既知の制約
 

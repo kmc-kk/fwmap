@@ -27,7 +27,7 @@ These names are recognized so future parser families can reuse the same CLI surf
 ## Adding a New Parser Family
 
 1. Extend `ToolchainSelection` and, if supported, `ToolchainKind`.
-2. Add detection logic in [src/ingest/map.rs](/e:/work/git/fwmap/src/ingest/map.rs).
+2. Add detection logic in [src/ingest/map/mod.rs](/e:/work/git/fwmap/src/ingest/map/mod.rs).
 3. Add a parser branch that normalizes into `MapIngestResult`.
 4. Add a fixture under `tests/fixtures/` or `tests/corpus/<family>/`.
 5. Add unit tests for detection and parsing plus one integration test through `cli::run` or `analyze_paths`.

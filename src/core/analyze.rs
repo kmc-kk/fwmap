@@ -7,9 +7,9 @@ use crate::model::{
     AnalysisResult, ArchiveContribution, CustomRule, DemangleMode, DiffResult, MemoryRegion, MemorySummary,
     ObjectContribution, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement,
     SectionTotal, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection, WarningItem,
-    WarningLevel, WarningSource,
 };
 use crate::rules::{evaluate_default_rules, RuleContext};
+use crate::validation::quality::evaluate_quality_checks;
 
 #[derive(Debug, Clone)]
 pub struct AnalyzeOptions {
@@ -148,42 +148,6 @@ pub fn evaluate_warnings(
 
 pub fn format_bytes(bytes: u64) -> String {
     format!("{bytes} bytes ({:.2} KiB)", bytes as f64 / 1024.0)
-}
-
-fn evaluate_quality_checks(current: &AnalysisResult) -> Vec<WarningItem> {
-    let mut warnings = Vec::new();
-
-    let region_used_sum = current.memory.region_summaries.iter().map(|item| item.used).sum::<u64>();
-    let section_sum = current.sections.iter().map(|item| item.size).sum::<u64>();
-    if !current.memory.region_summaries.is_empty() && region_used_sum < section_sum / 2 {
-        warnings.push(WarningItem {
-            level: WarningLevel::Info,
-            code: "REGION_COVERAGE_PARTIAL".to_string(),
-            message: format!(
-                "Region summaries cover {} while sections total {}; placement data may be partial",
-                format_bytes(region_used_sum),
-                format_bytes(section_sum)
-            ),
-            source: WarningSource::Analyze,
-            related: None,
-        });
-    }
-
-    for symbol in &current.symbols {
-        if let Some(section_name) = symbol.section_name.as_deref() {
-            if !current.sections.iter().any(|section| section.name == section_name) {
-                warnings.push(WarningItem {
-                    level: WarningLevel::Info,
-                    code: "SYMBOL_UNKNOWN_SECTION".to_string(),
-                    message: format!("Symbol {} references unknown section {}", symbol.name, section_name),
-                    source: WarningSource::Analyze,
-                    related: Some(symbol.name.clone()),
-                });
-            }
-        }
-    }
-
-    warnings
 }
 
 fn aggregate_objects(items: &[ObjectContribution]) -> Vec<ObjectContribution> {

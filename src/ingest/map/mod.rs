@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn parses_gnu_ld_map_snippet() {
-        let text = include_str!("../../tests/fixtures/sample.map");
+        let text = include_str!("../../../tests/fixtures/sample.map");
         let result = parse_map_str(text, ToolchainSelection::Auto).unwrap();
         assert_eq!(result.memory_regions.len(), 2);
         assert!(result.object_contributions.iter().any(|item| item.object_path.ends_with("main.o")));
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn tolerates_broken_lines() {
-        let text = include_str!("../../tests/fixtures/broken.map");
+        let text = include_str!("../../../tests/fixtures/broken.map");
         let result = parse_map_str(text, ToolchainSelection::Auto).unwrap();
         assert!(!result.warnings.is_empty());
         assert!(!result.object_contributions.is_empty());
@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn parses_archive_member_colon_style() {
-        let text = include_str!("../../tests/fixtures/archive_colon.map");
+        let text = include_str!("../../../tests/fixtures/archive_colon.map");
         let result = parse_map_str(text, ToolchainSelection::Auto).unwrap();
         assert!(result
             .archive_contributions
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn tolerates_map_without_memory_configuration() {
-        let text = include_str!("../../tests/fixtures/no_memory_config.map");
+        let text = include_str!("../../../tests/fixtures/no_memory_config.map");
         let result = parse_map_str(text, ToolchainSelection::Auto).unwrap();
         assert!(result.memory_regions.is_empty());
         assert!(!result.object_contributions.is_empty());
@@ -359,43 +359,43 @@ mod tests {
 
     #[test]
     fn parses_decimal_sizes_and_tab_indentation() {
-        let decimal = parse_map_str(include_str!("../../tests/fixtures/decimal_sizes.map"), ToolchainSelection::Auto).unwrap();
+        let decimal = parse_map_str(include_str!("../../../tests/fixtures/decimal_sizes.map"), ToolchainSelection::Auto).unwrap();
         assert_eq!(decimal.object_contributions[0].size, 32);
 
-        let tabbed = parse_map_str(include_str!("../../tests/fixtures/tab_indented.map"), ToolchainSelection::Auto).unwrap();
+        let tabbed = parse_map_str(include_str!("../../../tests/fixtures/tab_indented.map"), ToolchainSelection::Auto).unwrap();
         assert!(tabbed.object_contributions.iter().any(|item| item.object_path.ends_with("tabbed.o")));
     }
 
     #[test]
     fn ignores_known_non_contribution_blocks() {
-        let result = parse_map_str(include_str!("../../tests/fixtures/unparsed_block.map"), ToolchainSelection::Auto).unwrap();
+        let result = parse_map_str(include_str!("../../../tests/fixtures/unparsed_block.map"), ToolchainSelection::Auto).unwrap();
         assert!(result.warnings.iter().all(|warning| warning.code != "MAP_LINE_SKIPPED"));
         assert!(result.object_contributions.iter().any(|item| item.object_path.ends_with("common.o")));
     }
 
     #[test]
     fn keeps_loading_when_output_section_has_load_address() {
-        let result = parse_map_str(include_str!("../../tests/fixtures/load_address.map"), ToolchainSelection::Auto).unwrap();
+        let result = parse_map_str(include_str!("../../../tests/fixtures/load_address.map"), ToolchainSelection::Auto).unwrap();
         assert!(result.object_contributions.iter().any(|item| item.object_path.ends_with("load.o")));
     }
 
     #[test]
     fn ignores_discarded_sections_block() {
-        let result = parse_map_str(include_str!("../../tests/fixtures/discarded_sections.map"), ToolchainSelection::Auto).unwrap();
+        let result = parse_map_str(include_str!("../../../tests/fixtures/discarded_sections.map"), ToolchainSelection::Auto).unwrap();
         assert!(result.object_contributions.iter().any(|item| item.object_path.ends_with("main.o")));
         assert!(!result.object_contributions.iter().any(|item| item.object_path.ends_with("unused.o")));
     }
 
     #[test]
     fn preserves_non_ascii_object_paths() {
-        let result = parse_map_str(include_str!("../../tests/fixtures/non_ascii.map"), ToolchainSelection::Auto).unwrap();
+        let result = parse_map_str(include_str!("../../../tests/fixtures/non_ascii.map"), ToolchainSelection::Auto).unwrap();
         assert!(result.object_contributions.iter().any(|item| item.object_path.contains("naïve_utf8.o")));
         assert!(result.object_contributions.iter().any(|item| item.object_path.contains("cpp_長名.o")));
     }
 
     #[test]
     fn detects_and_parses_lld_map() {
-        let text = include_str!("../../tests/fixtures/sample_lld.map");
+        let text = include_str!("../../../tests/fixtures/sample_lld.map");
         assert_eq!(detect_toolchain(text), Some(ToolchainKind::Lld));
         let result = parse_map_str(text, ToolchainSelection::Auto).unwrap();
         assert_eq!(result.resolved_toolchain, ToolchainKind::Lld);
@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn rejects_unimplemented_toolchain_family() {
-        let text = include_str!("../../tests/fixtures/sample.map");
+        let text = include_str!("../../../tests/fixtures/sample.map");
         let err = parse_map_str(text, ToolchainSelection::Iar).unwrap_err();
         assert!(err.contains("not implemented"));
     }

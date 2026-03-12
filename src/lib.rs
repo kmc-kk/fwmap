@@ -1,10 +1,14 @@
-pub mod analyze;
 pub mod cli;
-pub mod demangle;
-pub mod diff;
-pub mod history;
+pub mod core;
 pub mod ingest;
-pub mod model;
-pub mod render;
-pub mod rule_config;
-pub mod rules;
+pub mod report;
+pub mod validation;
+
+pub use core::analyze;
+pub use core::demangle;
+pub use core::diff;
+pub use core::history;
+pub use core::model;
+pub use core::rule_config;
+pub use core::rules;
+pub use report::render;
