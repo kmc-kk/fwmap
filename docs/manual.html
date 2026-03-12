@@ -56,7 +56,7 @@
 <body>
   <h1>fwmap マニュアル</h1>
   <p><code>fwmap</code> は、組込みファームウェアの <code>ELF</code>、GNU ld 系 <code>map</code>、linker script を解析し、サイズ・差分・memory region 配置を可視化するローカル CLI ツールです。</p>
-  <p>この版では Phase 5 の機能を反映し、JSON 出力、CI 向け要約、しきい値指定、warning ベースの終了コード制御も含めて説明します。</p>
+  <p>この版では Phase 6 の機能を反映し、JSON 出力、CI 向け要約、しきい値指定、warning ベースの終了コード制御、ルールベース warning 判定まで含めて説明します。</p>
 
   <h2>1. 何ができるか</h2>
   <ul>
@@ -66,6 +66,7 @@
     <li>前回ビルドとの差分を分類付きで確認する</li>
     <li>FLASH / RAM などの region 使用率を確認する</li>
     <li>CI で機械判定できる JSON と短い要約を出す</li>
+    <li>warning を rule code 単位で追跡する</li>
   </ul>
 
   <h2>2. 事前に用意するファイル</h2>
@@ -111,8 +112,9 @@ Report: build/fwmap_diff_report.html</code></pre>
   <pre><code>Warnings:
   [analyze:REGION_THRESHOLD] Region FLASH usage exceeded 85% (91.2%)
   [analyze:REGION_LOW_FREE] Region RAM free space is low (2048 bytes (2.00 KiB))
+  [analyze:LARGE_SYMBOL] Large symbol detected: g_rx_ring (12288 bytes (12.00 KiB))
   [map:MAP_LINE_SKIPPED] Skipped unparsed map line 120: COMMON ...</code></pre>
-  <p><code>source</code> で発生元、<code>code</code> で warning の種類を確認できます。</p>
+  <p><code>source</code> で発生元、<code>code</code> で warning の種類、<code>related</code> で対象 region / section / symbol を確認できます。</p>
 
   <h3>手順 6: JSON を出力して CI やスクリプトで使う</h3>
   <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --lds linker/app.ld --report-json build/fwmap_report.json</code></pre>
@@ -133,6 +135,51 @@ Top symbol growth: g_rx_ring (+4096)</code></pre>
   <h3>手順 9: しきい値を調整する</h3>
   <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --threshold-rom 90 --threshold-ram 90 --threshold-region FLASH:92 --threshold-symbol-growth 8192</code></pre>
   <p>この例では ROM/RAM/FLASH/symbol growth の warning 発火条件を変更しています。</p>
+
+  <h3>手順 10: 外部ルール設定の書き方を設計するときの考え方</h3>
+  <p>現行版では外部ファイルから warning ルールを読み込む機能はまだ実装されていません。ただし Phase 6 で warning 判定は <code>rules</code> モジュールに分離されており、将来的には外部設定へ拡張しやすい構造になっています。</p>
+  <p>将来の設定ファイルは、1 rule に 1 つの <code>code</code> を対応させ、<code>enabled</code>、<code>severity</code>、<code>threshold_percent</code>、<code>threshold_bytes</code>、<code>entity</code> を持つ形が扱いやすいです。</p>
+  <pre><code>schema_version = 1
+
+[[rules]]
+code = "ROM_THRESHOLD"
+enabled = true
+severity = "warn"
+threshold_percent = 90
+
+[[rules]]
+code = "RAM_THRESHOLD"
+enabled = true
+severity = "warn"
+threshold_percent = 90
+
+[[rules]]
+code = "REGION_THRESHOLD"
+enabled = true
+severity = "warn"
+entity = "FLASH"
+threshold_percent = 92
+
+[[rules]]
+code = "REGION_LOW_FREE"
+enabled = true
+severity = "warn"
+entity = "RAM"
+threshold_bytes = 4096
+
+[[rules]]
+code = "LARGE_SYMBOL"
+enabled = true
+severity = "warn"
+threshold_bytes = 8192
+
+[[rules]]
+code = "SYMBOL_SPIKE"
+enabled = true
+severity = "warn"
+threshold_bytes = 8192</code></pre>
+  <p>現行 CLI では <code>ROM_THRESHOLD</code> は <code>--threshold-rom</code>、<code>RAM_THRESHOLD</code> は <code>--threshold-ram</code>、<code>REGION_THRESHOLD</code> は <code>--threshold-region</code>、<code>SYMBOL_SPIKE</code> は <code>--threshold-symbol-growth</code> で相当します。</p>
+  <p>まだ未対応なのは、<code>LARGE_SYMBOL</code> のしきい値変更、<code>DATA_GROWTH</code> / <code>BSS_GROWTH</code> の外部変更、<code>severity</code> の切替、rule 単位の enable / disable です。</p>
 
   <h2>4. CLI オプション</h2>
   <table>
@@ -179,10 +226,13 @@ Top symbol growth: g_rx_ring (+4096)</code></pre>
     <li>Top Object Contributions: 大きい object</li>
     <li>Diff: 増減一覧と追加削除</li>
   </ol>
+  <p>Phase 6 以降は warning 判定がルール単位で分離されているため、同じ <code>code</code> を軸に CLI、HTML、JSON を横断して追跡しやすくなっています。</p>
 
   <h2>7. よくある確認パターン</h2>
   <h3>RAM が急に増えた</h3>
   <p><code>Top Symbol Growth</code> と <code>Top Object Growth</code> を見て、<code>.bss</code> / <code>.data</code> diff を確認します。</p>
+  <h3>同じ warning が繰り返し出る</h3>
+  <p><code>code</code> と <code>related</code> を見て、同一 region なのか同一 symbol なのかを先に切り分けます。たとえば <code>REGION_THRESHOLD</code> と <code>FLASH</code> が固定なら linker script やコード配置、<code>LARGE_SYMBOL</code> と <code>g_rx_ring</code> が固定なら静的バッファ定義を優先して確認します。</p>
   <h3>FLASH が逼迫している</h3>
   <p><code>Memory Regions Overview</code> の <code>FLASH</code> 使用率と <code>Top Section Growth</code> を確認します。</p>
   <h3>map が少し壊れている</h3>
@@ -194,10 +244,10 @@ Top symbol growth: g_rx_ring (+4096)</code></pre>
     <li>map は GNU ld の典型出力を優先</li>
     <li>linker script は subset 対応で、完全構文対応ではない</li>
     <li>region 使用量は linker script と ELF section address の組み合わせに依存する</li>
-    <li>高度なルールエンジン分離は未実装</li>
+    <li>warning ルールは内部実装で固定されており、外部設定ファイル読み込みは未対応</li>
     <li>JSON schema は現時点で <code>schema_version = 1</code></li>
   </ul>
 
-  <p class="muted">現行実装に合わせて、具体的な使用手順を含めて更新したマニュアルです。</p>
+  <p class="muted">現行実装に合わせて、具体的な使用手順と Phase 6 の warning rule 運用を含めて更新したマニュアルです。</p>
 </body>
 </html>

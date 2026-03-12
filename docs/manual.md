@@ -4,7 +4,7 @@
 
 `fwmap` は、組込みファームウェアの `ELF` と GNU ld 系 `map` を解析し、ROM/RAM 使用量、主要シンボル、object 寄与、前回ビルドとの差分を可視化するローカル CLI ツールです。
 
-現行版は Phase 5 まで実装済みで、単純なサイズ表示だけでなく、差分原因の追跡、memory region の可視化、JSON 出力、CI 向け要約を主機能として扱います。
+現行版は Phase 6 まで実装済みで、単純なサイズ表示だけでなく、差分原因の追跡、memory region の可視化、JSON 出力、CI 向け要約、ルールベースの warning 判定を主機能として扱います。
 
 このツールで把握しやすい内容:
 
@@ -30,7 +30,7 @@
 - CI 向け要約出力
 - warning ベースの終了コード制御
 - しきい値カスタマイズ
-- 固定しきい値ベースの warning
+- ルールベースの warning 判定
 - `--verbose` / `--version`
 
 現時点で未対応または限定的な内容:
@@ -38,7 +38,7 @@
 - demangle 改善
 - DWARF を用いたソース行解析
 - linker script の完全構文対応
-- 高度なルールエンジン分離
+- 外部ルール設定ファイル
 
 ## 3. ビルドとテスト
 
@@ -405,6 +405,7 @@ fwmap analyze \
 Warnings:
   [analyze:REGION_THRESHOLD] Region FLASH usage exceeded 85% (91.2%)
   [analyze:REGION_LOW_FREE] Region RAM free space is low (2048 bytes (2.00 KiB))
+  [analyze:LARGE_SYMBOL] Large symbol detected: g_rx_ring (12288 bytes (12.00 KiB))
   [map:MAP_LINE_SKIPPED] Skipped unparsed map line 120: COMMON ...
 ```
 
@@ -413,6 +414,7 @@ Warnings:
 - `source`: どこで出た warning か
 - `code`: warning 種別
 - `message`: 具体的な理由
+- `related`: どの region / section / symbol に紐づくか
 
 ### 5.11 HTML の保存先を分ける
 
@@ -433,6 +435,90 @@ fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --
 - diff 付き
 
 を横並びで比較できます。
+
+### 5.12 外部ルール設定の書き方
+
+現行版では、外部ファイルから warning ルールを読み込む機能はまだ実装されていません。
+
+ただし Phase 6 で warning 判定は `rules` モジュールに分離されており、将来的には外部設定ファイルを読み込める形へ拡張する前提で整理されています。この節では、将来の設定ファイルを設計する際の推奨イメージを示します。
+
+想定する考え方:
+
+- 1 つの rule に 1 つの `code` を対応させる
+- `severity` は `info` / `warn` / `error` を想定する
+- `enabled` で個別 rule の有効・無効を切り替える
+- `threshold` や `entity` で rule ごとの条件を持たせる
+
+設定ファイルの想定例:
+
+```toml
+schema_version = 1
+
+[[rules]]
+code = "ROM_THRESHOLD"
+enabled = true
+severity = "warn"
+threshold_percent = 90
+
+[[rules]]
+code = "RAM_THRESHOLD"
+enabled = true
+severity = "warn"
+threshold_percent = 90
+
+[[rules]]
+code = "REGION_THRESHOLD"
+enabled = true
+severity = "warn"
+entity = "FLASH"
+threshold_percent = 92
+
+[[rules]]
+code = "REGION_LOW_FREE"
+enabled = true
+severity = "warn"
+entity = "RAM"
+threshold_bytes = 4096
+
+[[rules]]
+code = "LARGE_SYMBOL"
+enabled = true
+severity = "warn"
+threshold_bytes = 8192
+
+[[rules]]
+code = "SYMBOL_SPIKE"
+enabled = true
+severity = "warn"
+threshold_bytes = 8192
+```
+
+この例の意味:
+
+- `ROM_THRESHOLD`: ROM 使用率が 90% を超えたら warning
+- `RAM_THRESHOLD`: RAM 使用率が 90% を超えたら warning
+- `REGION_THRESHOLD`: `FLASH` の使用率が 92% を超えたら warning
+- `REGION_LOW_FREE`: `RAM` の空きが 4096 bytes 以下になったら warning
+- `LARGE_SYMBOL`: 8192 bytes 以上の symbol を warning
+- `SYMBOL_SPIKE`: 前回比で 8192 bytes 以上増えた symbol を warning
+
+現行 CLI との対応関係:
+
+| 将来の外部 rule | 現行 CLI の指定方法 |
+| --- | --- |
+| `ROM_THRESHOLD` | `--threshold-rom <percent>` |
+| `RAM_THRESHOLD` | `--threshold-ram <percent>` |
+| `REGION_THRESHOLD` | `--threshold-region <name:percent>` |
+| `SYMBOL_SPIKE` | `--threshold-symbol-growth <bytes>` |
+
+未対応の点:
+
+- `LARGE_SYMBOL` のしきい値を CLI から変更する機能
+- `DATA_GROWTH` / `BSS_GROWTH` を外部設定から変更する機能
+- `severity` の外部変更
+- rule の完全な enable / disable
+
+運用上は、いま使える設定は CLI オプションで管理し、将来外部設定へ移したときに同じ `code` を継続利用できるようにしておくのが安全です。
 
 ## 6. CLI オプション
 
@@ -550,6 +636,8 @@ HTML は以下の順で構成されます。
 
 warning は source と関連対象付きで表示されます。
 
+Phase 6 以降は warning 判定がルール単位で分離されているため、同じ `code` を軸に CLI、HTML、JSON を横断して追跡しやすくなっています。
+
 主な warning 例:
 
 - ROM 使用率超過
@@ -558,6 +646,8 @@ warning は source と関連対象付きで表示されます。
 - `.data` 増加
 - `.bss` 増加
 - symbol 急増
+- region free space 低下
+- section と region の不整合
 - symbol table 欠損
 - map の一部読み飛ばし
 
@@ -756,6 +846,7 @@ fwmap analyze \
 - `ingest`: ELF / map の読み込み
 - `ingest/lds`: linker script subset 読み込み
 - `analyze`: 集計と warning 判定
+- `rules`: warning ルール評価
 - `diff`: 差分計算と分類
 - `model`: 共通データ構造
 - `render`: CLI / HTML 出力
@@ -767,6 +858,7 @@ fwmap analyze \
 - map parser: [src/ingest/map.rs](/e:/work/git/fwmap/src/ingest/map.rs)
 - linker script parser: [src/ingest/lds.rs](/e:/work/git/fwmap/src/ingest/lds.rs)
 - analyze: [src/analyze.rs](/e:/work/git/fwmap/src/analyze.rs)
+- rules: [src/rules.rs](/e:/work/git/fwmap/src/rules.rs)
 - diff: [src/diff.rs](/e:/work/git/fwmap/src/diff.rs)
 - render: [src/render.rs](/e:/work/git/fwmap/src/render.rs)
 
@@ -780,12 +872,14 @@ fwmap analyze \
 - region 使用量は linker script と ELF section address を組み合わせた推定を含む
 - JSON schema は現時点で `schema_version = 1`
 - ROM/RAM はヒューリスティック集計
+- warning ルールは内部実装で固定されており、外部設定ファイル読み込みは未対応
 
 ## 14. 今後の予定
 
 ロードマップ上の次候補:
 
-- Phase 6: ルールエンジン分離
+- 外部ルール設定
+- demangle 改善
 
 ## 15. テスト資産
 
