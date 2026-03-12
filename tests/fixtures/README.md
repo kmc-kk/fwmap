@@ -11,3 +11,4 @@ This directory contains small text fixtures used by parser and regression tests.
 - `load_address.map`: output section with `load address`
 - `unparsed_block.map`: ignorable common-symbol block
 - `mixed_case_regions.map`: region names in upper case
+- `sample.ld`: linker script subset for region and placement tests

@@ -21,14 +21,15 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
         Command::Analyze {
             elf,
             map,
+            lds,
             prev_elf,
             prev_map,
             out,
             verbose,
         } => {
-            let mut current = analyze_paths(&elf, map.as_deref())?;
+            let mut current = analyze_paths(&elf, map.as_deref(), lds.as_deref())?;
             let diff = if let Some(prev_elf) = prev_elf.as_deref() {
-                let previous = analyze_paths(prev_elf, prev_map.as_deref())?;
+                let previous = analyze_paths(prev_elf, prev_map.as_deref(), lds.as_deref())?;
                 let diff = diff_results(&current, &previous);
                 let mut warnings = current
                     .warnings
@@ -65,6 +66,7 @@ enum Command {
     Analyze {
         elf: PathBuf,
         map: Option<PathBuf>,
+        lds: Option<PathBuf>,
         prev_elf: Option<PathBuf>,
         prev_map: Option<PathBuf>,
         out: PathBuf,
@@ -85,6 +87,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
 
     let mut elf = None;
     let mut map = None;
+    let mut lds = None;
     let mut prev_elf = None;
     let mut prev_map = None;
     let mut out = PathBuf::from(DEFAULT_OUT);
@@ -100,11 +103,12 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
             }
             "--help" | "-h" => return Ok(Command::Help),
             "--version" | "-V" => return Ok(Command::Version),
-            "--elf" | "--map" | "--prev-elf" | "--prev-map" | "--out" => {
+            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--elf" => elf = Some(PathBuf::from(value)),
                     "--map" => map = Some(PathBuf::from(value)),
+                    "--lds" => lds = Some(PathBuf::from(value)),
                     "--prev-elf" => prev_elf = Some(PathBuf::from(value)),
                     "--prev-map" => prev_map = Some(PathBuf::from(value)),
                     "--out" => out = PathBuf::from(value),
@@ -125,6 +129,9 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     if let Some(path) = prev_elf.as_deref() {
         ensure_exists(path, "previous ELF")?;
     }
+    if let Some(path) = lds.as_deref() {
+        ensure_exists(path, "linker script")?;
+    }
     if let Some(path) = prev_map.as_deref() {
         ensure_exists(path, "previous map")?;
     }
@@ -132,6 +139,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     Ok(Command::Analyze {
         elf,
         map,
+        lds,
         prev_elf,
         prev_map,
         out,
@@ -158,11 +166,12 @@ fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze --elf <path> [--map <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--verbose]
+fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--verbose]
 
 Options:
   --elf       Input ELF file (required)
   --map       GNU ld map file
+  --lds       GNU ld linker script
   --prev-elf  Previous ELF file for diff
   --prev-map  Previous map file for diff
   --out       Output HTML path (default: fwmap_report.html)
@@ -193,6 +202,20 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(cmd, Command::Analyze { verbose: true, .. }));
+    }
+
+    #[test]
+    fn parses_lds_flag() {
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "analyze".to_string(),
+            "--elf".to_string(),
+            "Cargo.toml".to_string(),
+            "--lds".to_string(),
+            "README.md".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(cmd, Command::Analyze { lds: Some(_), .. }));
     }
 
     #[test]

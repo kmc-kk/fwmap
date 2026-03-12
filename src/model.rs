@@ -57,11 +57,47 @@ pub struct MemoryRegion {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionPlacement {
+    pub section_name: String,
+    pub region_name: String,
+    pub load_region_name: Option<String>,
+    pub align: Option<u64>,
+    pub keep: bool,
+    pub has_at: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkerScriptInfo {
+    pub path: String,
+    pub regions: Vec<MemoryRegion>,
+    pub placements: Vec<SectionPlacement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionSectionUsage {
+    pub section_name: String,
+    pub addr: u64,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegionUsageSummary {
+    pub region_name: String,
+    pub origin: u64,
+    pub length: u64,
+    pub used: u64,
+    pub free: u64,
+    pub usage_ratio: f64,
+    pub sections: Vec<RegionSectionUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct MemorySummary {
     pub rom_bytes: u64,
     pub ram_bytes: u64,
     pub section_totals: Vec<SectionTotal>,
     pub memory_regions: Vec<MemoryRegion>,
+    pub region_summaries: Vec<RegionUsageSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,13 +109,14 @@ pub struct WarningItem {
     pub related: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AnalysisResult {
     pub binary: BinaryInfo,
     pub sections: Vec<SectionInfo>,
     pub symbols: Vec<SymbolInfo>,
     pub object_contributions: Vec<ObjectContribution>,
     pub archive_contributions: Vec<ArchiveContribution>,
+    pub linker_script: Option<LinkerScriptInfo>,
     pub memory: MemorySummary,
     pub warnings: Vec<WarningItem>,
 }

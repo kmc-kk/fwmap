@@ -224,6 +224,7 @@ mod tests {
                     size: *size,
                 })
                 .collect(),
+            linker_script: None,
             memory: MemorySummary {
                 rom_bytes: 0,
                 ram_bytes: 0,
@@ -236,6 +237,7 @@ mod tests {
                     })
                     .collect(),
                 memory_regions: Vec::new(),
+                region_summaries: Vec::new(),
             },
             warnings: Vec::new(),
         }

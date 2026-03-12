@@ -1,27 +1,46 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::ingest::{elf, map};
+use crate::ingest::{elf, lds, map};
 use crate::model::{
-    AnalysisResult, ArchiveContribution, DiffResult, MemorySummary, ObjectContribution, SectionCategory, SectionInfo,
-    SectionTotal, SymbolInfo, WarningItem, WarningLevel, WarningSource,
+    AnalysisResult, ArchiveContribution, DiffResult, MemoryRegion, MemorySummary, ObjectContribution, RegionSectionUsage,
+    RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SymbolInfo, WarningItem,
+    WarningLevel, WarningSource,
 };
 
 const ROM_USAGE_THRESHOLD: f64 = 0.85;
 const RAM_USAGE_THRESHOLD: f64 = 0.85;
+const REGION_USAGE_THRESHOLD: f64 = 0.85;
+const REGION_LOW_FREE_THRESHOLD: u64 = 4 * 1024;
 const LARGE_SYMBOL_THRESHOLD: u64 = 4 * 1024;
 const GROWTH_RATE_THRESHOLD: f64 = 0.05;
 
-pub fn analyze_paths(elf_path: &Path, map_path: Option<&Path>) -> Result<AnalysisResult, String> {
+pub fn analyze_paths(elf_path: &Path, map_path: Option<&Path>, lds_path: Option<&Path>) -> Result<AnalysisResult, String> {
     let elf = elf::parse_elf(elf_path)?;
     let map_data = match map_path {
         Some(path) => Some(map::parse_map(path)?),
         None => None,
     };
-    let memory = build_memory_summary(&elf.sections, map_data.as_ref().map(|item| item.memory_regions.as_slice()).unwrap_or(&[]));
+    let lds_data = match lds_path {
+        Some(path) => Some(lds::parse_lds(path)?),
+        None => None,
+    };
+    let region_input = lds_data
+        .as_ref()
+        .map(|item| item.linker_script.regions.as_slice())
+        .or_else(|| map_data.as_ref().map(|item| item.memory_regions.as_slice()))
+        .unwrap_or(&[]);
+    let placements = lds_data
+        .as_ref()
+        .map(|item| item.linker_script.placements.as_slice())
+        .unwrap_or(&[]);
+    let memory = build_memory_summary(&elf.sections, region_input, placements);
     let mut warnings = elf.warnings;
     if let Some(map_data) = map_data.as_ref() {
         warnings.extend(map_data.warnings.clone());
+    }
+    if let Some(lds_data) = lds_data.as_ref() {
+        warnings.extend(lds_data.warnings.clone());
     }
 
     let mut result = AnalysisResult {
@@ -30,6 +49,7 @@ pub fn analyze_paths(elf_path: &Path, map_path: Option<&Path>) -> Result<Analysi
         symbols: sorted_symbols(elf.symbols),
         object_contributions: aggregate_objects(map_data.as_ref().map(|item| item.object_contributions.as_slice()).unwrap_or(&[])),
         archive_contributions: aggregate_archives(map_data.as_ref().map(|item| item.archive_contributions.as_slice()).unwrap_or(&[])),
+        linker_script: lds_data.map(|item| item.linker_script),
         memory,
         warnings,
     };
@@ -37,7 +57,7 @@ pub fn analyze_paths(elf_path: &Path, map_path: Option<&Path>) -> Result<Analysi
     Ok(result)
 }
 
-pub fn build_memory_summary(sections: &[SectionInfo], regions: &[crate::model::MemoryRegion]) -> MemorySummary {
+pub fn build_memory_summary(sections: &[SectionInfo], regions: &[MemoryRegion], placements: &[SectionPlacement]) -> MemorySummary {
     let mut rom_bytes = 0u64;
     let mut ram_bytes = 0u64;
     let mut totals = sections
@@ -56,12 +76,15 @@ pub fn build_memory_summary(sections: &[SectionInfo], regions: &[crate::model::M
         })
         .collect::<Vec<_>>();
     totals.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.section_name.cmp(&b.section_name)));
+    let mut region_summaries = build_region_summaries(sections, regions, placements);
+    region_summaries.sort_by(|a, b| b.used.cmp(&a.used).then_with(|| a.region_name.cmp(&b.region_name)));
 
     MemorySummary {
         rom_bytes,
         ram_bytes,
         section_totals: totals,
         memory_regions: regions.to_vec(),
+        region_summaries,
     }
 }
 
@@ -96,6 +119,46 @@ pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>) ->
                 source: WarningSource::Analyze,
                 related: Some("ram".to_string()),
             });
+        }
+    }
+
+    for region in &current.memory.region_summaries {
+        if region.usage_ratio >= REGION_USAGE_THRESHOLD {
+            warnings.push(WarningItem {
+                level: WarningLevel::Warn,
+                code: "REGION_THRESHOLD".to_string(),
+                message: format!("Region {} usage exceeded {:.0}% ({:.1}%)", region.region_name, REGION_USAGE_THRESHOLD * 100.0, region.usage_ratio * 100.0),
+                source: WarningSource::Analyze,
+                related: Some(region.region_name.clone()),
+            });
+        }
+        if region.free <= REGION_LOW_FREE_THRESHOLD {
+            warnings.push(WarningItem {
+                level: WarningLevel::Warn,
+                code: "REGION_LOW_FREE".to_string(),
+                message: format!("Region {} free space is low ({})", region.region_name, format_bytes(region.free)),
+                source: WarningSource::Analyze,
+                related: Some(region.region_name.clone()),
+            });
+        }
+    }
+
+    if let Some(lds) = &current.linker_script {
+        for placement in &lds.placements {
+            if let Some(section) = current.sections.iter().find(|section| section.name == placement.section_name) {
+                if let Some(region) = lds.regions.iter().find(|region| region.name == placement.region_name) {
+                    let in_range = section.addr >= region.origin && section.addr.saturating_add(section.size) <= region.origin.saturating_add(region.length);
+                    if !in_range {
+                        warnings.push(WarningItem {
+                            level: WarningLevel::Warn,
+                            code: "SECTION_REGION_MISMATCH".to_string(),
+                            message: format!("Section {} is assigned to region {} but its address is outside the region range", section.name, region.name),
+                            source: WarningSource::Analyze,
+                            related: Some(section.name.clone()),
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -188,13 +251,55 @@ fn aggregate_archives(items: &[ArchiveContribution]) -> Vec<ArchiveContribution>
     result
 }
 
+fn build_region_summaries(
+    sections: &[SectionInfo],
+    regions: &[MemoryRegion],
+    placements: &[SectionPlacement],
+) -> Vec<RegionUsageSummary> {
+    let mut summaries = Vec::new();
+    for region in regions {
+        let mut matched_sections = sections
+            .iter()
+            .filter(|section| section_in_region(section, region, placements))
+            .map(|section| RegionSectionUsage {
+                section_name: section.name.clone(),
+                addr: section.addr,
+                size: section.size,
+            })
+            .collect::<Vec<_>>();
+        matched_sections.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.section_name.cmp(&b.section_name)));
+        let used = matched_sections.iter().map(|section| section.size).sum::<u64>();
+        let free = region.length.saturating_sub(used);
+        let usage_ratio = if region.length > 0 { used as f64 / region.length as f64 } else { 0.0 };
+        summaries.push(RegionUsageSummary {
+            region_name: region.name.clone(),
+            origin: region.origin,
+            length: region.length,
+            used,
+            free,
+            usage_ratio,
+            sections: matched_sections,
+        });
+    }
+    summaries
+}
+
+fn section_in_region(section: &SectionInfo, region: &MemoryRegion, placements: &[SectionPlacement]) -> bool {
+    if let Some(placement) = placements.iter().find(|placement| placement.section_name == section.name) {
+        if placement.region_name.eq_ignore_ascii_case(&region.name) {
+            return true;
+        }
+    }
+    section.addr >= region.origin && section.addr < region.origin.saturating_add(region.length)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{build_memory_summary, evaluate_warnings, sorted_symbols};
     use crate::diff::diff_results;
     use crate::model::{
-        AnalysisResult, BinaryInfo, DiffChangeKind, DiffResult, DiffSummary, MemoryRegion, MemorySummary,
-        SectionCategory, SectionInfo, SectionTotal, SymbolInfo,
+        AnalysisResult, BinaryInfo, DiffChangeKind, DiffResult, DiffSummary, LinkerScriptInfo, MemoryRegion,
+        MemorySummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SymbolInfo,
     };
 
     #[test]
@@ -215,9 +320,40 @@ mod tests {
                 category: SectionCategory::Ram,
             },
         ];
-        let summary = build_memory_summary(&sections, &[]);
+        let summary = build_memory_summary(&sections, &[], &[]);
         assert_eq!(summary.rom_bytes, 100);
         assert_eq!(summary.ram_bytes, 32);
+    }
+
+    #[test]
+    fn builds_region_summary_from_placements() {
+        let sections = vec![
+            SectionInfo {
+                name: ".text".to_string(),
+                addr: 0x0800_0000,
+                size: 100,
+                flags: vec![],
+                category: SectionCategory::Rom,
+            },
+            SectionInfo {
+                name: ".data".to_string(),
+                addr: 0x2000_0000,
+                size: 20,
+                flags: vec![],
+                category: SectionCategory::Ram,
+            },
+        ];
+        let regions = vec![
+            MemoryRegion { name: "FLASH".to_string(), origin: 0x0800_0000, length: 256, attributes: "rx".to_string() },
+            MemoryRegion { name: "RAM".to_string(), origin: 0x2000_0000, length: 128, attributes: "rwx".to_string() },
+        ];
+        let placements = vec![
+            SectionPlacement { section_name: ".text".to_string(), region_name: "FLASH".to_string(), load_region_name: None, align: None, keep: false, has_at: false },
+            SectionPlacement { section_name: ".data".to_string(), region_name: "RAM".to_string(), load_region_name: Some("FLASH".to_string()), align: None, keep: false, has_at: true },
+        ];
+        let summary = build_memory_summary(&sections, &regions, &placements);
+        assert_eq!(summary.region_summaries.len(), 2);
+        assert_eq!(summary.region_summaries[0].used, 100);
     }
 
     #[test]
@@ -271,6 +407,39 @@ mod tests {
                 attributes: "xrw".to_string(),
             },
         ];
+        current.memory.region_summaries = vec![crate::model::RegionUsageSummary {
+            region_name: "RAM".to_string(),
+            origin: 0x2000_0000,
+            length: 55,
+            used: 52,
+            free: 3,
+            usage_ratio: 52.0 / 55.0,
+            sections: Vec::new(),
+        }];
+        current.linker_script = Some(LinkerScriptInfo {
+            path: "test.ld".to_string(),
+            regions: vec![MemoryRegion {
+                name: "RAM".to_string(),
+                origin: 0x2000_0000,
+                length: 55,
+                attributes: "xrw".to_string(),
+            }],
+            placements: vec![SectionPlacement {
+                section_name: ".data".to_string(),
+                region_name: "RAM".to_string(),
+                load_region_name: None,
+                align: None,
+                keep: false,
+                has_at: false,
+            }],
+        });
+        current.sections = vec![SectionInfo {
+            name: ".data".to_string(),
+            addr: 0x1000,
+            size: 42,
+            flags: vec![],
+            category: SectionCategory::Ram,
+        }];
         let diff = DiffResult {
             rom_delta: 10,
             ram_delta: 8,
@@ -304,8 +473,11 @@ mod tests {
         let warnings = evaluate_warnings(&current, Some(&diff));
         assert!(warnings.iter().any(|w| w.code == "ROM_THRESHOLD"));
         assert!(warnings.iter().any(|w| w.code == "RAM_THRESHOLD"));
+        assert!(warnings.iter().any(|w| w.code == "REGION_THRESHOLD"));
+        assert!(warnings.iter().any(|w| w.code == "REGION_LOW_FREE"));
         assert!(warnings.iter().any(|w| w.code == "DATA_GROWTH"));
         assert!(warnings.iter().any(|w| w.code == "SYMBOL_SPIKE"));
+        assert!(warnings.iter().any(|w| w.code == "SECTION_REGION_MISMATCH"));
     }
 
     fn stub_analysis(rom: u64, ram: u64, sections: &[(&str, u64)], symbols: &[(&str, u64)]) -> AnalysisResult {
@@ -329,6 +501,7 @@ mod tests {
                 .collect(),
             object_contributions: Vec::new(),
             archive_contributions: Vec::new(),
+            linker_script: None,
             memory: MemorySummary {
                 rom_bytes: rom,
                 ram_bytes: ram,
@@ -341,6 +514,7 @@ mod tests {
                     })
                     .collect(),
                 memory_regions: Vec::new(),
+                region_summaries: Vec::new(),
             },
             warnings: Vec::new(),
         }

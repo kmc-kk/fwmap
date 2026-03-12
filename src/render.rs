@@ -52,6 +52,8 @@ fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
             overview(current, diff),
             warning_section(&current.warnings),
             memory_summary(current),
+            memory_regions(current),
+            region_sections(current),
             section_breakdown(current),
             top_symbols(current),
             top_objects(current),
@@ -138,6 +140,67 @@ fn memory_summary(current: &AnalysisResult) -> String {
         .collect::<Vec<_>>()
         .join("");
     format!("<section><h2>Memory Summary</h2><table><thead><tr><th>Section</th><th>Category</th><th>Size</th></tr></thead><tbody>{rows}</tbody></table></section>")
+}
+
+fn memory_regions(current: &AnalysisResult) -> String {
+    if current.memory.region_summaries.is_empty() {
+        return "<section><h2>Memory Regions Overview</h2><p>No linker script region data was provided.</p></section>".to_string();
+    }
+    let rows = current
+        .memory
+        .region_summaries
+        .iter()
+        .map(|region| {
+            format!(
+                "<tr><td>{}</td><td class=\"mono\">0x{:x}</td><td>{}</td><td>{}</td><td>{:.1}%<div style=\"background:#d9e2ec;border-radius:999px;height:8px;margin-top:6px;\"><div style=\"width:{:.1}%;background:#c05621;height:8px;border-radius:999px;\"></div></div></td></tr>",
+                escape(&region.region_name),
+                region.origin,
+                format_bytes(region.used),
+                format_bytes(region.free),
+                region.usage_ratio * 100.0,
+                region.usage_ratio * 100.0
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!("<section><h2>Memory Regions Overview</h2><table><thead><tr><th>Region</th><th>Origin</th><th>Used</th><th>Free</th><th>Usage</th></tr></thead><tbody>{rows}</tbody></table></section>")
+}
+
+fn region_sections(current: &AnalysisResult) -> String {
+    if current.memory.region_summaries.is_empty() {
+        return String::new();
+    }
+    let blocks = current
+        .memory
+        .region_summaries
+        .iter()
+        .map(|region| {
+            let rows = if region.sections.is_empty() {
+                "<tr><td colspan=\"3\">No mapped sections.</td></tr>".to_string()
+            } else {
+                region
+                    .sections
+                    .iter()
+                    .map(|section| {
+                        format!(
+                            "<tr><td>{}</td><td class=\"mono\">0x{:x}</td><td>{}</td></tr>",
+                            escape(&section.section_name),
+                            section.addr,
+                            format_bytes(section.size)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("")
+            };
+            format!(
+                "<h3>{}</h3><table><thead><tr><th>Section</th><th>Address</th><th>Size</th></tr></thead><tbody>{}</tbody></table>",
+                escape(&region.region_name),
+                rows
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!("<section><h2>Region Sections</h2>{}</section>", blocks)
 }
 
 fn section_breakdown(current: &AnalysisResult) -> String {
@@ -285,8 +348,9 @@ fn escape(text: &str) -> String {
 mod tests {
     use super::write_html_report;
     use crate::model::{
-        AnalysisResult, BinaryInfo, DiffChangeKind, DiffEntry, DiffResult, DiffSummary, MemorySummary, SectionCategory,
-        SectionInfo, SectionTotal, SymbolInfo, WarningItem, WarningLevel, WarningSource,
+        AnalysisResult, BinaryInfo, DiffChangeKind, DiffEntry, DiffResult, DiffSummary, MemoryRegion, MemorySummary,
+        RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionTotal, SymbolInfo, WarningItem,
+        WarningLevel, WarningSource,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -361,6 +425,7 @@ mod tests {
         assert!(html.contains("LARGE_SYMBOL"));
         assert!(html.contains("Added Symbols"));
         assert!(html.contains("Top Symbol Growth"));
+        assert!(html.contains("Memory Regions Overview"));
         let _ = fs::remove_file(path);
     }
 
@@ -388,6 +453,7 @@ mod tests {
             }],
             object_contributions: Vec::new(),
             archive_contributions: Vec::new(),
+            linker_script: None,
             memory: MemorySummary {
                 rom_bytes: 128,
                 ram_bytes: 0,
@@ -396,7 +462,25 @@ mod tests {
                     size: 128,
                     category: SectionCategory::Rom,
                 }],
-                memory_regions: Vec::new(),
+                memory_regions: vec![MemoryRegion {
+                    name: "FLASH".to_string(),
+                    origin: 0x8000,
+                    length: 256,
+                    attributes: "rx".to_string(),
+                }],
+                region_summaries: vec![RegionUsageSummary {
+                    region_name: "FLASH".to_string(),
+                    origin: 0x8000,
+                    length: 256,
+                    used: 128,
+                    free: 128,
+                    usage_ratio: 0.5,
+                    sections: vec![RegionSectionUsage {
+                        section_name: ".text".to_string(),
+                        addr: 0x8000,
+                        size: 128,
+                    }],
+                }],
             },
             warnings: Vec::new(),
         }
