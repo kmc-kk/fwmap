@@ -56,7 +56,7 @@
 <body>
   <h1>fwmap マニュアル</h1>
   <p><code>fwmap</code> は、組込みファームウェアの <code>ELF</code>、GNU ld 系 <code>map</code>、linker script を解析し、サイズ・差分・memory region 配置を可視化するローカル CLI ツールです。</p>
-  <p>この版では、JSON 出力、CI 向け要約、しきい値指定、warning ベースの終了コード制御、外部ルール設定、C++ symbol demangle まで含めて説明します。</p>
+  <p>この版では、JSON 出力、CI 向け要約、しきい値指定、warning ベースの終了コード制御、外部ルール設定、C++ symbol demangle、履歴保存とトレンド表示まで含めて説明します。</p>
 
   <h2>1. 何ができるか</h2>
   <ul>
@@ -144,6 +144,14 @@ Triggered rules: forbid-g-rx-ring(error), REGION_THRESHOLD(warn)</code></pre>
   <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --fail-on-warning</code></pre>
   <p>error severity の rule が 1 件以上あれば終了コード 2 になります。<code>--fail-on-warning</code> 指定時に warn / info の warning があれば終了コード 1 になります。</p>
 
+  <h3>手順 9: 履歴を保存する</h3>
+  <pre><code>fwmap history record --db history.db --elf build/app.elf --map build/app.map --meta commit=abc123 --meta branch=main</code></pre>
+  <p>解析結果を SQLite に 1 件保存します。あとから <code>list</code>、<code>show</code>、<code>trend</code> で参照できます。</p>
+
+  <h3>手順 10: トレンドを確認する</h3>
+  <pre><code>fwmap history trend --db history.db --metric rom --last 20</code></pre>
+  <p><code>rom</code>、<code>ram</code>、<code>warnings</code>、<code>region:FLASH</code>、<code>section:.bss</code> などを指定できます。</p>
+
   <h3>手順 9: しきい値を調整する</h3>
   <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --threshold-rom 90 --threshold-ram 90 --threshold-region FLASH:92 --threshold-symbol-growth 8192</code></pre>
   <p>この例では ROM/RAM/FLASH/symbol growth の warning 発火条件を変更しています。</p>
@@ -200,6 +208,7 @@ message = ".data increased by more than 2KB"</code></pre>
       <tr><td><code>--help</code></td><td>任意</td><td>ヘルプ表示</td></tr>
     </tbody>
   </table>
+  <p>履歴サブコマンド: <code>history record</code>, <code>history list</code>, <code>history show</code>, <code>history trend</code></p>
 
   <h2>5. 出力の種類</h2>
   <ul>
@@ -207,6 +216,7 @@ message = ".data increased by more than 2KB"</code></pre>
     <li>HTML: 人が読むための詳細レポート</li>
     <li>JSON: 機械可読な固定 schema のレポート</li>
     <li>CI summary: text / markdown / JSON の短い要約</li>
+    <li>History: SQLite に保存した履歴の一覧・詳細・推移</li>
   </ul>
   <p>JSON の top-level key は <code>schema_version</code>, <code>binary</code>, <code>memory_summary</code>, <code>warnings</code>, <code>thresholds</code>, <code>regions</code>, <code>diff_summary</code>, <code>diff</code> などです。<code>top_symbols</code> には raw 名の <code>name</code> と表示用の <code>demangled_name</code> が両方含まれます。</p>
 
@@ -229,6 +239,8 @@ message = ".data increased by more than 2KB"</code></pre>
   <p><code>Top Symbol Growth</code> と <code>Top Object Growth</code> を見て、<code>.bss</code> / <code>.data</code> diff を確認します。</p>
   <h3>C++ symbol が読みにくい</h3>
   <p><code>--demangle=on</code> を付けて再実行します。比較キーは raw symbol 名のままなので、差分の安定性は維持されます。</p>
+  <h3>長期トレンドを見たい</h3>
+  <p><code>history record</code> で継続保存し、<code>history trend --metric rom</code> や <code>history trend --metric section:.bss</code> で推移を確認します。</p>
   <h3>同じ warning が繰り返し出る</h3>
   <p><code>code</code> と <code>related</code> を見て、同一 region なのか同一 symbol なのかを先に切り分けます。たとえば <code>REGION_THRESHOLD</code> と <code>FLASH</code> が固定なら linker script やコード配置、<code>LARGE_SYMBOL</code> と <code>g_rx_ring</code> が固定なら静的バッファ定義を優先して確認します。</p>
   <h3>チーム独自ルールを足したい</h3>
@@ -246,6 +258,7 @@ message = ".data increased by more than 2KB"</code></pre>
     <li>region 使用量は linker script と ELF section address の組み合わせに依存する</li>
     <li>demangle は現在 Itanium ABI 系の軽量対応</li>
     <li>外部ルール設定は TOML 固定で、対応 <code>kind</code> は現在の実装範囲に限られる</li>
+    <li>履歴保存はローカル SQLite 前提で、現時点では CLI 表示中心</li>
     <li>JSON schema は現時点で <code>schema_version = 1</code></li>
   </ul>
 

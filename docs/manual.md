@@ -33,6 +33,7 @@
 - ルールベースの warning 判定
 - 外部 TOML ルール設定
 - C++ symbol demangle
+- SQLite ベースの履歴保存とトレンド表示
 - `--verbose` / `--version`
 
 現時点で未対応または限定的な内容:
@@ -159,6 +160,35 @@ fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
   --fail-on-warning
+```
+
+### 履歴を保存する
+
+```bash
+fwmap history record \
+  --db history.db \
+  --elf build/app.elf \
+  --map build/app.map \
+  --meta commit=abc123 \
+  --meta branch=main
+```
+
+### 履歴一覧を表示する
+
+```bash
+fwmap history list --db history.db
+```
+
+### 特定ビルドの履歴詳細を表示する
+
+```bash
+fwmap history show --db history.db --build 1
+```
+
+### トレンドを表示する
+
+```bash
+fwmap history trend --db history.db --metric rom --last 20
 ```
 
 ## 5. 実際の使用手順
@@ -540,6 +570,50 @@ fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --
 
 を横並びで比較できます。
 
+### 5.12 履歴を保存して継続監視する
+
+サイズ推移を継続監視したい場合は `history` サブコマンドを使います。
+
+```bash
+fwmap history record \
+  --db history.db \
+  --elf build/app.elf \
+  --map build/app.map \
+  --meta commit=abc123 \
+  --meta branch=main
+```
+
+これで 1 回分の解析結果を SQLite に保存できます。
+
+一覧確認:
+
+```bash
+fwmap history list --db history.db
+```
+
+特定ビルドの詳細確認:
+
+```bash
+fwmap history show --db history.db --build 3
+```
+
+推移確認:
+
+```bash
+fwmap history trend --db history.db --metric rom --last 20
+fwmap history trend --db history.db --metric ram --last 20
+fwmap history trend --db history.db --metric warnings --last 20
+fwmap history trend --db history.db --metric region:FLASH --last 20
+fwmap history trend --db history.db --metric section:.bss --last 20
+```
+
+使いどころ:
+
+- 毎日の build で ROM / RAM 推移を残す
+- 特定 region の悪化傾向を追う
+- `.bss` や `.data` の長期増加を確認する
+- warning 件数の推移を監視する
+
 ## 6. CLI オプション
 
 | オプション | 必須 | 説明 |
@@ -565,6 +639,15 @@ fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --
 | `--version` | 任意 | バージョン表示 |
 | `--help` | 任意 | ヘルプ表示 |
 
+履歴サブコマンド:
+
+| コマンド | 説明 |
+| --- | --- |
+| `history record --db <path> --elf <path>` | 履歴を 1 件保存 |
+| `history list --db <path>` | 保存済み履歴の一覧表示 |
+| `history show --db <path> --build <id>` | 特定 build の詳細表示 |
+| `history trend --db <path> --metric <metric>` | 推移表示 |
+
 ## 7. 出力内容
 
 `fwmap` は次の 3 種類を出力できます。
@@ -573,6 +656,7 @@ fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --
 - HTML: 単一ファイルのレポート
 - JSON: 機械可読なレポート
 - CI summary: text / markdown / JSON の短い要約
+- History: SQLite に保存した履歴の一覧・詳細・推移
 
 ### 標準出力の例
 
@@ -910,6 +994,18 @@ fwmap analyze \
 - diff 上位 symbol の意味を把握しやすくする
 - HTML / JSON / CLI の表示名を揃える
 
+### 11.7 長期トレンドを確認する
+
+```bash
+fwmap history trend --db history.db --metric rom --last 20
+```
+
+用途:
+
+- 直近 20 build の ROM 推移を確認する
+- Release 前に長期的な増加傾向を確認する
+- warning 件数や特定 section の増加を追う
+
 ## 12. 内部構成
 
 現行の主要モジュール:
@@ -921,6 +1017,7 @@ fwmap analyze \
 - `rules`: warning ルール評価
 - `rule_config`: 外部 TOML ルール読込
 - `demangle`: C++ symbol 表示名変換
+- `history`: SQLite ベースの履歴保存とトレンド表示
 - `diff`: 差分計算と分類
 - `model`: 共通データ構造
 - `render`: CLI / HTML 出力
@@ -935,6 +1032,7 @@ fwmap analyze \
 - rules: [src/rules.rs](/e:/work/git/fwmap/src/rules.rs)
 - rule config: [src/rule_config.rs](/e:/work/git/fwmap/src/rule_config.rs)
 - demangle: [src/demangle.rs](/e:/work/git/fwmap/src/demangle.rs)
+- history: [src/history.rs](/e:/work/git/fwmap/src/history.rs)
 - diff: [src/diff.rs](/e:/work/git/fwmap/src/diff.rs)
 - render: [src/render.rs](/e:/work/git/fwmap/src/render.rs)
 
@@ -950,6 +1048,7 @@ fwmap analyze \
 - ROM/RAM はヒューリスティック集計
 - demangle は現在 Itanium ABI 系の軽量対応
 - 外部ルール設定は TOML 固定で、対応 `kind` は現在の実装範囲に限られる
+- 履歴保存はローカル SQLite 前提で、現時点では CLI 表示中心
 
 ## 14. 今後の予定
 

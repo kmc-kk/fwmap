@@ -19,6 +19,7 @@
 - JSON report output
 - CI summary in text / markdown / JSON formats
 - warning-based exit control
+- SQLite-backed history recording and trend inspection
 - Graceful degradation for missing symbol tables and partially broken map files
 - `--verbose` and `--version` CLI support
 - Offline HTML report generation
@@ -58,6 +59,15 @@ cargo run -- analyze \
 ```
 
 Default output path is `fwmap_report.html`.
+
+History examples:
+
+```bash
+cargo run -- history record --db history.db --elf build/app.elf --map build/app.map --meta commit=abc123
+cargo run -- history list --db history.db
+cargo run -- history show --db history.db --build 1
+cargo run -- history trend --db history.db --metric rom --last 20
+```
 
 JSON report example:
 
@@ -209,6 +219,27 @@ Exit codes:
 - `1`: execution/input error, or `--fail-on-warning` triggered on non-error warnings
 - `2`: analysis succeeded and at least one error-severity rule fired
 
+## History
+
+Use `history record` to store one analysis result in SQLite, then inspect it with `list`, `show`, and `trend`.
+
+```bash
+cargo run -- history record \
+  --db history.db \
+  --elf build/app.elf \
+  --map build/app.map \
+  --meta commit=abc123 \
+  --meta branch=main
+```
+
+Trend metrics:
+
+- `rom`
+- `ram`
+- `warnings`
+- `region:<name>`
+- `section:<name>`
+
 ## Development
 
 ```bash
@@ -227,10 +258,12 @@ cargo test
 - Region usage relies on linker script declarations plus ELF section addresses, so unusual scripts may only be partially represented.
 - JSON schema is fixed at `schema_version = 1`.
 - Demangling currently prioritizes Itanium ABI names and falls back safely when conversion fails.
+- History storage currently uses a local SQLite file and focuses on summary, section, region, and rule-result metrics.
 
 ## CLI Compatibility
 
 - Existing `fwmap analyze --elf ...` usage remains valid.
+- `history record|list|show|trend` are additive subcommands.
 - `--verbose`, `--version`, `--lds`, `--report-json`, `--ci-summary`, `--ci-format`, `--ci-out`, `--fail-on-warning`, `--rules`, and `--demangle=...` are additive options.
 - Existing required arguments remain unchanged.
 

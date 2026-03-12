@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 use crate::analyze::{analyze_paths, evaluate_warnings, AnalyzeOptions};
 use crate::diff::{diff_results, top_increases};
 use crate::demangle::display_name;
+use crate::history::{
+    list_builds, print_build_detail, print_build_list, print_trend, record_build, show_build, trend_metric,
+    HistoryRecordInput,
+};
 use crate::model::{CiFormat, DemangleMode, ThresholdConfig, WarningLevel};
 use crate::rule_config::{apply_threshold_overrides, load_rule_config};
 use crate::render::{print_ci_summary, print_cli_summary, write_ci_summary, write_html_report, write_json_report};
@@ -19,6 +23,50 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
         }
         Command::Version => {
             println!("fwmap {VERSION}");
+            Ok(0)
+        }
+        Command::HistoryRecord {
+            db,
+            elf,
+            map,
+            lds,
+            thresholds,
+            rules,
+            demangle,
+            metadata,
+        } => {
+            let mut options = AnalyzeOptions {
+                thresholds,
+                demangle,
+                custom_rules: Vec::new(),
+            };
+            if let Some(rule_path) = rules.as_deref() {
+                let config = load_rule_config(rule_path)?;
+                apply_threshold_overrides(&mut options.thresholds, &config.thresholds);
+                options.custom_rules = config.rules;
+            }
+            let analysis = analyze_paths(&elf, map.as_deref(), lds.as_deref(), &options)?;
+            let id = record_build(&db, HistoryRecordInput { analysis, metadata })?;
+            println!("Recorded build #{id} into {}", db.display());
+            Ok(0)
+        }
+        Command::HistoryList { db } => {
+            let items = list_builds(&db)?;
+            print_build_list(&items);
+            Ok(0)
+        }
+        Command::HistoryShow { db, build } => {
+            match show_build(&db, build)? {
+                Some(detail) => {
+                    print_build_detail(&detail);
+                    Ok(0)
+                }
+                None => Err(format!("build id {build} was not found in {}", db.display())),
+            }
+        }
+        Command::HistoryTrend { db, metric, last } => {
+            let points = trend_metric(&db, &metric, last)?;
+            print_trend(&points);
             Ok(0)
         }
         Command::Analyze {
@@ -113,6 +161,28 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
 enum Command {
     Help,
     Version,
+    HistoryRecord {
+        db: PathBuf,
+        elf: PathBuf,
+        map: Option<PathBuf>,
+        lds: Option<PathBuf>,
+        thresholds: ThresholdConfig,
+        rules: Option<PathBuf>,
+        demangle: DemangleMode,
+        metadata: std::collections::BTreeMap<String, String>,
+    },
+    HistoryList {
+        db: PathBuf,
+    },
+    HistoryShow {
+        db: PathBuf,
+        build: i64,
+    },
+    HistoryTrend {
+        db: PathBuf,
+        metric: String,
+        last: usize,
+    },
     Analyze {
         elf: PathBuf,
         map: Option<PathBuf>,
@@ -138,6 +208,9 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     }
     if matches!(args.get(1).map(String::as_str), Some("--version" | "-V")) {
         return Ok(Command::Version);
+    }
+    if args[1] == "history" {
+        return parse_history_args(args);
     }
     if args[1] != "analyze" {
         return Err(format!("unknown command '{}'\n\n{}", args[1], help_text()));
@@ -293,6 +366,10 @@ fn help_text() -> String {
         "fwmap {VERSION}
 
 fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--rules <path>] [--demangle=auto|on|off] [--verbose]
+fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--meta key=value]
+fwmap history list --db <path>
+fwmap history show --db <path> --build <id>
+fwmap history trend --db <path> --metric <rom|ram|warnings|region:NAME|section:NAME> [--last <n>]
 
 Options:
   --elf       Input ELF file (required)
@@ -316,6 +393,154 @@ Options:
   --version   Show version
   --help      Show this help"
     )
+}
+
+fn parse_history_args(args: Vec<String>) -> Result<Command, String> {
+    let sub = args.get(2).ok_or_else(|| format!("missing history subcommand\n\n{}", help_text()))?;
+    match sub.as_str() {
+        "record" => parse_history_record_args(args),
+        "list" => parse_history_list_args(args),
+        "show" => parse_history_show_args(args),
+        "trend" => parse_history_trend_args(args),
+        _ => Err(format!("unknown history subcommand '{}'\n\n{}", sub, help_text())),
+    }
+}
+
+fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
+    let mut db = None;
+    let mut elf = None;
+    let mut map = None;
+    let mut lds = None;
+    let mut thresholds = ThresholdConfig::default();
+    let mut rules = None;
+    let mut demangle = DemangleMode::Auto;
+    let mut metadata = std::collections::BTreeMap::new();
+    let mut index = 3usize;
+    while index < args.len() {
+        let key = &args[index];
+        match key.as_str() {
+            "--threshold-rom" | "--threshold-ram" | "--threshold-symbol-growth" | "--threshold-region" => {
+                let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
+                match key.as_str() {
+                    "--threshold-rom" => thresholds.rom_percent = parse_percent(value, key)?,
+                    "--threshold-ram" => thresholds.ram_percent = parse_percent(value, key)?,
+                    "--threshold-symbol-growth" => thresholds.symbol_growth_bytes = parse_u64(value, key)?,
+                    "--threshold-region" => {
+                        let (name, percent) = parse_region_threshold(value)?;
+                        thresholds.region_percent.insert(name, percent);
+                    }
+                    _ => {}
+                }
+                index += 2;
+            }
+            "--demangle=auto" => {
+                demangle = DemangleMode::Auto;
+                index += 1;
+            }
+            "--demangle=on" => {
+                demangle = DemangleMode::On;
+                index += 1;
+            }
+            "--demangle=off" => {
+                demangle = DemangleMode::Off;
+                index += 1;
+            }
+            "--meta" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --meta".to_string())?;
+                let (k, v) = value
+                    .split_once('=')
+                    .ok_or_else(|| format!("invalid metadata '{value}', expected key=value"))?;
+                metadata.insert(k.to_string(), v.to_string());
+                index += 2;
+            }
+            "--db" | "--elf" | "--map" | "--lds" | "--rules" => {
+                let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
+                match key.as_str() {
+                    "--db" => db = Some(PathBuf::from(value)),
+                    "--elf" => elf = Some(PathBuf::from(value)),
+                    "--map" => map = Some(PathBuf::from(value)),
+                    "--lds" => lds = Some(PathBuf::from(value)),
+                    "--rules" => rules = Some(PathBuf::from(value)),
+                    _ => {}
+                }
+                index += 2;
+            }
+            _ => return Err(format!("unknown option '{key}'")),
+        }
+    }
+    let db = db.ok_or_else(|| "--db is required".to_string())?;
+    let elf = elf.ok_or_else(|| "--elf is required".to_string())?;
+    ensure_exists(&elf, "ELF")?;
+    if let Some(path) = map.as_deref() {
+        ensure_exists(path, "map")?;
+    }
+    if let Some(path) = lds.as_deref() {
+        ensure_exists(path, "linker script")?;
+    }
+    if let Some(path) = rules.as_deref() {
+        ensure_exists(path, "rules")?;
+    }
+    Ok(Command::HistoryRecord {
+        db,
+        elf,
+        map,
+        lds,
+        thresholds,
+        rules,
+        demangle,
+        metadata,
+    })
+}
+
+fn parse_history_list_args(args: Vec<String>) -> Result<Command, String> {
+    let db = parse_required_path_arg(&args[3..], "--db")?;
+    Ok(Command::HistoryList { db })
+}
+
+fn parse_history_show_args(args: Vec<String>) -> Result<Command, String> {
+    let db = parse_required_path_arg(&args[3..], "--db")?;
+    let build = parse_required_i64_arg(&args[3..], "--build")?;
+    Ok(Command::HistoryShow { db, build })
+}
+
+fn parse_history_trend_args(args: Vec<String>) -> Result<Command, String> {
+    let db = parse_required_path_arg(&args[3..], "--db")?;
+    let metric = parse_required_string_arg(&args[3..], "--metric")?;
+    let last = parse_optional_usize_arg(&args[3..], "--last")?.unwrap_or(20);
+    Ok(Command::HistoryTrend { db, metric, last })
+}
+
+fn parse_required_path_arg(args: &[String], key: &str) -> Result<PathBuf, String> {
+    parse_required_string_arg(args, key).map(PathBuf::from)
+}
+
+fn parse_required_string_arg(args: &[String], key: &str) -> Result<String, String> {
+    let index = args
+        .iter()
+        .position(|item| item == key)
+        .ok_or_else(|| format!("{key} is required"))?;
+    args.get(index + 1)
+        .cloned()
+        .ok_or_else(|| format!("missing value for {key}"))
+}
+
+fn parse_required_i64_arg(args: &[String], key: &str) -> Result<i64, String> {
+    parse_required_string_arg(args, key)?
+        .parse::<i64>()
+        .map_err(|_| format!("invalid integer for {key}"))
+}
+
+fn parse_optional_usize_arg(args: &[String], key: &str) -> Result<Option<usize>, String> {
+    let Some(index) = args.iter().position(|item| item == key) else {
+        return Ok(None);
+    };
+    let value = args
+        .get(index + 1)
+        .ok_or_else(|| format!("missing value for {key}"))?;
+    value
+        .parse::<usize>()
+        .map(Some)
+        .map_err(|_| format!("invalid integer for {key}"))
 }
 
 fn parse_percent(value: &str, key: &str) -> Result<f64, String> {
@@ -441,6 +666,46 @@ mod tests {
                 assert_eq!(thresholds.symbol_growth_bytes, 8192);
             }
             _ => panic!("expected analyze command"),
+        }
+    }
+
+    #[test]
+    fn parses_history_record_command() {
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "history".to_string(),
+            "record".to_string(),
+            "--db".to_string(),
+            "history.db".to_string(),
+            "--elf".to_string(),
+            "Cargo.toml".to_string(),
+            "--meta".to_string(),
+            "commit=abc123".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(cmd, Command::HistoryRecord { .. }));
+    }
+
+    #[test]
+    fn parses_history_trend_command() {
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "history".to_string(),
+            "trend".to_string(),
+            "--db".to_string(),
+            "history.db".to_string(),
+            "--metric".to_string(),
+            "rom".to_string(),
+            "--last".to_string(),
+            "5".to_string(),
+        ])
+        .unwrap();
+        match cmd {
+            Command::HistoryTrend { metric, last, .. } => {
+                assert_eq!(metric, "rom");
+                assert_eq!(last, 5);
+            }
+            _ => panic!("expected history trend command"),
         }
     }
 }
