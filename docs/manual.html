@@ -13,8 +13,8 @@
     }
     h1, h2, h3 {
       color: #102a43;
-      margin-top: 1.4em;
-      margin-bottom: 0.4em;
+      margin-top: 1.3em;
+      margin-bottom: 0.45em;
     }
     h1 {
       border-bottom: 3px solid #d9e2ec;
@@ -55,52 +55,65 @@
 </head>
 <body>
   <h1>fwmap マニュアル</h1>
-  <p><code>fwmap</code> は、組込みファームウェアの <code>ELF</code> と GNU ld 系 <code>map</code> を解析し、ROM/RAM 使用量、主要シンボル、object 寄与、前回ビルドとの差分を可視化するローカル CLI ツールです。</p>
-  <p>現行版は Phase 3 まで実装済みで、単純なサイズ表示だけでなく、差分原因の追跡を主機能として扱います。</p>
+  <p><code>fwmap</code> は、組込みファームウェアの <code>ELF</code>、GNU ld 系 <code>map</code>、linker script を解析し、サイズ・差分・memory region 配置を可視化するローカル CLI ツールです。</p>
+  <p>この版では、実際の操作手順が追えるように、日常作業を想定した具体例つきで説明します。</p>
 
-  <h2>1. 概要</h2>
+  <h2>1. 何ができるか</h2>
   <ul>
-    <li>どの section が ROM / RAM を使っているか</li>
-    <li>どの symbol が大きいか</li>
-    <li>どの object file がサイズに効いているか</li>
-    <li>前回ビルドから何が増えたか、減ったか</li>
-    <li>追加・削除・増加・減少のどれに当たるか</li>
+    <li>ROM / RAM の概算を確認する</li>
+    <li>大きい symbol を見つける</li>
+    <li>どの object file がサイズに効いているか把握する</li>
+    <li>前回ビルドとの差分を分類付きで確認する</li>
+    <li>FLASH / RAM などの region 使用率を確認する</li>
   </ul>
 
-  <h2>2. 対応範囲</h2>
-  <ul>
-    <li>ELF32 / ELF64</li>
-    <li>little-endian ELF を主対象</li>
-    <li>GNU ld 系 map</li>
-    <li>単一 HTML レポート出力</li>
-    <li>前回成果物との diff 比較</li>
-    <li>固定しきい値ベースの warning</li>
-    <li><code>--verbose</code> / <code>--version</code></li>
-  </ul>
-  <p>未対応または限定的な内容: linker script 解析、memory region 可視化、JSON 出力、CI 向け exit code 制御、demangle 改善、DWARF を用いたソース行解析。</p>
+  <h2>2. 事前に用意するファイル</h2>
+  <pre><code>project/
+  build/
+    app.elf
+    app.map
+  linker/
+    app.ld
+  prev/
+    app.elf
+    app.map</code></pre>
+  <p>最低限必要なのは <code>app.elf</code> です。object 寄与を見るなら <code>app.map</code>、region 配置を見るなら <code>app.ld</code>、回帰比較には <code>prev/app.elf</code> と <code>prev/app.map</code> を使います。</p>
 
-  <h2>3. ビルドとテスト</h2>
-  <p>前提:</p>
-  <ul>
-    <li>Rust toolchain</li>
-    <li>Windows / Linux / macOS</li>
-  </ul>
-  <pre><code>cargo build</code></pre>
-  <pre><code>cargo test</code></pre>
-
-  <h2>4. 基本的な使い方</h2>
-  <h3>ELF のみ解析</h3>
+  <h2>3. 実際の使用手順</h2>
+  <h3>手順 1: ELF だけで全体確認</h3>
   <pre><code>fwmap analyze --elf build/app.elf</code></pre>
-  <h3>ELF と map を解析</h3>
-  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --out report.html</code></pre>
-  <h3>前回ビルドとの差分を解析</h3>
-  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --prev-map prev/app.map --out report.html</code></pre>
-  <h3>補助オプション</h3>
-  <pre><code>fwmap --version
-fwmap analyze --elf build/app.elf --verbose</code></pre>
-  <p><code>--out</code> を省略した場合は <code>fwmap_report.html</code> が出力されます。</p>
+  <p>まず section 数、ROM / RAM 概算、大きい symbol、基本 warning を確認します。map が無い環境でも使えます。</p>
 
-  <h2>5. CLI オプション</h2>
+  <h3>手順 2: map を付けて object 寄与を見る</h3>
+  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --out build/fwmap_report.html</code></pre>
+  <p><code>Top Object Contributions</code> と <code>Top Symbols</code> を見比べます。たとえば <code>drivers/net.o</code> と <code>g_rx_ring</code> が上位に出れば、受信バッファ由来の増加を疑えます。</p>
+
+  <h3>手順 3: linker script を付けて region 配置を見る</h3>
+  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --lds linker/app.ld --out build/fwmap_region_report.html</code></pre>
+  <p><code>Memory Regions Overview</code> で <code>FLASH</code> / <code>RAM</code> の使用率を見て、<code>Region Sections</code> で各 region にどの section が載っているかを確認します。</p>
+  <p>たとえば <code>FLASH</code> が 91% なら危険域です。<code>SECTION_REGION_MISMATCH</code> が出ていれば、linker script の想定配置と実アドレスがずれている可能性があります。</p>
+
+  <h3>手順 4: 前回ビルドとの差分を見る</h3>
+  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --prev-map prev/app.map --out build/fwmap_diff_report.html</code></pre>
+  <pre><code>ELF: build/app.elf
+ROM: 65536 bytes (64.00 KiB) | RAM: 16384 bytes (16.00 KiB) | Sections: 30 | Symbols: 240 | Warnings: 2
+ROM: +3072 bytes
+RAM: +1024 bytes
+Diff counts: sections +1 / -0 / ↑4 / ↓1, symbols +3 / -1 / ↑7 / ↓2
+Top growth symbol: app_tls_buffer (+1024)
+Top growth object: middleware/tls.o (+1536)
+Report: build/fwmap_diff_report.html</code></pre>
+  <p>この場合は <code>app_tls_buffer</code> と <code>middleware/tls.o</code> を起点に変更を追います。</p>
+
+  <h3>手順 5: warning を詳しく見る</h3>
+  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map --lds linker/app.ld --verbose</code></pre>
+  <pre><code>Warnings:
+  [analyze:REGION_THRESHOLD] Region FLASH usage exceeded 85% (91.2%)
+  [analyze:REGION_LOW_FREE] Region RAM free space is low (2048 bytes (2.00 KiB))
+  [map:MAP_LINE_SKIPPED] Skipped unparsed map line 120: COMMON ...</code></pre>
+  <p><code>source</code> で発生元、<code>code</code> で warning の種類を確認できます。</p>
+
+  <h2>4. CLI オプション</h2>
   <table>
     <thead>
       <tr><th>オプション</th><th>必須</th><th>説明</th></tr>
@@ -108,6 +121,7 @@ fwmap analyze --elf build/app.elf --verbose</code></pre>
     <tbody>
       <tr><td><code>--elf &lt;path&gt;</code></td><td>必須</td><td>現在の ELF ファイル</td></tr>
       <tr><td><code>--map &lt;path&gt;</code></td><td>任意</td><td>現在の GNU ld map ファイル</td></tr>
+      <tr><td><code>--lds &lt;path&gt;</code></td><td>任意</td><td>GNU ld linker script</td></tr>
       <tr><td><code>--prev-elf &lt;path&gt;</code></td><td>任意</td><td>比較用の前回 ELF</td></tr>
       <tr><td><code>--prev-map &lt;path&gt;</code></td><td>任意</td><td>比較用の前回 map</td></tr>
       <tr><td><code>--out &lt;path&gt;</code></td><td>任意</td><td>HTML 出力先</td></tr>
@@ -117,100 +131,36 @@ fwmap analyze --elf build/app.elf --verbose</code></pre>
     </tbody>
   </table>
 
-  <h2>6. 出力内容</h2>
-  <p><code>fwmap</code> は標準出力の実行サマリと、単一 HTML レポートを出力します。</p>
-  <pre><code>ELF: build/app.elf
-ROM: 32768 bytes (32.00 KiB) | RAM: 8192 bytes (8.00 KiB) | Sections: 24 | Symbols: 180 | Warnings: 2
-ROM: +1024 bytes
-RAM: +256 bytes
-Diff counts: sections +1 / -0 / ↑3 / ↓1, symbols +2 / -1 / ↑4 / ↓3
-Top growth symbol: foo_bar (+512)
-Top growth object: drivers/net.o (+768)
-Report: fwmap_report.html</code></pre>
-
-  <h2>7. HTML レポートの見方</h2>
+  <h2>5. HTML レポートの見方</h2>
   <ol>
-    <li>Header</li>
-    <li>Overview</li>
-    <li>Warnings</li>
-    <li>Memory Summary</li>
-    <li>Section Breakdown</li>
-    <li>Top Symbols</li>
-    <li>Top Object Contributions</li>
-    <li>Diff</li>
-    <li>Footer</li>
+    <li>Overview: 全体概要</li>
+    <li>Warnings: 問題点と読み飛ばし情報</li>
+    <li>Memory Summary: section ごとの ROM/RAM 集計</li>
+    <li>Memory Regions Overview: region 使用率</li>
+    <li>Region Sections: region 配下 section 一覧</li>
+    <li>Section Breakdown: section 詳細</li>
+    <li>Top Symbols: 大きい symbol</li>
+    <li>Top Object Contributions: 大きい object</li>
+    <li>Diff: 増減一覧と追加削除</li>
   </ol>
 
-  <h3>Overview</h3>
-  <p>対象 ELF パス、アーキテクチャ、ELF class、endian、section 数、ROM 合計、RAM 合計、warning 件数、diff がある場合は ROM/RAM 差分を表示します。</p>
+  <h2>6. よくある確認パターン</h2>
+  <h3>RAM が急に増えた</h3>
+  <p><code>Top Symbol Growth</code> と <code>Top Object Growth</code> を見て、<code>.bss</code> / <code>.data</code> diff を確認します。</p>
+  <h3>FLASH が逼迫している</h3>
+  <p><code>Memory Regions Overview</code> の <code>FLASH</code> 使用率と <code>Top Section Growth</code> を確認します。</p>
+  <h3>map が少し壊れている</h3>
+  <p>解析は可能な範囲で継続し、読み飛ばした箇所を warning に残します。まず HTML が生成されるか、次に <code>MAP_LINE_SKIPPED</code> を確認してください。</p>
 
-  <h3>Warnings</h3>
-  <p>warning は source と関連対象付きで表示されます。ROM/RAM 使用率超過、巨大 symbol、<code>.data</code> / <code>.bss</code> 増加、symbol table 欠損、map の一部読み飛ばしなどが含まれます。</p>
-
-  <h3>Memory Summary</h3>
-  <p>section をサイズ順に表示し、<code>ROM</code> / <code>RAM</code> / <code>Other</code> に分類します。</p>
-
-  <h3>Section Breakdown</h3>
-  <p>section ごとの名前、アドレス、サイズ、flags を表示します。</p>
-
-  <h3>Top Symbols</h3>
-  <p>ELF symbol table からサイズ上位を表示します。symbol table が無い場合でも HTML 生成自体は継続します。</p>
-
-  <h3>Top Object Contributions</h3>
-  <p>map がある場合に object ごとの寄与サイズ上位を表示します。</p>
-
-  <h3>Diff</h3>
-  <p>Phase 3 で最も強化されたセクションです。ROM/RAM 差分、section/symbol/object の変化件数、上位増加一覧、Added / Removed 一覧を表示します。</p>
-  <p>差分分類は <code>Added</code>, <code>Removed</code>, <code>Increased</code>, <code>Decreased</code>, <code>Unchanged</code>, <code>Moved</code> です。現行版では主に Added / Removed / Increased / Decreased / Unchanged を使います。</p>
-
-  <h2>8. graceful degradation</h2>
-  <ul>
-    <li><code>--map</code> が無くても HTML は生成可能</li>
-    <li>symbol table が無くても section summary は生成可能</li>
-    <li>map に壊れた行があっても warning 化して継続</li>
-  </ul>
-  <p>一方で、ファイル不存在、非 ELF、section table 欠損、HTML 出力先への書き込み失敗などは停止要因です。</p>
-
-  <h2>9. エラーメッセージ</h2>
-  <p>主なエラーは、ELF / map ファイル不存在、非 ELF 入力、未対応 ELF metadata、section table 欠損、HTML レポート書き込み失敗です。CLI は panic を直接見せない方針です。</p>
-
-  <h2>10. 典型的な使い方</h2>
-  <h3>まず ELF だけ見る</h3>
-  <pre><code>fwmap analyze --elf build/app.elf</code></pre>
-  <h3>object 寄与を見る</h3>
-  <pre><code>fwmap analyze --elf build/app.elf --map build/app.map</code></pre>
-  <h3>回帰調査をする</h3>
-  <pre><code>fwmap analyze --elf current/app.elf --map current/app.map --prev-elf previous/app.elf --prev-map previous/app.map --out diff_report.html</code></pre>
-
-  <h2>11. 内部構成</h2>
-  <ul>
-    <li><code>cli</code>: 引数処理と実行制御</li>
-    <li><code>ingest</code>: ELF / map の読み込み</li>
-    <li><code>analyze</code>: 集計と warning 判定</li>
-    <li><code>diff</code>: 差分計算と分類</li>
-    <li><code>model</code>: 共通データ構造</li>
-    <li><code>render</code>: CLI / HTML 出力</li>
-  </ul>
-
-  <h2>12. 既知の制約</h2>
+  <h2>7. 既知の制約</h2>
   <ul>
     <li>ELF は現在 <code>SHT_SYMTAB</code> を中心に参照</li>
     <li>map は GNU ld の典型出力を優先</li>
-    <li>object path は主に map 由来</li>
-    <li>archive/member の表記揺れは主要ケース対応に留まる</li>
-    <li>linker script 非対応のため region 単位の厳密解析は未実装</li>
-    <li>ROM/RAM はヒューリスティック集計</li>
+    <li>linker script は subset 対応で、完全構文対応ではない</li>
+    <li>region 使用量は linker script と ELF section address の組み合わせに依存する</li>
+    <li>JSON 出力や CI 向け exit code 制御は未実装</li>
   </ul>
 
-  <h2>13. 今後の予定</h2>
-  <ul>
-    <li>Phase 4: linker script / memory region 対応</li>
-    <li>Phase 5: JSON 出力と CI 連携</li>
-    <li>Phase 6: ルールエンジン分離</li>
-  </ul>
-
-  <h2>14. テスト資産</h2>
-  <p><code>tests/fixtures/</code> には parser 回帰確認用の小さなサンプルがあります。ELF の一部フィクスチャはテスト内で合成生成しています。</p>
-  <p class="muted">現行の fwmap 実装に合わせて日本語化したマニュアルです。</p>
+  <p class="muted">現行実装に合わせて、具体的な使用手順を含めて更新したマニュアルです。</p>
 </body>
 </html>

@@ -4,7 +4,7 @@
 
 `fwmap` は、組込みファームウェアの `ELF` と GNU ld 系 `map` を解析し、ROM/RAM 使用量、主要シンボル、object 寄与、前回ビルドとの差分を可視化するローカル CLI ツールです。
 
-現行版は Phase 3 まで実装済みで、単純なサイズ表示だけでなく、差分原因の追跡を主機能として扱います。
+現行版は Phase 4 まで実装済みで、単純なサイズ表示だけでなく、差分原因の追跡と memory region の可視化を主機能として扱います。
 
 このツールで把握しやすい内容:
 
@@ -13,6 +13,7 @@
 - どの object file がサイズに効いているか
 - 前回ビルドから何が増えたか、減ったか
 - 追加・削除・増加・減少のどれに当たるか
+- linker script 上の region と section 配置がどうなっているか
 
 ## 2. 対応範囲
 
@@ -21,17 +22,19 @@
 - GNU ld 系 map
 - 単一 HTML レポート出力
 - 前回成果物との diff 比較
+- GNU ld linker script subset 解析
+- memory region overview
+- section と region の対応表示
 - 固定しきい値ベースの warning
 - `--verbose` / `--version`
 
 現時点で未対応または限定的な内容:
 
-- linker script 解析
-- memory region ベース可視化
 - JSON 出力
 - CI 向け exit code 制御
 - demangle 改善
 - DWARF を用いたソース行解析
+- linker script の完全構文対応
 
 ## 3. ビルドとテスト
 
@@ -80,6 +83,16 @@ fwmap analyze \
   --out report.html
 ```
 
+### ELF / map / linker script を合わせて解析
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --lds linker/app.ld \
+  --out report.html
+```
+
 ### バージョン表示
 
 ```bash
@@ -94,12 +107,193 @@ fwmap analyze --elf build/app.elf --verbose
 
 `--out` を省略した場合は `fwmap_report.html` が出力されます。
 
-## 5. CLI オプション
+## 5. 実際の使用手順
+
+この章では、日常的な使い方を具体的な流れで説明します。
+
+### 5.1 事前準備
+
+最低限そろえるファイル:
+
+- 現在のビルド成果物 `app.elf`
+- 可能なら `app.map`
+- region 可視化を使う場合は linker script `app.ld`
+- 差分比較する場合は前回ビルドの `prev_app.elf` と `prev_app.map`
+
+典型的な配置例:
+
+```text
+project/
+  build/
+    app.elf
+    app.map
+  linker/
+    app.ld
+  prev/
+    app.elf
+    app.map
+```
+
+### 5.2 まず ELF だけで確認する
+
+最初に `ELF` だけで全体像を見ます。
+
+```bash
+fwmap analyze --elf build/app.elf
+```
+
+この段階で分かること:
+
+- section 数
+- ROM / RAM の概算
+- 大きい symbol
+- 基本 warning
+
+向いている場面:
+
+- ビルド直後のざっくり確認
+- map が未生成のビルド環境
+- とりあえず HTML を出したいとき
+
+### 5.3 map を付けて object 寄与を確認する
+
+object ごとの寄与を確認したい場合は `--map` を付けます。
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --out build/fwmap_report.html
+```
+
+実行後の確認ポイント:
+
+1. HTML の `Top Object Contributions` を開く
+2. サイズの大きい object を確認する
+3. `Top Symbols` と照らし合わせて、どの object に大きい symbol が入っているかを見る
+
+具体例:
+
+- `drivers/net.o` が大きい
+- `g_rx_ring` が大きい
+- その結果 `.bss` が増えている
+
+この場合は、ネットワークバッファやキュー定義を疑うのが自然です。
+
+### 5.4 linker script を付けて region 配置を確認する
+
+memory region を確認したい場合は `--lds` を付けます。
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --lds linker/app.ld \
+  --out build/fwmap_region_report.html
+```
+
+実行後の確認ポイント:
+
+1. `Memory Regions Overview` を見る
+2. `FLASH` や `RAM` の使用率を確認する
+3. `Region Sections` で、その region に載っている section を見る
+4. warning に `REGION_THRESHOLD` や `SECTION_REGION_MISMATCH` が出ていないか確認する
+
+具体例:
+
+- `FLASH` 使用率が 91%
+- `RAM` free が 2 KiB
+- `.data` が `RAM` に載る想定だが、section address が region 範囲外
+
+この場合は、linker script の割当、section 属性、または section address 解釈を優先的に確認します。
+
+### 5.5 前回ビルドとの差分を確認する
+
+サイズ回帰を追う場合は、前回成果物を与えます。
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --prev-elf prev/app.elf \
+  --prev-map prev/app.map \
+  --out build/fwmap_diff_report.html
+```
+
+標準出力の例:
+
+```text
+ELF: build/app.elf
+ROM: 65536 bytes (64.00 KiB) | RAM: 16384 bytes (16.00 KiB) | Sections: 30 | Symbols: 240 | Warnings: 2
+ROM: +3072 bytes
+RAM: +1024 bytes
+Diff counts: sections +1 / -0 / ↑4 / ↓1, symbols +3 / -1 / ↑7 / ↓2
+Top growth symbol: app_tls_buffer (+1024)
+Top growth object: middleware/tls.o (+1536)
+Report: build/fwmap_diff_report.html
+```
+
+この出力からの読み方:
+
+1. まず `ROM` / `RAM` の増加量を見る
+2. 次に `Top growth symbol` を見る
+3. さらに `Top growth object` を見る
+4. HTML の `Diff` セクションで `Added` / `Removed` / `Increased` を確認する
+
+### 5.6 warning を詳しく見たい場合
+
+標準出力に warning を詳細表示したい場合:
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --lds linker/app.ld \
+  --verbose
+```
+
+出力例:
+
+```text
+Warnings:
+  [analyze:REGION_THRESHOLD] Region FLASH usage exceeded 85% (91.2%)
+  [analyze:REGION_LOW_FREE] Region RAM free space is low (2048 bytes (2.00 KiB))
+  [map:MAP_LINE_SKIPPED] Skipped unparsed map line 120: COMMON ...
+```
+
+この情報で分かること:
+
+- `source`: どこで出た warning か
+- `code`: warning 種別
+- `message`: 具体的な理由
+
+### 5.7 HTML の保存先を分ける
+
+複数条件でレポートを比較したい場合は、出力先を分けます。
+
+```bash
+fwmap analyze --elf build/app.elf --out reports/elf_only.html
+fwmap analyze --elf build/app.elf --map build/app.map --out reports/with_map.html
+fwmap analyze --elf build/app.elf --map build/app.map --lds linker/app.ld --out reports/with_regions.html
+fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --prev-map prev/app.map --out reports/diff.html
+```
+
+これで:
+
+- ELF のみ
+- map 付き
+- region 付き
+- diff 付き
+
+を横並びで比較できます。
+
+## 6. CLI オプション
 
 | オプション | 必須 | 説明 |
 | --- | --- | --- |
 | `--elf <path>` | 必須 | 現在の ELF ファイル |
 | `--map <path>` | 任意 | 現在の GNU ld map ファイル |
+| `--lds <path>` | 任意 | GNU ld linker script |
 | `--prev-elf <path>` | 任意 | 比較用の前回 ELF |
 | `--prev-map <path>` | 任意 | 比較用の前回 map |
 | `--out <path>` | 任意 | HTML 出力先 |
@@ -107,7 +301,7 @@ fwmap analyze --elf build/app.elf --verbose
 | `--version` | 任意 | バージョン表示 |
 | `--help` | 任意 | ヘルプ表示 |
 
-## 6. 出力内容
+## 7. 出力内容
 
 `fwmap` は次の 2 種類を出力します。
 
@@ -137,7 +331,7 @@ Top growth object: drivers/net.o (+768)
 Report: fwmap_report.html
 ```
 
-## 7. HTML レポートの見方
+## 8. HTML レポートの見方
 
 HTML は以下の順で構成されます。
 
@@ -151,7 +345,7 @@ HTML は以下の順で構成されます。
 8. Diff
 9. Footer
 
-### 7.1 Overview
+### 8.1 Overview
 
 表示内容:
 
@@ -165,7 +359,7 @@ HTML は以下の順で構成されます。
 - warning 件数
 - diff がある場合は ROM/RAM 差分
 
-### 7.2 Warnings
+### 8.2 Warnings
 
 warning は source と関連対象付きで表示されます。
 
@@ -180,7 +374,7 @@ warning は source と関連対象付きで表示されます。
 - symbol table 欠損
 - map の一部読み飛ばし
 
-### 7.3 Memory Summary
+### 8.3 Memory Summary
 
 section をサイズ順に表示し、次のいずれかに分類します。
 
@@ -193,7 +387,33 @@ section をサイズ順に表示し、次のいずれかに分類します。
 - ROM: `.text`, `.rodata`, read-only / executable な `ALLOC` section
 - RAM: `.data`, `.bss`, writable な `ALLOC` section
 
-### 7.4 Section Breakdown
+### 8.4 Memory Regions Overview
+
+linker script がある場合に表示されます。
+
+表示内容:
+
+- region 名
+- origin
+- used
+- free
+- usage
+
+用途:
+
+- `FLASH` や `RAM` の逼迫状況を一目で確認する
+- どの region から先に危険になるかを把握する
+
+### 8.5 Region Sections
+
+region ごとの section 一覧を表示します。
+
+用途:
+
+- どの section が `FLASH` / `RAM` / その他 region に載っているか確認する
+- 想定外の配置を見つける
+
+### 8.6 Section Breakdown
 
 section ごとの詳細:
 
@@ -204,7 +424,18 @@ section ごとの詳細:
 
 メモリ配置の概況を目視確認する用途です。
 
-### 7.5 Top Symbols
+### 8.7 Section Breakdown
+
+section ごとの詳細:
+
+- 名前
+- アドレス
+- サイズ
+- flags
+
+メモリ配置の概況を目視確認する用途です。
+
+### 8.8 Top Symbols
 
 ELF symbol table からサイズ上位を表示します。
 
@@ -220,13 +451,13 @@ ELF symbol table からサイズ上位を表示します。
 - symbol table が無い ELF ではこの情報は空になります
 - その場合でも section summary と HTML 生成は継続します
 
-### 7.6 Top Object Contributions
+### 8.9 Top Object Contributions
 
 map がある場合に object ごとの寄与サイズ上位を表示します。
 
 これにより、どの object が増加に効いているかを追えます。
 
-### 7.7 Diff
+### 8.10 Diff
 
 Phase 3 で最も強化されたセクションです。
 
@@ -255,7 +486,7 @@ Phase 3 で最も強化されたセクションです。
 
 現行版では `Moved` は将来拡張用の土台で、通常は主に Added / Removed / Increased / Decreased / Unchanged を使います。
 
-## 8. graceful degradation
+## 9. graceful degradation
 
 このツールは、解析できない箇所が一部あっても可能な範囲で処理を継続する設計です。
 
@@ -272,7 +503,7 @@ Phase 3 で最も強化されたセクションです。
 - section table が存在しない
 - HTML 出力先に書き込めない
 
-## 9. エラーメッセージ
+## 10. エラーメッセージ
 
 主なエラー:
 
@@ -285,9 +516,9 @@ Phase 3 で最も強化されたセクションです。
 
 CLI は panic を直接見せない方針です。原因候補が分かるように、可能な限り説明付きで返します。
 
-## 10. 典型的な使い方
+## 11. 典型的な使い方
 
-### 10.1 まず ELF だけ見る
+### 11.1 まず ELF だけ見る
 
 ```bash
 fwmap analyze --elf build/app.elf
@@ -298,7 +529,7 @@ fwmap analyze --elf build/app.elf
 - ビルド直後の基本サイズ確認
 - map がまだ無い場合の簡易確認
 
-### 10.2 object 寄与を見る
+### 11.2 object 寄与を見る
 
 ```bash
 fwmap analyze --elf build/app.elf --map build/app.map
@@ -309,7 +540,22 @@ fwmap analyze --elf build/app.elf --map build/app.map
 - object 単位で増加要因を探す
 - archive / member 由来のサイズ増加を見る
 
-### 10.3 回帰調査をする
+### 11.3 region 配置を見る
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --lds linker/app.ld
+```
+
+用途:
+
+- region 使用率を見る
+- section と region の対応を確認する
+- overflow に近い領域を早めに見つける
+
+### 11.4 回帰調査をする
 
 ```bash
 fwmap analyze \
@@ -326,12 +572,13 @@ fwmap analyze \
 - ライブラリアップデート後の影響確認
 - CI 導入前の手動差分調査
 
-## 11. 内部構成
+## 12. 内部構成
 
 現行の主要モジュール:
 
 - `cli`: 引数処理と実行制御
 - `ingest`: ELF / map の読み込み
+- `ingest/lds`: linker script subset 読み込み
 - `analyze`: 集計と warning 判定
 - `diff`: 差分計算と分類
 - `model`: 共通データ構造
@@ -342,28 +589,29 @@ fwmap analyze \
 - CLI: [src/cli.rs](/e:/work/git/fwmap/src/cli.rs)
 - ELF parser: [src/ingest/elf.rs](/e:/work/git/fwmap/src/ingest/elf.rs)
 - map parser: [src/ingest/map.rs](/e:/work/git/fwmap/src/ingest/map.rs)
+- linker script parser: [src/ingest/lds.rs](/e:/work/git/fwmap/src/ingest/lds.rs)
 - analyze: [src/analyze.rs](/e:/work/git/fwmap/src/analyze.rs)
 - diff: [src/diff.rs](/e:/work/git/fwmap/src/diff.rs)
 - render: [src/render.rs](/e:/work/git/fwmap/src/render.rs)
 
-## 12. 既知の制約
+## 13. 既知の制約
 
 - ELF は現在 `SHT_SYMTAB` を中心に参照
 - map は GNU ld の典型出力を優先
 - object path は主に map 由来
 - archive/member の表記揺れは主要ケース対応に留まる
-- linker script 非対応のため region 単位の厳密解析は未実装
+- linker script は subset 対応であり、複雑な式や完全構文には未対応
+- region 使用量は linker script と ELF section address を組み合わせた推定を含む
 - ROM/RAM はヒューリスティック集計
 
-## 13. 今後の予定
+## 14. 今後の予定
 
 ロードマップ上の次候補:
 
-- Phase 4: linker script / memory region 対応
 - Phase 5: JSON 出力と CI 連携
 - Phase 6: ルールエンジン分離
 
-## 14. テスト資産
+## 15. テスト資産
 
 `tests/fixtures/` には parser 回帰確認用の小さなサンプルがあります。
 
@@ -378,5 +626,6 @@ fwmap analyze \
 - `load_address.map`
 - `unparsed_block.map`
 - `mixed_case_regions.map`
+- `sample.ld`
 
 ELF の一部フィクスチャはテスト内で合成生成しています。
