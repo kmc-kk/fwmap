@@ -1,0 +1,4 @@
+Linker script and memory map
+
+.text           0x00000000       0x10
+ .text          0x00000000       0x10 build/nomem.o

@@ -2,9 +2,9 @@ use std::fs;
 use std::path::Path;
 
 use crate::analyze::format_bytes;
-use crate::model::{AnalysisResult, DiffEntry, DiffResult, WarningItem, WarningLevel};
+use crate::model::{AnalysisResult, DiffEntry, DiffResult, WarningItem};
 
-pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>) {
+pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, verbose: bool) {
     println!("ELF: {}", result.binary.path);
     println!(
         "ROM: {} | RAM: {} | Sections: {} | Symbols: {} | Warnings: {}",
@@ -12,10 +12,16 @@ pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>) {
         format_bytes(result.memory.ram_bytes),
         result.sections.len(),
         result.symbols.len(),
-        result.warnings.len() + result.ingest_warnings.len(),
+        result.warnings.len(),
     );
     if let Some(diff) = diff {
         println!("Diff: ROM {:+} bytes | RAM {:+} bytes", diff.rom_delta, diff.ram_delta);
+    }
+    if verbose && !result.warnings.is_empty() {
+        println!("Warnings:");
+        for item in &result.warnings {
+            println!("  [{}:{}] {}", item.source, item.code, item.message);
+        }
     }
 }
 
@@ -25,23 +31,13 @@ pub fn write_html_report(path: &Path, current: &AnalysisResult, diff: Option<&Di
 }
 
 fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
-    let warnings = current
-        .warnings
-        .iter()
-        .cloned()
-        .chain(current.ingest_warnings.iter().map(|message| WarningItem {
-            level: WarningLevel::Info,
-            code: "MAP_PARSE".to_string(),
-            message: message.to_string(),
-        }))
-        .collect::<Vec<_>>();
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>fwmap report</title><style>{}</style></head><body>{}</body></html>",
         style_block(),
         [
             header(current),
             overview(current, diff),
-            warning_section(&warnings),
+            warning_section(&current.warnings),
             memory_summary(current),
             section_breakdown(current),
             top_symbols(current),
@@ -84,7 +80,7 @@ fn overview(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
         current.sections.len(),
         format_bytes(current.memory.rom_bytes),
         format_bytes(current.memory.ram_bytes),
-        current.warnings.len() + current.ingest_warnings.len(),
+        current.warnings.len(),
         diff_html
     )
 }
@@ -95,10 +91,19 @@ fn warning_section(items: &[WarningItem]) -> String {
     } else {
         let rows = items
             .iter()
-            .map(|item| format!("<tr class=\"warn\"><td>{}</td><td>{}</td><td>{}</td></tr>", item.level, escape(&item.code), escape(&item.message)))
+            .map(|item| {
+                format!(
+                    "<tr class=\"warn\"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                    item.level,
+                    escape(&item.source.to_string()),
+                    escape(&item.code),
+                    escape(item.related.as_deref().unwrap_or("-")),
+                    escape(&item.message)
+                )
+            })
             .collect::<Vec<_>>()
             .join("");
-        format!("<table><thead><tr><th>Level</th><th>Code</th><th>Message</th></tr></thead><tbody>{rows}</tbody></table>")
+        format!("<table><thead><tr><th>Level</th><th>Source</th><th>Code</th><th>Related</th><th>Message</th></tr></thead><tbody>{rows}</tbody></table>")
     };
     format!("<section><h2>Warnings</h2>{body}</section>")
 }
@@ -250,7 +255,7 @@ mod tests {
     use super::write_html_report;
     use crate::model::{
         AnalysisResult, BinaryInfo, DiffEntry, DiffResult, MemorySummary, SectionCategory, SectionInfo, SectionTotal,
-        SymbolInfo, WarningItem, WarningLevel,
+        SymbolInfo, WarningItem, WarningLevel, WarningSource,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -281,6 +286,8 @@ mod tests {
             level: WarningLevel::Warn,
             code: "LARGE_SYMBOL".to_string(),
             message: "Large symbol detected".to_string(),
+            source: WarningSource::Analyze,
+            related: Some("main".to_string()),
         });
         let diff = DiffResult {
             rom_delta: 12,
@@ -340,7 +347,6 @@ mod tests {
                 memory_regions: Vec::new(),
             },
             warnings: Vec::new(),
-            ingest_warnings: Vec::new(),
         }
     }
 }

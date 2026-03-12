@@ -1,14 +1,14 @@
 use std::fs;
 use std::path::Path;
 
-use crate::model::{ArchiveContribution, MemoryRegion, ObjectContribution};
+use crate::model::{ArchiveContribution, MemoryRegion, ObjectContribution, WarningItem, WarningLevel, WarningSource};
 
 #[derive(Debug, Clone, Default)]
 pub struct MapIngestResult {
     pub object_contributions: Vec<ObjectContribution>,
     pub archive_contributions: Vec<ArchiveContribution>,
     pub memory_regions: Vec<MemoryRegion>,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<WarningItem>,
 }
 
 pub fn parse_map(path: &Path) -> Result<MapIngestResult, String> {
@@ -57,7 +57,11 @@ pub fn parse_map_str(text: &str) -> MapIngestResult {
             && !trimmed.starts_with("Allocating common symbols")
             && trimmed.chars().next().is_some_and(|c| c.is_alphabetic())
         {
-            result.warnings.push(format!("skipped unparsed map line: {trimmed}"));
+            result.warnings.push(map_warning(
+                "MAP_LINE_SKIPPED",
+                format!("Skipped unparsed map line {index}: {trimmed}"),
+                Some(format!("line:{index}")),
+            ));
         }
         index += 1;
     }
@@ -125,9 +129,16 @@ fn parse_contribution_line(line: &str) -> Option<(u64, &str)> {
 }
 
 fn split_archive_member(path: &str) -> Option<(&str, &str)> {
-    let start = path.find('(')?;
-    let end = path.rfind(')')?;
-    Some((&path[..start], &path[start + 1..end]))
+    if let Some(start) = path.find('(') {
+        let end = path.rfind(')')?;
+        return Some((&path[..start], &path[start + 1..end]));
+    }
+    let split = path.rsplit_once(':')?;
+    if split.0.ends_with(".a") {
+        Some(split)
+    } else {
+        None
+    }
 }
 
 fn parse_num(text: &str) -> Option<u64> {
@@ -135,6 +146,16 @@ fn parse_num(text: &str) -> Option<u64> {
         u64::from_str_radix(hex, 16).ok()
     } else {
         text.parse().ok()
+    }
+}
+
+fn map_warning(code: &str, message: String, related: Option<String>) -> WarningItem {
+    WarningItem {
+        level: WarningLevel::Info,
+        code: code.to_string(),
+        message,
+        source: WarningSource::Map,
+        related,
     }
 }
 
@@ -157,5 +178,45 @@ mod tests {
         let result = parse_map_str(text);
         assert!(!result.warnings.is_empty());
         assert!(!result.object_contributions.is_empty());
+    }
+
+    #[test]
+    fn parses_archive_member_colon_style() {
+        let text = include_str!("../../tests/fixtures/archive_colon.map");
+        let result = parse_map_str(text);
+        assert!(result
+            .archive_contributions
+            .iter()
+            .any(|item| item.archive_path.ends_with("libcolon.a") && item.member_path.as_deref() == Some("member.o")));
+    }
+
+    #[test]
+    fn tolerates_map_without_memory_configuration() {
+        let text = include_str!("../../tests/fixtures/no_memory_config.map");
+        let result = parse_map_str(text);
+        assert!(result.memory_regions.is_empty());
+        assert!(!result.object_contributions.is_empty());
+    }
+
+    #[test]
+    fn parses_decimal_sizes_and_tab_indentation() {
+        let decimal = parse_map_str(include_str!("../../tests/fixtures/decimal_sizes.map"));
+        assert_eq!(decimal.object_contributions[0].size, 32);
+
+        let tabbed = parse_map_str(include_str!("../../tests/fixtures/tab_indented.map"));
+        assert!(tabbed.object_contributions.iter().any(|item| item.object_path.ends_with("tabbed.o")));
+    }
+
+    #[test]
+    fn ignores_known_non_contribution_blocks() {
+        let result = parse_map_str(include_str!("../../tests/fixtures/unparsed_block.map"));
+        assert!(result.warnings.iter().all(|warning| warning.code != "MAP_LINE_SKIPPED"));
+        assert!(result.object_contributions.iter().any(|item| item.object_path.ends_with("common.o")));
+    }
+
+    #[test]
+    fn keeps_loading_when_output_section_has_load_address() {
+        let result = parse_map_str(include_str!("../../tests/fixtures/load_address.map"));
+        assert!(result.object_contributions.iter().any(|item| item.object_path.ends_with("load.o")));
     }
 }

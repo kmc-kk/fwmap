@@ -1,0 +1,9 @@
+Memory Configuration
+
+Name             Origin             Length             Attributes
+ram              0x20000000         0x00001000         xrw
+
+Linker script and memory map
+
+.bss            0x20000000       0x10
+	.bss          0x20000000       0x10 build/tabbed.o

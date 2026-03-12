@@ -69,6 +69,8 @@ pub struct WarningItem {
     pub level: WarningLevel,
     pub code: String,
     pub message: String,
+    pub source: WarningSource,
+    pub related: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,7 +82,6 @@ pub struct AnalysisResult {
     pub archive_contributions: Vec<ArchiveContribution>,
     pub memory: MemorySummary,
     pub warnings: Vec<WarningItem>,
-    pub ingest_warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +110,13 @@ pub enum WarningLevel {
     Error,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WarningSource {
+    Elf,
+    Map,
+    Analyze,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SectionCategory {
     Rom,
@@ -133,6 +141,17 @@ impl fmt::Display for SectionCategory {
             SectionCategory::Rom => "ROM",
             SectionCategory::Ram => "RAM",
             SectionCategory::Other => "Other",
+        };
+        write!(f, "{text}")
+    }
+}
+
+impl fmt::Display for WarningSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            WarningSource::Elf => "elf",
+            WarningSource::Map => "map",
+            WarningSource::Analyze => "analyze",
         };
         write!(f, "{text}")
     }

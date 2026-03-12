@@ -1,0 +1,10 @@
+Memory Configuration
+
+Name             Origin             Length             Attributes
+FLASH            0x00000000         0x00020000         xr
+RAM              0x20000000         0x00008000         xrw
+
+Linker script and memory map
+
+.text           0x00000000       0x20
+ .text          0x00000000       0x20 build/flash.o

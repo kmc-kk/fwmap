@@ -1,0 +1,12 @@
+Memory Configuration
+
+Name             Origin             Length             Attributes
+rom              0x00000000         0x00010000         xr
+
+Allocating common symbols
+Common symbol       size              file
+
+Linker script and memory map
+
+.text           0x00000000       0x10
+ .text          0x00000000       0x10 build/common.o

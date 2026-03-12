@@ -1,0 +1,9 @@
+Memory Configuration
+
+Name             Origin             Length             Attributes
+rom              0                  4096               xr
+
+Linker script and memory map
+
+.text           0                  32
+ .text          0                  32 build/decimal.o

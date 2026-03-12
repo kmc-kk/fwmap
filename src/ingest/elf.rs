@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::model::{BinaryInfo, SectionCategory, SectionInfo, SymbolInfo};
+use crate::model::{BinaryInfo, SectionCategory, SectionInfo, SymbolInfo, WarningItem, WarningLevel, WarningSource};
 
 const EI_CLASS: usize = 4;
 const EI_DATA: usize = 5;
@@ -20,6 +20,7 @@ pub struct ElfIngestResult {
     pub binary: BinaryInfo,
     pub sections: Vec<SectionInfo>,
     pub symbols: Vec<SymbolInfo>,
+    pub warnings: Vec<WarningItem>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -73,6 +74,19 @@ pub fn parse_elf(path: &Path) -> Result<ElfIngestResult, String> {
         _ => return Err(format!("unsupported ELF class in '{}'", path.display())),
     };
 
+    if shoff == 0 || shnum == 0 {
+        return Err(format!(
+            "ELF '{}' does not contain a section table; section-based analysis requires section headers",
+            path.display()
+        ));
+    }
+    if shentsize == 0 {
+        return Err(format!(
+            "ELF '{}' has an invalid section header entry size of 0",
+            path.display()
+        ));
+    }
+
     let raw_sections = parse_section_headers(&bytes, class, endian, shoff, shentsize, shnum)?;
     let section_names = build_string_table(&bytes, &raw_sections, shstrndx as usize)?;
     let sections = raw_sections
@@ -85,7 +99,7 @@ pub fn parse_elf(path: &Path) -> Result<ElfIngestResult, String> {
             category: classify_section(&string_at(&section_names, raw.name_offset), raw.flags),
         })
         .collect::<Vec<_>>();
-    let symbols = parse_symbols(&bytes, class, endian, &raw_sections, &section_names)?;
+    let (symbols, warnings) = parse_symbols(&bytes, class, endian, &raw_sections, &section_names)?;
 
     Ok(ElfIngestResult {
         binary: BinaryInfo {
@@ -99,6 +113,7 @@ pub fn parse_elf(path: &Path) -> Result<ElfIngestResult, String> {
         },
         sections,
         symbols,
+        warnings,
     })
 }
 
@@ -138,6 +153,9 @@ fn parse_section_headers(
         };
         sections.push(section);
     }
+    if sections.is_empty() {
+        return Err("ELF section header table is empty".to_string());
+    }
     Ok(sections)
 }
 
@@ -147,10 +165,29 @@ fn parse_symbols(
     endian: Endian,
     sections: &[RawSection],
     section_names: &[u8],
-) -> Result<Vec<SymbolInfo>, String> {
+) -> Result<(Vec<SymbolInfo>, Vec<WarningItem>), String> {
     let mut symbols = Vec::new();
-    for section in sections.iter().filter(|section| section.kind == SHT_SYMTAB) {
+    let mut warnings = Vec::new();
+    let symbol_tables = sections.iter().filter(|section| section.kind == SHT_SYMTAB).collect::<Vec<_>>();
+    if symbol_tables.is_empty() {
+        warnings.push(WarningItem {
+            level: WarningLevel::Info,
+            code: "NO_SYMBOL_TABLE".to_string(),
+            message: "ELF symbol table was not found; top symbol analysis is unavailable".to_string(),
+            source: WarningSource::Elf,
+            related: None,
+        });
+        return Ok((symbols, warnings));
+    }
+    for section in symbol_tables {
         if section.entsize == 0 {
+            warnings.push(WarningItem {
+                level: WarningLevel::Info,
+                code: "SYMTAB_ZERO_ENTSIZE".to_string(),
+                message: "Skipped a symbol table with zero entry size".to_string(),
+                source: WarningSource::Elf,
+                related: None,
+            });
             continue;
         }
         let strings = build_string_table(bytes, sections, section.link as usize)?;
@@ -189,7 +226,7 @@ fn parse_symbols(
             });
         }
     }
-    Ok(symbols)
+    Ok((symbols, warnings))
 }
 
 fn build_string_table(bytes: &[u8], sections: &[RawSection], index: usize) -> Result<Vec<u8>, String> {
@@ -310,6 +347,40 @@ mod tests {
         assert_eq!(result.binary.elf_class, "ELF64");
         assert!(result.sections.iter().any(|section| section.name == ".text"));
         assert!(result.symbols.iter().any(|symbol| symbol.name == "main"));
+        assert!(result.warnings.is_empty());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn parses_minimal_elf32_fixture() {
+        let path = temp_file("sample32.elf");
+        fs::write(&path, build_sample_elf32(true)).unwrap();
+        let result = parse_elf(&path).unwrap();
+        assert_eq!(result.binary.elf_class, "ELF32");
+        assert!(result.sections.iter().any(|section| section.name == ".text"));
+        assert!(result.symbols.iter().any(|symbol| symbol.name == "main"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn warns_when_symbol_table_is_missing() {
+        let path = temp_file("nosym.elf");
+        fs::write(&path, build_sample_elf32(false)).unwrap();
+        let result = parse_elf(&path).unwrap();
+        assert!(result.symbols.is_empty());
+        assert!(result.warnings.iter().any(|warning| warning.code == "NO_SYMBOL_TABLE"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn returns_clear_error_when_section_table_is_missing() {
+        let path = temp_file("nosection.elf");
+        let mut data = build_sample_elf32(false);
+        write_u32(&mut data, 32, 0);
+        write_u16(&mut data, 48, 0);
+        fs::write(&path, data).unwrap();
+        let err = parse_elf(&path).unwrap_err();
+        assert!(err.contains("does not contain a section table"));
         let _ = fs::remove_file(path);
     }
 
@@ -350,6 +421,47 @@ mod tests {
         data
     }
 
+    fn build_sample_elf32(with_symtab: bool) -> Vec<u8> {
+        let shnum = if with_symtab { 5u16 } else { 3u16 };
+        let mut data = vec![0u8; 0x260];
+        data[0..4].copy_from_slice(b"\x7fELF");
+        data[4] = 1;
+        data[5] = 1;
+        data[6] = 1;
+        write_u16(&mut data, 16, 2);
+        write_u16(&mut data, 18, 0x28);
+        write_u32(&mut data, 20, 1);
+        write_u32(&mut data, 32, 0x80);
+        write_u16(&mut data, 40, 52);
+        write_u16(&mut data, 46, 40);
+        write_u16(&mut data, 48, shnum);
+        write_u16(&mut data, 50, 1);
+
+        let shstrtab = if with_symtab {
+            b"\0.shstrtab\0.text\0.symtab\0.strtab\0".to_vec()
+        } else {
+            b"\0.shstrtab\0.text\0".to_vec()
+        };
+        let strtab = b"\0main\0";
+        let shdr = 0x80usize;
+
+        write_shdr32(&mut data, shdr + 40, 1, 3, 0, 0, 0x160, shstrtab.len() as u32, 0, 0, 1, 0);
+        write_shdr32(&mut data, shdr + 80, 11, 1, 0x6, 0x8000, 0x180, 4, 0, 0, 4, 0);
+        if with_symtab {
+            write_shdr32(&mut data, shdr + 120, 17, 2, 0, 0, 0x184, 32, 4, 1, 4, 16);
+            write_shdr32(&mut data, shdr + 160, 25, 3, 0, 0, 0x1a4, strtab.len() as u32, 0, 0, 1, 0);
+        }
+
+        data[0x160..0x160 + shstrtab.len()].copy_from_slice(&shstrtab);
+        data[0x180..0x184].copy_from_slice(&[0x00, 0xbe, 0x00, 0x20]);
+        if with_symtab {
+            write_sym32(&mut data, 0x184, 0, 0, 0, 0, 0, 0);
+            write_sym32(&mut data, 0x194, 1, 0x8000, 4, 0x12, 0, 2);
+            data[0x1a4..0x1a4 + strtab.len()].copy_from_slice(strtab);
+        }
+        data
+    }
+
     fn write_u16(buf: &mut [u8], offset: usize, value: u16) {
         buf[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
     }
@@ -360,6 +472,32 @@ mod tests {
 
     fn write_u64(buf: &mut [u8], offset: usize, value: u64) {
         buf[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_shdr32(
+        buf: &mut [u8],
+        offset: usize,
+        name: u32,
+        kind: u32,
+        flags: u32,
+        addr: u32,
+        file_offset: u32,
+        size: u32,
+        link: u32,
+        info: u32,
+        addralign: u32,
+        entsize: u32,
+    ) {
+        write_u32(buf, offset, name);
+        write_u32(buf, offset + 4, kind);
+        write_u32(buf, offset + 8, flags);
+        write_u32(buf, offset + 12, addr);
+        write_u32(buf, offset + 16, file_offset);
+        write_u32(buf, offset + 20, size);
+        write_u32(buf, offset + 24, link);
+        write_u32(buf, offset + 28, info);
+        write_u32(buf, offset + 32, addralign);
+        write_u32(buf, offset + 36, entsize);
     }
 
     fn write_shdr64(
@@ -395,5 +533,14 @@ mod tests {
         write_u16(buf, offset + 6, shndx);
         write_u64(buf, offset + 8, value);
         write_u64(buf, offset + 16, size);
+    }
+
+    fn write_sym32(buf: &mut [u8], offset: usize, name: u32, value: u32, size: u32, info: u8, other: u8, shndx: u16) {
+        write_u32(buf, offset, name);
+        write_u32(buf, offset + 4, value);
+        write_u32(buf, offset + 8, size);
+        buf[offset + 12] = info;
+        buf[offset + 13] = other;
+        write_u16(buf, offset + 14, shndx);
     }
 }

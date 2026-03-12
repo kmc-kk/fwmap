@@ -4,7 +4,7 @@ use std::path::Path;
 use crate::ingest::{elf, map};
 use crate::model::{
     AnalysisResult, ArchiveContribution, DiffEntry, DiffResult, MemorySummary, ObjectContribution, SectionCategory,
-    SectionInfo, SectionTotal, SymbolInfo, WarningItem, WarningLevel,
+    SectionInfo, SectionTotal, SymbolInfo, WarningItem, WarningLevel, WarningSource,
 };
 
 const ROM_USAGE_THRESHOLD: f64 = 0.85;
@@ -19,6 +19,10 @@ pub fn analyze_paths(elf_path: &Path, map_path: Option<&Path>) -> Result<Analysi
         None => None,
     };
     let memory = build_memory_summary(&elf.sections, map_data.as_ref().map(|item| item.memory_regions.as_slice()).unwrap_or(&[]));
+    let mut warnings = elf.warnings;
+    if let Some(map_data) = map_data.as_ref() {
+        warnings.extend(map_data.warnings.clone());
+    }
 
     let mut result = AnalysisResult {
         binary: elf.binary,
@@ -27,10 +31,9 @@ pub fn analyze_paths(elf_path: &Path, map_path: Option<&Path>) -> Result<Analysi
         object_contributions: aggregate_objects(map_data.as_ref().map(|item| item.object_contributions.as_slice()).unwrap_or(&[])),
         archive_contributions: aggregate_archives(map_data.as_ref().map(|item| item.archive_contributions.as_slice()).unwrap_or(&[])),
         memory,
-        warnings: Vec::new(),
-        ingest_warnings: map_data.map(|item| item.warnings).unwrap_or_default(),
+        warnings,
     };
-    result.warnings = evaluate_warnings(&result, None);
+    result.warnings.extend(evaluate_warnings(&result, None));
     Ok(result)
 }
 
@@ -115,6 +118,8 @@ pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>) ->
                 level: WarningLevel::Warn,
                 code: "ROM_THRESHOLD".to_string(),
                 message: format!("ROM usage exceeded {:.0}% ({:.1}%)", ROM_USAGE_THRESHOLD * 100.0, ratio * 100.0),
+                source: WarningSource::Analyze,
+                related: Some("rom".to_string()),
             });
         }
     }
@@ -126,6 +131,8 @@ pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>) ->
                 level: WarningLevel::Warn,
                 code: "RAM_THRESHOLD".to_string(),
                 message: format!("RAM usage exceeded {:.0}% ({:.1}%)", RAM_USAGE_THRESHOLD * 100.0, ratio * 100.0),
+                source: WarningSource::Analyze,
+                related: Some("ram".to_string()),
             });
         }
     }
@@ -135,6 +142,8 @@ pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>) ->
             level: WarningLevel::Warn,
             code: "LARGE_SYMBOL".to_string(),
             message: format!("Large symbol detected: {} ({})", symbol.name, format_bytes(symbol.size)),
+            source: WarningSource::Analyze,
+            related: Some(symbol.name.clone()),
         });
     }
 
@@ -147,6 +156,8 @@ pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>) ->
                         level: WarningLevel::Warn,
                         code: format!("{}_GROWTH", name.trim_start_matches('.').to_uppercase()),
                         message: format!("{name} grew by {:.1}% ({:+})", growth * 100.0, entry.delta),
+                        source: WarningSource::Analyze,
+                        related: Some(name.to_string()),
                     });
                 }
             }
@@ -156,6 +167,8 @@ pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>) ->
                 level: WarningLevel::Warn,
                 code: "SYMBOL_SPIKE".to_string(),
                 message: format!("Symbol growth spike: {} ({:+})", entry.name, entry.delta),
+                source: WarningSource::Analyze,
+                related: Some(entry.name.clone()),
             });
         }
     }
@@ -387,7 +400,6 @@ mod tests {
                 memory_regions: Vec::new(),
             },
             warnings: Vec::new(),
-            ingest_warnings: Vec::new(),
         }
     }
 }

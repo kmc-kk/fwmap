@@ -1,0 +1,9 @@
+Memory Configuration
+
+Name             Origin             Length             Attributes
+rom              0x00000000         0x00010000         xr
+
+Linker script and memory map
+
+.text           0x00000000       0x20 load address 0x00000000
+ .text          0x00000000       0x20 build/load.o

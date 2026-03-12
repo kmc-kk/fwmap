@@ -10,12 +10,21 @@
 - Top symbols and top object contributions
 - Optional previous-build diff
 - Fixed-threshold warnings
+- Graceful degradation for missing symbol tables and partially broken map files
+- `--verbose` and `--version` CLI support
 - Offline HTML report generation
 
 ## Usage
 
 ```bash
 cargo run -- analyze --elf path/to/app.elf
+```
+
+Version and verbose output:
+
+```bash
+cargo run -- --version
+cargo run -- analyze --elf path/to/app.elf --verbose
 ```
 
 With map information:
@@ -54,8 +63,9 @@ Default output path is `fwmap_report.html`.
 
 - [tests/fixtures/sample.map](/e:/work/git/fwmap/tests/fixtures/sample.map)
 - [tests/fixtures/broken.map](/e:/work/git/fwmap/tests/fixtures/broken.map)
+- [tests/fixtures/README.md](/e:/work/git/fwmap/tests/fixtures/README.md)
 
-ELF parser tests generate a minimal synthetic ELF fixture in the test body so the repository stays text-only.
+`tests/fixtures/` now contains 10+ small regression assets for map variations and parser failure modes. ELF parser tests still generate minimal synthetic ELF fixtures in test code so the repository stays lightweight.
 
 ## Development
 
@@ -67,9 +77,15 @@ cargo test
 
 - ELF parsing currently reads the standard symbol table (`SHT_SYMTAB`) only.
 - `map` parsing targets common GNU ld output and intentionally tolerates unknown lines with warnings.
+- Warning items now retain their source and related entity so skipped input can be explained in reports and verbose CLI output.
 - Object paths are sourced from the map file; when `--map` is omitted, symbol-to-object mapping is unavailable.
 - ROM/RAM estimation is heuristic and does not yet interpret linker scripts or load addresses exactly.
 - Demangling is not implemented.
+
+## CLI Compatibility
+
+- Existing `fwmap analyze --elf ...` usage remains valid.
+- `--verbose` and `--version` were added without changing existing flags.
 
 ## Planned Extensions
 
