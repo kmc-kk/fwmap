@@ -3,8 +3,8 @@ use std::path::Path;
 
 use crate::ingest::{elf, map};
 use crate::model::{
-    AnalysisResult, ArchiveContribution, DiffEntry, DiffResult, MemorySummary, ObjectContribution, SectionCategory,
-    SectionInfo, SectionTotal, SymbolInfo, WarningItem, WarningLevel, WarningSource,
+    AnalysisResult, ArchiveContribution, DiffResult, MemorySummary, ObjectContribution, SectionCategory, SectionInfo,
+    SectionTotal, SymbolInfo, WarningItem, WarningLevel, WarningSource,
 };
 
 const ROM_USAGE_THRESHOLD: f64 = 0.85;
@@ -68,44 +68,6 @@ pub fn build_memory_summary(sections: &[SectionInfo], regions: &[crate::model::M
 pub fn sorted_symbols(mut symbols: Vec<SymbolInfo>) -> Vec<SymbolInfo> {
     symbols.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
     symbols
-}
-
-pub fn diff_results(current: &AnalysisResult, previous: &AnalysisResult) -> DiffResult {
-    let section_diffs = diff_named(
-        current.memory.section_totals.iter().map(|item| (&item.section_name, item.size)),
-        previous.memory.section_totals.iter().map(|item| (&item.section_name, item.size)),
-    );
-    let symbol_diffs = diff_named(
-        current.symbols.iter().map(|item| (&item.name, item.size)),
-        previous.symbols.iter().map(|item| (&item.name, item.size)),
-    );
-    let object_diffs = diff_named(
-        current.object_contributions.iter().map(|item| (&item.object_path, item.size)),
-        previous.object_contributions.iter().map(|item| (&item.object_path, item.size)),
-    );
-
-    let current_symbols = current.symbols.iter().map(|symbol| (symbol.name.clone(), ())).collect::<BTreeMap<_, _>>();
-    let previous_symbols = previous.symbols.iter().map(|symbol| (symbol.name.clone(), ())).collect::<BTreeMap<_, _>>();
-    let added_symbols = current_symbols
-        .keys()
-        .filter(|name| !previous_symbols.contains_key(*name))
-        .cloned()
-        .collect();
-    let removed_symbols = previous_symbols
-        .keys()
-        .filter(|name| !current_symbols.contains_key(*name))
-        .cloned()
-        .collect();
-
-    DiffResult {
-        rom_delta: current.memory.rom_bytes as i64 - previous.memory.rom_bytes as i64,
-        ram_delta: current.memory.ram_bytes as i64 - previous.memory.ram_bytes as i64,
-        section_diffs,
-        symbol_diffs,
-        object_diffs,
-        added_symbols,
-        removed_symbols,
-    }
 }
 
 pub fn evaluate_warnings(current: &AnalysisResult, diff: Option<&DiffResult>) -> Vec<WarningItem> {
@@ -226,36 +188,13 @@ fn aggregate_archives(items: &[ArchiveContribution]) -> Vec<ArchiveContribution>
     result
 }
 
-fn diff_named<'a>(
-    current: impl Iterator<Item = (&'a String, u64)>,
-    previous: impl Iterator<Item = (&'a String, u64)>,
-) -> Vec<DiffEntry> {
-    let mut map = BTreeMap::<String, (u64, u64)>::new();
-    for (name, size) in current {
-        map.entry(name.clone()).or_default().0 = size;
-    }
-    for (name, size) in previous {
-        map.entry(name.clone()).or_default().1 = size;
-    }
-    let mut diffs = map
-        .into_iter()
-        .map(|(name, (current, previous))| DiffEntry {
-            name,
-            current,
-            previous,
-            delta: current as i64 - previous as i64,
-        })
-        .collect::<Vec<_>>();
-    diffs.sort_by(|a, b| b.delta.abs().cmp(&a.delta.abs()).then_with(|| a.name.cmp(&b.name)));
-    diffs
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{build_memory_summary, diff_results, evaluate_warnings, sorted_symbols};
+    use super::{build_memory_summary, evaluate_warnings, sorted_symbols};
+    use crate::diff::diff_results;
     use crate::model::{
-        AnalysisResult, BinaryInfo, DiffResult, MemoryRegion, MemorySummary, SectionCategory, SectionInfo, SectionTotal,
-        SymbolInfo,
+        AnalysisResult, BinaryInfo, DiffChangeKind, DiffResult, DiffSummary, MemoryRegion, MemorySummary,
+        SectionCategory, SectionInfo, SectionTotal, SymbolInfo,
     };
 
     #[test]
@@ -312,6 +251,7 @@ mod tests {
         assert_eq!(diff.ram_delta, 5);
         assert_eq!(diff.section_diffs[0].name, ".text");
         assert_eq!(diff.symbol_diffs[0].delta, 20);
+        assert_eq!(diff.symbol_diffs[0].change, DiffChangeKind::Increased);
     }
 
     #[test]
@@ -334,18 +274,21 @@ mod tests {
         let diff = DiffResult {
             rom_delta: 10,
             ram_delta: 8,
+            summary: DiffSummary::default(),
             section_diffs: vec![
                 crate::model::DiffEntry {
                     name: ".data".to_string(),
                     current: 42,
                     previous: 20,
                     delta: 22,
+                    change: DiffChangeKind::Increased,
                 },
                 crate::model::DiffEntry {
                     name: ".bss".to_string(),
                     current: 50,
                     previous: 40,
                     delta: 10,
+                    change: DiffChangeKind::Increased,
                 },
             ],
             symbol_diffs: vec![crate::model::DiffEntry {
@@ -353,10 +296,10 @@ mod tests {
                 current: 5000,
                 previous: 0,
                 delta: 5000,
+                change: DiffChangeKind::Added,
             }],
             object_diffs: Vec::new(),
-            added_symbols: Vec::new(),
-            removed_symbols: Vec::new(),
+            archive_diffs: Vec::new(),
         };
         let warnings = evaluate_warnings(&current, Some(&diff));
         assert!(warnings.iter().any(|w| w.code == "ROM_THRESHOLD"));

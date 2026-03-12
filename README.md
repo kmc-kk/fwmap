@@ -9,6 +9,7 @@
 - ROM/RAM summary and section breakdown
 - Top symbols and top object contributions
 - Optional previous-build diff
+- Classified diff analysis for sections, symbols, objects, and archive members
 - Fixed-threshold warnings
 - Graceful degradation for missing symbol tables and partially broken map files
 - `--verbose` and `--version` CLI support
@@ -49,6 +50,15 @@ cargo run -- analyze \
 
 Default output path is `fwmap_report.html`.
 
+When previous artifacts are present, the CLI also emits a short diff summary such as:
+
+```text
+ROM: +12345 bytes
+RAM: +2048 bytes
+Top growth symbol: foo_bar (+4096)
+Top growth object: drivers/net.o (+8192)
+```
+
 ## Report Contents
 
 - Overview: binary metadata, section count, ROM/RAM totals, warning count, optional diff totals
@@ -57,7 +67,7 @@ Default output path is `fwmap_report.html`.
 - Section Breakdown: per-section address, flags, and size
 - Top Symbols: largest symbols from the ELF symbol table
 - Top Object Contributions: object sizes from the map file
-- Diff: section/symbol/object deltas plus added/removed symbols
+- Diff: summary cards plus top section/symbol/object growth and added/removed lists
 
 ## Test Fixtures
 
@@ -86,10 +96,11 @@ cargo test
 
 - Existing `fwmap analyze --elf ...` usage remains valid.
 - `--verbose` and `--version` were added without changing existing flags.
+- Phase 3 only extends diff output; existing flags and required arguments are unchanged.
 
 ## Planned Extensions
 
 - Linker script awareness and region visualization
 - JSON output for CI
-- Richer archive/member aggregation
+- Region-aware placement analysis
 - Better demangling and C++ symbol analysis

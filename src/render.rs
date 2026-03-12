@@ -2,7 +2,8 @@ use std::fs;
 use std::path::Path;
 
 use crate::analyze::format_bytes;
-use crate::model::{AnalysisResult, DiffEntry, DiffResult, WarningItem};
+use crate::diff::{names_for_kind, top_increases};
+use crate::model::{AnalysisResult, DiffChangeKind, DiffEntry, DiffResult, WarningItem};
 
 pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, verbose: bool) {
     println!("ELF: {}", result.binary.path);
@@ -15,7 +16,19 @@ pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, ver
         result.warnings.len(),
     );
     if let Some(diff) = diff {
-        println!("Diff: ROM {:+} bytes | RAM {:+} bytes", diff.rom_delta, diff.ram_delta);
+        println!("ROM: {:+} bytes", diff.rom_delta);
+        println!("RAM: {:+} bytes", diff.ram_delta);
+        println!(
+            "Diff counts: sections +{} / -{} / ↑{} / ↓{}, symbols +{} / -{} / ↑{} / ↓{}",
+            diff.summary.section_added,
+            diff.summary.section_removed,
+            diff.summary.section_increased,
+            diff.summary.section_decreased,
+            diff.summary.symbol_added,
+            diff.summary.symbol_removed,
+            diff.summary.symbol_increased,
+            diff.summary.symbol_decreased
+        );
     }
     if verbose && !result.warnings.is_empty() {
         println!("Warnings:");
@@ -186,22 +199,39 @@ fn top_objects(current: &AnalysisResult) -> String {
 fn diff_section(diff: Option<&DiffResult>) -> String {
     match diff {
         Some(diff) => format!(
-            "<section><h2>Diff</h2>{}{}{}{}{}{} </section>",
-            diff_table("Section Diff", &diff.section_diffs, 20),
-            diff_table("Symbol Diff", &diff.symbol_diffs, 20),
-            diff_table("Object Diff", &diff.object_diffs, 20),
-            string_list("Added Symbols", &diff.added_symbols),
-            string_list("Removed Symbols", &diff.removed_symbols),
-            format!(
-                "<p><strong>ROM delta:</strong> <span class=\"{}\">{:+}</span> bytes, <strong>RAM delta:</strong> <span class=\"{}\">{:+}</span> bytes</p>",
-                delta_class(diff.rom_delta),
-                diff.rom_delta,
-                delta_class(diff.ram_delta),
-                diff.ram_delta
-            )
+            "<section><h2>Diff</h2>{}{}{}{}{}{}{} </section>",
+            diff_summary(diff),
+            diff_table("Top Section Growth", &top_increases(&diff.section_diffs, 10), 10),
+            diff_table("Top Symbol Growth", &top_increases(&diff.symbol_diffs, 10), 10),
+            diff_table("Top Object Growth", &top_increases(&diff.object_diffs, 10), 10),
+            string_list("Added Symbols", &names_for_kind(&diff.symbol_diffs, DiffChangeKind::Added, 20)),
+            string_list("Removed Symbols", &names_for_kind(&diff.symbol_diffs, DiffChangeKind::Removed, 20)),
+            string_list("Removed Objects", &names_for_kind(&diff.object_diffs, DiffChangeKind::Removed, 20)),
         ),
         None => "<section><h2>Diff</h2><p>No previous build was provided.</p></section>".to_string(),
     }
+}
+
+fn diff_summary(diff: &DiffResult) -> String {
+    format!(
+        "<div class=\"grid\"><div class=\"card\"><strong>ROM delta</strong><div class=\"{}\">{:+} bytes</div></div><div class=\"card\"><strong>RAM delta</strong><div class=\"{}\">{:+} bytes</div></div><div class=\"card\"><strong>Section changes</strong><div>+{} / -{} / ↑{} / ↓{}</div></div><div class=\"card\"><strong>Symbol changes</strong><div>+{} / -{} / ↑{} / ↓{}</div></div><div class=\"card\"><strong>Object changes</strong><div>+{} / -{} / ↑{} / ↓{}</div></div></div>",
+        delta_class(diff.rom_delta),
+        diff.rom_delta,
+        delta_class(diff.ram_delta),
+        diff.ram_delta,
+        diff.summary.section_added,
+        diff.summary.section_removed,
+        diff.summary.section_increased,
+        diff.summary.section_decreased,
+        diff.summary.symbol_added,
+        diff.summary.symbol_removed,
+        diff.summary.symbol_increased,
+        diff.summary.symbol_decreased,
+        diff.summary.object_added,
+        diff.summary.object_removed,
+        diff.summary.object_increased,
+        diff.summary.object_decreased,
+    )
 }
 
 fn diff_table(title: &str, entries: &[DiffEntry], limit: usize) -> String {
@@ -210,8 +240,9 @@ fn diff_table(title: &str, entries: &[DiffEntry], limit: usize) -> String {
         .take(limit)
         .map(|entry| {
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td class=\"{}\">{:+}</td></tr>",
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class=\"{}\">{:+}</td></tr>",
                 escape(&entry.name),
+                entry.change,
                 format_bytes(entry.current),
                 format_bytes(entry.previous),
                 delta_class(entry.delta),
@@ -220,7 +251,7 @@ fn diff_table(title: &str, entries: &[DiffEntry], limit: usize) -> String {
         })
         .collect::<Vec<_>>()
         .join("");
-    format!("<h3>{}</h3><table><thead><tr><th>Name</th><th>Current</th><th>Previous</th><th>Delta</th></tr></thead><tbody>{rows}</tbody></table>", escape(title))
+    format!("<h3>{}</h3><table><thead><tr><th>Name</th><th>Change</th><th>Current</th><th>Previous</th><th>Delta</th></tr></thead><tbody>{rows}</tbody></table>", escape(title))
 }
 
 fn string_list(title: &str, items: &[String]) -> String {
@@ -254,8 +285,8 @@ fn escape(text: &str) -> String {
 mod tests {
     use super::write_html_report;
     use crate::model::{
-        AnalysisResult, BinaryInfo, DiffEntry, DiffResult, MemorySummary, SectionCategory, SectionInfo, SectionTotal,
-        SymbolInfo, WarningItem, WarningLevel, WarningSource,
+        AnalysisResult, BinaryInfo, DiffChangeKind, DiffEntry, DiffResult, DiffSummary, MemorySummary, SectionCategory,
+        SectionInfo, SectionTotal, SymbolInfo, WarningItem, WarningLevel, WarningSource,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -292,16 +323,36 @@ mod tests {
         let diff = DiffResult {
             rom_delta: 12,
             ram_delta: -8,
+            summary: DiffSummary {
+                section_added: 1,
+                section_removed: 0,
+                section_increased: 1,
+                section_decreased: 0,
+                symbol_added: 1,
+                symbol_removed: 0,
+                symbol_increased: 0,
+                symbol_decreased: 0,
+                object_added: 0,
+                object_removed: 0,
+                object_increased: 0,
+                object_decreased: 0,
+            },
             section_diffs: vec![DiffEntry {
                 name: ".text".to_string(),
                 current: 128,
                 previous: 116,
                 delta: 12,
+                change: DiffChangeKind::Increased,
             }],
-            symbol_diffs: Vec::new(),
+            symbol_diffs: vec![DiffEntry {
+                name: "main".to_string(),
+                current: 64,
+                previous: 0,
+                delta: 64,
+                change: DiffChangeKind::Added,
+            }],
             object_diffs: Vec::new(),
-            added_symbols: vec!["main".to_string()],
-            removed_symbols: Vec::new(),
+            archive_diffs: Vec::new(),
         };
         write_html_report(&path, &analysis, Some(&diff)).unwrap();
         let html = fs::read_to_string(&path).unwrap();
@@ -309,6 +360,7 @@ mod tests {
         assert!(html.contains("Diff"));
         assert!(html.contains("LARGE_SYMBOL"));
         assert!(html.contains("Added Symbols"));
+        assert!(html.contains("Top Symbol Growth"));
         let _ = fs::remove_file(path);
     }
 

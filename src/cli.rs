@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use crate::analyze::{analyze_paths, diff_results, evaluate_warnings};
+use crate::analyze::{analyze_paths, evaluate_warnings};
+use crate::diff::{diff_results, top_increases};
 use crate::render::{print_cli_summary, write_html_report};
 
 const DEFAULT_OUT: &str = "fwmap_report.html";
@@ -42,6 +43,14 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
                 None
             };
             print_cli_summary(&current, diff.as_ref(), verbose);
+            if let Some(diff) = diff.as_ref() {
+                if let Some(symbol) = top_increases(&diff.symbol_diffs, 1).first() {
+                    println!("Top growth symbol: {} ({:+})", symbol.name, symbol.delta);
+                }
+                if let Some(object) = top_increases(&diff.object_diffs, 1).first() {
+                    println!("Top growth object: {} ({:+})", object.name, object.delta);
+                }
+            }
             write_html_report(&out, &current, diff.as_ref())?;
             println!("Report: {}", out.display());
             Ok(())

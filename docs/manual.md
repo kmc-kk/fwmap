@@ -1,63 +1,66 @@
-# fwmap Manual
+# fwmap マニュアル
 
-## Overview
+## 1. 概要
 
-`fwmap` is a local CLI tool for embedded firmware size analysis. It reads an `ELF` file and an optional GNU ld style `map` file, then generates a single HTML report that highlights ROM/RAM usage, large symbols, object contributions, and differences from a previous build.
+`fwmap` は、組込みファームウェアの `ELF` と GNU ld 系 `map` を解析し、ROM/RAM 使用量、主要シンボル、object 寄与、前回ビルドとの差分を可視化するローカル CLI ツールです。
 
-This prototype is designed for fast local verification. It works offline and focuses on practical questions:
+現行版は Phase 3 まで実装済みで、単純なサイズ表示だけでなく、差分原因の追跡を主機能として扱います。
 
-- Which sections are consuming ROM or RAM
-- Which symbols are the largest
-- Which object files contribute most
-- What increased compared with the previous build
+このツールで把握しやすい内容:
 
-## Supported Scope
+- どの section が ROM / RAM を使っているか
+- どの symbol が大きいか
+- どの object file がサイズに効いているか
+- 前回ビルドから何が増えたか、減ったか
+- 追加・削除・増加・減少のどれに当たるか
+
+## 2. 対応範囲
 
 - ELF32 / ELF64
-- Little-endian ELF is the main target
-- GNU ld style map files
-- Single HTML report output
-- Optional diff against a previous build
-- Fixed-threshold warnings
+- little-endian ELF を主対象
+- GNU ld 系 map
+- 単一 HTML レポート出力
+- 前回成果物との diff 比較
+- 固定しきい値ベースの warning
+- `--verbose` / `--version`
 
-Current limitations:
+現時点で未対応または限定的な内容:
 
-- Linker scripts are not parsed yet
-- Demangling is not implemented
-- ROM/RAM estimation is heuristic
-- Symbol-to-object mapping depends on the map file
-- Map parsing targets common GNU ld output, not every variant
+- linker script 解析
+- memory region ベース可視化
+- JSON 出力
+- CI 向け exit code 制御
+- demangle 改善
+- DWARF を用いたソース行解析
 
-## Installation and Build
+## 3. ビルドとテスト
 
-### Requirements
+前提:
 
 - Rust toolchain
-- Windows, Linux, or macOS
+- Windows / Linux / macOS
 
-### Build
+ビルド:
 
 ```bash
 cargo build
 ```
 
-### Test
+テスト:
 
 ```bash
 cargo test
 ```
 
-## Basic Usage
+## 4. 基本的な使い方
 
-### Analyze an ELF only
+### ELF のみ解析
 
 ```bash
 fwmap analyze --elf build/app.elf
 ```
 
-If `--out` is omitted, the report is written to `fwmap_report.html`.
-
-### Analyze an ELF with a map file
+### ELF と map を解析
 
 ```bash
 fwmap analyze \
@@ -66,7 +69,7 @@ fwmap analyze \
   --out report.html
 ```
 
-### Analyze with previous-build diff
+### 前回ビルドとの差分を解析
 
 ```bash
 fwmap analyze \
@@ -77,32 +80,66 @@ fwmap analyze \
   --out report.html
 ```
 
-### Help
+### バージョン表示
 
 ```bash
-fwmap --help
-fwmap analyze --help
+fwmap --version
 ```
 
-## CLI Options
+### 詳細 warning を表示
 
-| Option | Required | Description |
+```bash
+fwmap analyze --elf build/app.elf --verbose
+```
+
+`--out` を省略した場合は `fwmap_report.html` が出力されます。
+
+## 5. CLI オプション
+
+| オプション | 必須 | 説明 |
 | --- | --- | --- |
-| `--elf <path>` | Yes | Current ELF file |
-| `--map <path>` | No | Current GNU ld map file |
-| `--prev-elf <path>` | No | Previous ELF file for diff |
-| `--prev-map <path>` | No | Previous map file for diff |
-| `--out <path>` | No | Output HTML path |
-| `--help` | No | Show help |
+| `--elf <path>` | 必須 | 現在の ELF ファイル |
+| `--map <path>` | 任意 | 現在の GNU ld map ファイル |
+| `--prev-elf <path>` | 任意 | 比較用の前回 ELF |
+| `--prev-map <path>` | 任意 | 比較用の前回 map |
+| `--out <path>` | 任意 | HTML 出力先 |
+| `--verbose` | 任意 | warning 詳細を標準出力へ表示 |
+| `--version` | 任意 | バージョン表示 |
+| `--help` | 任意 | ヘルプ表示 |
 
-## Output
+## 6. 出力内容
 
-`fwmap` produces:
+`fwmap` は次の 2 種類を出力します。
 
-- CLI summary on standard output
-- One HTML report file
+- 標準出力: 実行サマリ
+- HTML: 単一ファイルのレポート
 
-The HTML report contains these sections:
+### 標準出力の例
+
+通常時:
+
+```text
+ELF: build/app.elf
+ROM: 32768 bytes (32.00 KiB) | RAM: 8192 bytes (8.00 KiB) | Sections: 24 | Symbols: 180 | Warnings: 1
+Report: fwmap_report.html
+```
+
+diff あり:
+
+```text
+ELF: build/app.elf
+ROM: 32768 bytes (32.00 KiB) | RAM: 8192 bytes (8.00 KiB) | Sections: 24 | Symbols: 180 | Warnings: 2
+ROM: +1024 bytes
+RAM: +256 bytes
+Diff counts: sections +1 / -0 / ↑3 / ↓1, symbols +2 / -1 / ↑4 / ↓3
+Top growth symbol: foo_bar (+512)
+Top growth object: drivers/net.o (+768)
+Report: fwmap_report.html
+```
+
+## 7. HTML レポートの見方
+
+HTML は以下の順で構成されます。
 
 1. Header
 2. Overview
@@ -114,127 +151,165 @@ The HTML report contains these sections:
 8. Diff
 9. Footer
 
-## Reading the Report
+### 7.1 Overview
 
-### Overview
+表示内容:
 
-Shows the binary path, architecture, ELF class, endian, total section count, ROM total, RAM total, warning count, and optional ROM/RAM diff.
+- 対象 ELF パス
+- アーキテクチャ
+- ELF class
+- endian
+- section 数
+- ROM 合計
+- RAM 合計
+- warning 件数
+- diff がある場合は ROM/RAM 差分
 
-### Warnings
+### 7.2 Warnings
 
-Warnings are generated from fixed rules:
+warning は source と関連対象付きで表示されます。
 
-- ROM usage over 85%
-- RAM usage over 85%
-- Large symbol at or above 4 KiB
-- `.data` growth over 5%
-- `.bss` growth over 5%
-- Large symbol growth spike in diff
-- Non-fatal map parse issues
+主な warning 例:
 
-### Memory Summary
+- ROM 使用率超過
+- RAM 使用率超過
+- 巨大 symbol 検出
+- `.data` 増加
+- `.bss` 増加
+- symbol 急増
+- symbol table 欠損
+- map の一部読み飛ばし
 
-Lists sections sorted by size and classifies them as:
+### 7.3 Memory Summary
+
+section をサイズ順に表示し、次のいずれかに分類します。
 
 - `ROM`
 - `RAM`
 - `Other`
 
-Current ROM/RAM rules are intentionally simple:
+現行の集計ルール:
 
-- ROM includes `.text`, `.rodata`, and read-only allocated sections
-- RAM includes `.data`, `.bss`, and writable allocated sections
+- ROM: `.text`, `.rodata`, read-only / executable な `ALLOC` section
+- RAM: `.data`, `.bss`, writable な `ALLOC` section
 
-### Section Breakdown
+### 7.4 Section Breakdown
 
-Shows per-section:
+section ごとの詳細:
 
-- name
-- address
-- size
+- 名前
+- アドレス
+- サイズ
 - flags
 
-This is useful when validating where a section landed and how large it is.
+メモリ配置の概況を目視確認する用途です。
 
-### Top Symbols
+### 7.5 Top Symbols
 
-Shows up to 50 largest symbols from the ELF symbol table with:
+ELF symbol table からサイズ上位を表示します。
 
-- symbol name
-- section name
-- object path if known
-- size
+表示項目:
 
-### Top Object Contributions
+- symbol 名
+- section 名
+- object 名
+- サイズ
 
-When a map file is provided, this section shows the largest object contributions. It helps track which object files are dominating image size.
+注意:
 
-### Diff
+- symbol table が無い ELF ではこの情報は空になります
+- その場合でも section summary と HTML 生成は継続します
 
-When previous inputs are provided, the report compares:
+### 7.6 Top Object Contributions
 
-- ROM total
-- RAM total
-- section sizes
-- symbol sizes
-- object contribution sizes
-- added symbols
-- removed symbols
+map がある場合に object ごとの寄与サイズ上位を表示します。
 
-Positive deltas indicate growth in the current build.
+これにより、どの object が増加に効いているかを追えます。
 
-## Input Recommendations
+### 7.7 Diff
 
-For the most useful output:
+Phase 3 で最も強化されたセクションです。
 
-- Always provide the `.elf`
-- Provide the `.map` when available
-- Provide both current and previous artifacts when investigating regressions
-- Use map files generated by GNU ld or compatible toolchains
+表示内容:
 
-## Error Handling
+- ROM 差分
+- RAM 差分
+- section 変化件数
+- symbol 変化件数
+- object 変化件数
+- 上位増加 section
+- 上位増加 symbol
+- 上位増加 object
+- Added Symbols
+- Removed Symbols
+- Removed Objects
 
-Typical user-facing errors:
+差分分類:
+
+- `Added`
+- `Removed`
+- `Increased`
+- `Decreased`
+- `Unchanged`
+- `Moved`
+
+現行版では `Moved` は将来拡張用の土台で、通常は主に Added / Removed / Increased / Decreased / Unchanged を使います。
+
+## 8. graceful degradation
+
+このツールは、解析できない箇所が一部あっても可能な範囲で処理を継続する設計です。
+
+例:
+
+- `--map` が無くても HTML は生成可能
+- symbol table が無くても section summary は生成可能
+- map に壊れた行があっても warning 化して継続
+
+完全停止しやすいケース:
+
+- ファイルが存在しない
+- ELF ではない
+- section table が存在しない
+- HTML 出力先に書き込めない
+
+## 9. エラーメッセージ
+
+主なエラー:
 
 - ELF file does not exist
 - map file does not exist
 - file is not an ELF
-- unsupported ELF class or endian
-- HTML report cannot be written
+- unsupported ELF class / endianness
+- ELF に section table が無い
+- HTML report の書き込み失敗
 
-Map parse failures are handled as warnings when possible so that the report can still be generated.
+CLI は panic を直接見せない方針です。原因候補が分かるように、可能な限り説明付きで返します。
 
-## Internal Structure
+## 10. 典型的な使い方
 
-The project is split into these modules:
-
-- `cli`: argument parsing and execution flow
-- `ingest`: ELF and map readers
-- `model`: shared data structures
-- `analyze`: summaries, diffs, warnings
-- `render`: CLI summary and HTML output
-
-This keeps parsing, analysis, and rendering separate so later features can be added without rewriting the whole tool.
-
-## Typical Workflows
-
-### Workflow 1: Quick local size check
+### 10.1 まず ELF だけ見る
 
 ```bash
 fwmap analyze --elf build/app.elf
 ```
 
-Use this when you want a fast section and symbol overview.
+用途:
 
-### Workflow 2: Investigate object growth
+- ビルド直後の基本サイズ確認
+- map がまだ無い場合の簡易確認
+
+### 10.2 object 寄与を見る
 
 ```bash
 fwmap analyze --elf build/app.elf --map build/app.map
 ```
 
-Use this when section totals alone are not enough and you need object-level contribution data.
+用途:
 
-### Workflow 3: Compare two builds
+- object 単位で増加要因を探す
+- archive / member 由来のサイズ増加を見る
+
+### 10.3 回帰調査をする
 
 ```bash
 fwmap analyze \
@@ -245,31 +320,63 @@ fwmap analyze \
   --out diff_report.html
 ```
 
-Use this when tracking regressions after a change set, library update, or feature merge.
+用途:
 
-## Known Constraints
+- マージ後のサイズ退行確認
+- ライブラリアップデート後の影響確認
+- CI 導入前の手動差分調査
 
-- Some GNU ld map variants may only be partially parsed
-- Archive/member aggregation is based on map line patterns
-- Exact memory-region usage is not available without linker script interpretation
-- Dynamic symbols and richer DWARF-based source attribution are out of scope
+## 11. 内部構成
 
-## Future Expansion
+現行の主要モジュール:
 
-Planned directions:
+- `cli`: 引数処理と実行制御
+- `ingest`: ELF / map の読み込み
+- `analyze`: 集計と warning 判定
+- `diff`: 差分計算と分類
+- `model`: 共通データ構造
+- `render`: CLI / HTML 出力
 
-- Linker script parsing
-- Memory region visualization
-- JSON output for CI pipelines
-- Better archive aggregation
-- Demangling improvements
-- C++ template bloat analysis
+主要ファイル:
 
-## File References
-
-- CLI entry: [src/cli.rs](/e:/work/git/fwmap/src/cli.rs)
+- CLI: [src/cli.rs](/e:/work/git/fwmap/src/cli.rs)
 - ELF parser: [src/ingest/elf.rs](/e:/work/git/fwmap/src/ingest/elf.rs)
-- Map parser: [src/ingest/map.rs](/e:/work/git/fwmap/src/ingest/map.rs)
-- Analysis: [src/analyze.rs](/e:/work/git/fwmap/src/analyze.rs)
-- Renderer: [src/render.rs](/e:/work/git/fwmap/src/render.rs)
+- map parser: [src/ingest/map.rs](/e:/work/git/fwmap/src/ingest/map.rs)
+- analyze: [src/analyze.rs](/e:/work/git/fwmap/src/analyze.rs)
+- diff: [src/diff.rs](/e:/work/git/fwmap/src/diff.rs)
+- render: [src/render.rs](/e:/work/git/fwmap/src/render.rs)
 
+## 12. 既知の制約
+
+- ELF は現在 `SHT_SYMTAB` を中心に参照
+- map は GNU ld の典型出力を優先
+- object path は主に map 由来
+- archive/member の表記揺れは主要ケース対応に留まる
+- linker script 非対応のため region 単位の厳密解析は未実装
+- ROM/RAM はヒューリスティック集計
+
+## 13. 今後の予定
+
+ロードマップ上の次候補:
+
+- Phase 4: linker script / memory region 対応
+- Phase 5: JSON 出力と CI 連携
+- Phase 6: ルールエンジン分離
+
+## 14. テスト資産
+
+`tests/fixtures/` には parser 回帰確認用の小さなサンプルがあります。
+
+例:
+
+- `sample.map`
+- `broken.map`
+- `archive_colon.map`
+- `no_memory_config.map`
+- `decimal_sizes.map`
+- `tab_indented.map`
+- `load_address.map`
+- `unparsed_block.map`
+- `mixed_case_regions.map`
+
+ELF の一部フィクスチャはテスト内で合成生成しています。

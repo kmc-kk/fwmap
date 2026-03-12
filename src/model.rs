@@ -90,17 +90,34 @@ pub struct DiffEntry {
     pub current: u64,
     pub previous: u64,
     pub delta: i64,
+    pub change: DiffChangeKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffResult {
     pub rom_delta: i64,
     pub ram_delta: i64,
+    pub summary: DiffSummary,
     pub section_diffs: Vec<DiffEntry>,
     pub symbol_diffs: Vec<DiffEntry>,
     pub object_diffs: Vec<DiffEntry>,
-    pub added_symbols: Vec<String>,
-    pub removed_symbols: Vec<String>,
+    pub archive_diffs: Vec<DiffEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DiffSummary {
+    pub section_added: usize,
+    pub section_removed: usize,
+    pub section_increased: usize,
+    pub section_decreased: usize,
+    pub symbol_added: usize,
+    pub symbol_removed: usize,
+    pub symbol_increased: usize,
+    pub symbol_decreased: usize,
+    pub object_added: usize,
+    pub object_removed: usize,
+    pub object_increased: usize,
+    pub object_decreased: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -122,6 +139,16 @@ pub enum SectionCategory {
     Rom,
     Ram,
     Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffChangeKind {
+    Added,
+    Removed,
+    Increased,
+    Decreased,
+    Unchanged,
+    Moved,
 }
 
 impl fmt::Display for WarningLevel {
@@ -152,6 +179,20 @@ impl fmt::Display for WarningSource {
             WarningSource::Elf => "elf",
             WarningSource::Map => "map",
             WarningSource::Analyze => "analyze",
+        };
+        write!(f, "{text}")
+    }
+}
+
+impl fmt::Display for DiffChangeKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            DiffChangeKind::Added => "Added",
+            DiffChangeKind::Removed => "Removed",
+            DiffChangeKind::Increased => "Increased",
+            DiffChangeKind::Decreased => "Decreased",
+            DiffChangeKind::Unchanged => "Unchanged",
+            DiffChangeKind::Moved => "Moved",
         };
         write!(f, "{text}")
     }
