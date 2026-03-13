@@ -141,8 +141,9 @@ pub fn build_ci_summary(
 
 fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>, source_options: SourceRenderOptions) -> String {
     format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>fwmap report</title><style>{}</style></head><body>{}</body></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>fwmap report</title><style>{}</style><script>{}</script></head><body>{}</body></html>",
         style_block(),
+        script_block(),
         [
             header(current),
             overview(current, diff),
@@ -158,6 +159,7 @@ fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>, source_option
             top_symbols(current),
             top_objects(current),
             diff_section(current, diff, source_options),
+            trend_links_section(current),
             footer(),
         ]
         .join("")
@@ -386,7 +388,11 @@ fn build_ci_json(
 }
 
 fn style_block() -> &'static str {
-    "body{font-family:Segoe UI,Arial,sans-serif;margin:24px;background:#f4f1ea;color:#1f2933}h1,h2,h3{margin-bottom:8px}section{background:#fff;padding:16px 18px;border-radius:10px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:8px;border-bottom:1px solid #d6dde5;text-align:left}th{background:#f0f4f8}.warn{background:#fff3cd}.mono{font-family:Consolas,monospace}.pos{color:#a61b1b}.neg{color:#0a7d33}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.card{background:#f8fafc;padding:12px;border-radius:8px}.muted{color:#52606d}"
+    "body{font-family:Segoe UI,Arial,sans-serif;margin:24px;background:#f4f1ea;color:#1f2933}h1,h2,h3{margin-bottom:8px}section{background:#fff;padding:16px 18px;border-radius:10px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:8px;border-bottom:1px solid #d6dde5;text-align:left;vertical-align:top}th{background:#f0f4f8}.warn{background:#fff3cd}.mono{font-family:Consolas,monospace}.pos{color:#a61b1b}.neg{color:#0a7d33}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.card{background:#f8fafc;padding:12px;border-radius:8px}.muted{color:#52606d}.toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 12px}.toolbar input{padding:8px 10px;border:1px solid #cbd2d9;border-radius:8px;min-width:180px;background:#fff}.pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#e9eff5;font-size:12px;color:#334e68}.path{display:inline-block;max-width:32rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.anchor{color:inherit;text-decoration:none}.anchor:hover{text-decoration:underline}.hidden{display:none}.hint{margin-top:8px;font-size:13px}"
+}
+
+fn script_block() -> &'static str {
+    "document.addEventListener('DOMContentLoaded',()=>{const apply=(target)=>{const table=document.getElementById(target);if(!table)return;const controls=[...document.querySelectorAll(`[data-filter-target=\"${target}\"]`)];const rows=[...table.querySelectorAll('tbody tr')];rows.forEach((row)=>{const visible=controls.every((control)=>{const key=control.dataset.filterKey;const value=control.value.trim().toLowerCase();if(!value)return true;return String(row.dataset[key]||'').toLowerCase().includes(value);});row.classList.toggle('hidden',!visible);});};document.querySelectorAll('[data-filter-target]').forEach((control)=>{control.addEventListener('input',()=>apply(control.dataset.filterTarget));apply(control.dataset.filterTarget);});});"
 }
 
 fn header(current: &AnalysisResult) -> String {
@@ -467,7 +473,7 @@ fn source_summary(current: &AnalysisResult) -> String {
         .collect::<Vec<_>>()
         .join("");
     format!(
-        "<section><h2>Source Summary</h2><p>Compilation units: {} | Unknown ratio: {:.1}%</p><table><thead><tr><th>Path</th><th>Line Ranges</th><th>Size</th></tr></thead><tbody>{}</tbody></table></section>",
+        "<section id=\"source-summary\"><h2>Source Summary</h2><p>Compilation units: {} | Unknown ratio: {:.1}%</p><p class=\"hint\">Use the trend links below to jump to ready-made history metrics for source files, functions, and unknown source ratio.</p><table><thead><tr><th>Path</th><th>Line Ranges</th><th>Size</th></tr></thead><tbody>{}</tbody></table></section>",
         current.debug_info.compilation_units,
         current.debug_info.unknown_source_ratio * 100.0,
         rows
@@ -483,11 +489,17 @@ fn source_files_section(current: &AnalysisResult) -> String {
         .iter()
         .take(30)
         .map(|item| {
+            let trend_id = trend_anchor_id("source", &item.path);
             format!(
-                "<tr><td title=\"{}\">{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr data-search=\"{} {}\" data-path=\"{}\"><td title=\"{}\"><a class=\"anchor path\" href=\"#{}\">{}</a></td><td><span class=\"path\" title=\"{}\">{}</span></td><td>{}</td><td>{}</td></tr>",
                 escape(&item.path),
-                escape(&item.display_path),
                 escape(&item.directory),
+                escape(&item.path),
+                escape(&item.path),
+                trend_id,
+                escape(&short_path(&item.display_path)),
+                escape(&item.directory),
+                escape(&short_path(&item.directory)),
                 item.functions,
                 format_bytes(item.size)
             )
@@ -495,7 +507,7 @@ fn source_files_section(current: &AnalysisResult) -> String {
         .collect::<Vec<_>>()
         .join("");
     format!(
-        "<section><h2>Source Files</h2><table><thead><tr><th>Path</th><th>Directory</th><th>Functions</th><th>Size</th></tr></thead><tbody>{rows}</tbody></table></section>"
+        "<section id=\"source-files\"><h2>Source Files</h2><div class=\"toolbar\"><input type=\"search\" placeholder=\"Search files\" data-filter-target=\"source-files-table\" data-filter-key=\"search\"><input type=\"search\" placeholder=\"Filter path\" data-filter-target=\"source-files-table\" data-filter-key=\"path\"></div><table id=\"source-files-table\"><thead><tr><th>Path</th><th>Directory</th><th>Functions</th><th>Size</th></tr></thead><tbody>{rows}</tbody></table></section>"
     )
 }
 
@@ -518,22 +530,39 @@ fn top_functions(current: &AnalysisResult) -> String {
                 .ranges
                 .iter()
                 .take(3)
-                .map(|range| format!("{}:{}-{}", range.path, range.line_start, range.line_end))
+                .map(|range| {
+                    let anchor = line_anchor_id(&range.path, range.line_start, range.line_end);
+                    format!(
+                        "<a class=\"anchor\" href=\"#{}\">{}:{}-{}</a>",
+                        anchor,
+                        escape(&short_path(&range.path)),
+                        range.line_start,
+                        range.line_end
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
+            let path = item.path.as_deref().unwrap_or("-");
+            let trend_id = trend_anchor_id("function", &function_metric_key(item.path.as_deref(), &item.raw_name));
             format!(
-                "<tr><td>{}{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr data-search=\"{} {} {}\" data-path=\"{}\"><td><a class=\"anchor\" href=\"#{}\">{}</a>{}</td><td><span class=\"path\" title=\"{}\">{}</span></td><td>{}</td><td>{}</td></tr>",
+                escape(name),
+                escape(&item.raw_name),
+                escape(path),
+                escape(path),
+                trend_id,
                 escape(name),
                 raw,
-                escape(item.path.as_deref().unwrap_or("-")),
-                escape(&ranges),
+                escape(path),
+                escape(&short_path(path)),
+                ranges,
                 format_bytes(item.size)
             )
         })
         .collect::<Vec<_>>()
         .join("");
     format!(
-        "<section><h2>Top Functions</h2><table><thead><tr><th>Function</th><th>Path</th><th>Ranges</th><th>Size</th></tr></thead><tbody>{rows}</tbody></table></section>"
+        "<section id=\"top-functions\"><h2>Top Functions</h2><div class=\"toolbar\"><input type=\"search\" placeholder=\"Search functions\" data-filter-target=\"top-functions-table\" data-filter-key=\"search\"><input type=\"search\" placeholder=\"Filter path\" data-filter-target=\"top-functions-table\" data-filter-key=\"path\"></div><table id=\"top-functions-table\"><thead><tr><th>Function</th><th>Path</th><th>Ranges</th><th>Size</th></tr></thead><tbody>{rows}</tbody></table></section>"
     )
 }
 
@@ -546,9 +575,17 @@ fn line_hotspots(current: &AnalysisResult) -> String {
         .iter()
         .take(30)
         .map(|item| {
+            let anchor = line_anchor_id(&item.path, item.line_start, item.line_end);
             format!(
-                "<tr><td>{}</td><td>{}-{} </td><td>{}</td><td>{}</td></tr>",
+                "<tr id=\"{}\" data-search=\"{} {}\" data-path=\"{}\" data-section=\"{}\"><td title=\"{}\"><a class=\"anchor path\" href=\"#{}\">{}</a></td><td>{}-{} </td><td>{}</td><td>{}</td></tr>",
+                anchor,
                 escape(&item.path),
+                escape(item.section_name.as_deref().unwrap_or("-")),
+                escape(&item.path),
+                escape(item.section_name.as_deref().unwrap_or("-")),
+                escape(&item.path),
+                anchor,
+                escape(&short_path(&item.path)),
                 item.line_start,
                 item.line_end,
                 escape(item.section_name.as_deref().unwrap_or("-")),
@@ -558,7 +595,7 @@ fn line_hotspots(current: &AnalysisResult) -> String {
         .collect::<Vec<_>>()
         .join("");
     format!(
-        "<section><h2>Line Hotspots</h2><table><thead><tr><th>Path</th><th>Lines</th><th>Section</th><th>Size</th></tr></thead><tbody>{rows}</tbody></table></section>"
+        "<section id=\"line-hotspots\"><h2>Line Hotspots</h2><div class=\"toolbar\"><input type=\"search\" placeholder=\"Search lines\" data-filter-target=\"line-hotspots-table\" data-filter-key=\"search\"><input type=\"search\" placeholder=\"Filter path\" data-filter-target=\"line-hotspots-table\" data-filter-key=\"path\"><input type=\"search\" placeholder=\"Filter section\" data-filter-target=\"line-hotspots-table\" data-filter-key=\"section\"></div><table id=\"line-hotspots-table\"><thead><tr><th>Path</th><th>Lines</th><th>Section</th><th>Size</th></tr></thead><tbody>{rows}</tbody></table></section>"
     )
 }
 
@@ -591,7 +628,9 @@ fn memory_regions(current: &AnalysisResult) -> String {
         .iter()
         .map(|region| {
             format!(
-                "<tr><td>{}</td><td class=\"mono\">0x{:x}</td><td>{}</td><td>{}</td><td>{:.1}%<div style=\"background:#d9e2ec;border-radius:999px;height:8px;margin-top:6px;\"><div style=\"width:{:.1}%;background:#c05621;height:8px;border-radius:999px;\"></div></div></td></tr>",
+                "<tr data-search=\"{}\" data-region=\"{}\"><td>{}</td><td class=\"mono\">0x{:x}</td><td>{}</td><td>{}</td><td>{:.1}%<div style=\"background:#d9e2ec;border-radius:999px;height:8px;margin-top:6px;\"><div style=\"width:{:.1}%;background:#c05621;height:8px;border-radius:999px;\"></div></div></td></tr>",
+                escape(&region.region_name),
+                escape(&region.region_name),
                 escape(&region.region_name),
                 region.origin,
                 format_bytes(region.used),
@@ -602,7 +641,7 @@ fn memory_regions(current: &AnalysisResult) -> String {
         })
         .collect::<Vec<_>>()
         .join("");
-    format!("<section><h2>Memory Regions Overview</h2><table><thead><tr><th>Region</th><th>Origin</th><th>Used</th><th>Free</th><th>Usage</th></tr></thead><tbody>{rows}</tbody></table></section>")
+    format!("<section id=\"memory-regions\"><h2>Memory Regions Overview</h2><div class=\"toolbar\"><input type=\"search\" placeholder=\"Filter region\" data-filter-target=\"memory-regions-table\" data-filter-key=\"region\"></div><table id=\"memory-regions-table\"><thead><tr><th>Region</th><th>Origin</th><th>Used</th><th>Free</th><th>Usage</th></tr></thead><tbody>{rows}</tbody></table></section>")
 }
 
 fn region_sections(current: &AnalysisResult) -> String {
@@ -622,7 +661,11 @@ fn region_sections(current: &AnalysisResult) -> String {
                     .iter()
                     .map(|section| {
                         format!(
-                            "<tr><td>{}</td><td class=\"mono\">0x{:x}</td><td>{}</td></tr>",
+                            "<tr data-search=\"{} {}\" data-region=\"{}\" data-section=\"{}\"><td>{}</td><td class=\"mono\">0x{:x}</td><td>{}</td></tr>",
+                            escape(&region.region_name),
+                            escape(&section.section_name),
+                            escape(&region.region_name),
+                            escape(&section.section_name),
                             escape(&section.section_name),
                             section.addr,
                             format_bytes(section.size)
@@ -632,14 +675,15 @@ fn region_sections(current: &AnalysisResult) -> String {
                     .join("")
             };
             format!(
-                "<h3>{}</h3><table><thead><tr><th>Section</th><th>Address</th><th>Size</th></tr></thead><tbody>{}</tbody></table>",
+                "<h3>{}</h3><table id=\"region-sections-{}\"><thead><tr><th>Section</th><th>Address</th><th>Size</th></tr></thead><tbody>{}</tbody></table>",
                 escape(&region.region_name),
+                slugify(&region.region_name),
                 rows
             )
         })
         .collect::<Vec<_>>()
         .join("");
-    format!("<section><h2>Region Sections</h2>{}</section>", blocks)
+    format!("<section id=\"region-sections\"><h2>Region Sections</h2><div class=\"toolbar\"><input type=\"search\" placeholder=\"Filter region or section\" data-filter-target=\"region-sections-all\" data-filter-key=\"search\"></div><div id=\"region-sections-all\">{}</div></section>", blocks)
 }
 
 fn section_breakdown(current: &AnalysisResult) -> String {
@@ -763,7 +807,7 @@ fn source_diff_section(current: &AnalysisResult, diff: &DiffResult, source_optio
     } else {
         format!("<h3>Unknown Source</h3><p>{:+} bytes</p>", diff.unknown_source_delta)
     };
-    format!("<h3>Source Diff</h3>{file_block}{function_block}{line_block}{unknown_block}")
+    format!("<h3 id=\"diff-source\">Source Diff</h3>{file_block}{function_block}{line_block}{unknown_block}")
 }
 
 fn filtered_line_diffs(diff: &DiffResult, source_options: SourceRenderOptions) -> Vec<DiffEntry> {
@@ -838,6 +882,42 @@ fn footer() -> String {
     "<section><h2>Footer</h2><p class=\"muted\">Generated locally by fwmap.</p></section>".to_string()
 }
 
+fn trend_links_section(current: &AnalysisResult) -> String {
+    if !current.debug_info.dwarf_used {
+        return String::new();
+    }
+    let mut blocks = Vec::new();
+    blocks.push(format!(
+        "<div id=\"{}\"><h3>Unknown Source Ratio</h3><p class=\"mono\">fwmap history trend --db history.db --metric unknown_source --last 20</p></div>",
+        trend_anchor_id("debug", "unknown_source")
+    ));
+    for source in current.source_files.iter().take(5) {
+        blocks.push(format!(
+            "<div id=\"{}\"><h3>Source Trend: {}</h3><p class=\"mono\">fwmap history trend --db history.db --metric \"source:{}\" --last 20</p></div>",
+            trend_anchor_id("source", &source.path),
+            escape(&short_path(&source.display_path)),
+            escape(&source.path)
+        ));
+        blocks.push(format!(
+            "<div id=\"{}\"><h3>Directory Trend: {}</h3><p class=\"mono\">fwmap history trend --db history.db --metric \"directory:{}\" --last 20</p></div>",
+            trend_anchor_id("directory", &source.directory),
+            escape(&short_path(&source.directory)),
+            escape(&source.directory)
+        ));
+    }
+    for function in current.function_attributions.iter().take(5) {
+        let key = function_metric_key(function.path.as_deref(), &function.raw_name);
+        let name = function.demangled_name.as_deref().unwrap_or(&function.raw_name);
+        blocks.push(format!(
+            "<div id=\"{}\"><h3>Function Trend: {}</h3><p class=\"mono\">fwmap history trend --db history.db --metric \"function:{}\" --last 20</p></div>",
+            trend_anchor_id("function", &key),
+            escape(name),
+            escape(&key)
+        ));
+    }
+    format!("<section id=\"trend-links\"><h2>Trend Links</h2>{}</section>", blocks.join(""))
+}
+
 fn delta_class(value: i64) -> &'static str {
     if value > 0 {
         "pos"
@@ -850,6 +930,37 @@ fn delta_class(value: i64) -> &'static str {
 
 fn escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+fn short_path(path: &str) -> String {
+    let separators = ['/', '\\'];
+    let parts = path.split(separators).collect::<Vec<_>>();
+    if parts.len() <= 3 {
+        return path.to_string();
+    }
+    format!("{}/.../{}", parts[0], parts[parts.len() - 1])
+}
+
+fn slugify(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch.to_ascii_lowercase() } else { '-' })
+        .collect::<String>()
+}
+
+fn line_anchor_id(path: &str, line_start: u64, line_end: u64) -> String {
+    format!("line-{}-{}-{}", slugify(path), line_start, line_end)
+}
+
+fn trend_anchor_id(kind: &str, key: &str) -> String {
+    format!("trend-{}-{}", kind, slugify(key))
+}
+
+fn function_metric_key(path: Option<&str>, raw_name: &str) -> String {
+    match path {
+        Some(path) => format!("{path}::{raw_name}"),
+        None => raw_name.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -878,6 +989,8 @@ mod tests {
         assert!(html.contains("Source Files"));
         assert!(html.contains("Top Functions"));
         assert!(html.contains("Line Hotspots"));
+        assert!(html.contains("Search files"));
+        assert!(html.contains("Trend Links"));
         assert!(html.contains("main"));
         let _ = fs::remove_file(path);
     }
@@ -904,7 +1017,7 @@ mod tests {
             "fwmap-report-diff-{}.html",
             SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
         ));
-        let mut analysis = sample_analysis();
+        let mut analysis = sample_analysis_with_sources();
         analysis.warnings.push(WarningItem {
             level: WarningLevel::Warn,
             code: "LARGE_SYMBOL".to_string(),
@@ -998,6 +1111,8 @@ mod tests {
         assert!(html.contains("Top Symbol Growth"));
         assert!(html.contains("Source Diff"));
         assert!(html.contains("Memory Regions Overview"));
+        assert!(html.contains("Filter section"));
+        assert!(html.contains("Unknown Source Ratio"));
         let _ = fs::remove_file(path);
     }
 

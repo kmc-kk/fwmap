@@ -498,7 +498,7 @@ fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--
 fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--dwarf=auto|on|off] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
 fwmap history list --db <path>
 fwmap history show --db <path> --build <id>
-fwmap history trend --db <path> --metric <rom|ram|warnings|region:NAME|section:NAME> [--last <n>]
+fwmap history trend --db <path> --metric <rom|ram|warnings|unknown_source|region:NAME|section:NAME|source:PATH|function:KEY|directory:PATH> [--last <n>]
 
 Options:
   --elf       Input ELF file (required)
@@ -530,7 +530,12 @@ Options:
   --threshold-symbol-growth Bytes threshold for symbol growth warning
   --verbose   Print detailed warnings to the console
   --version   Show version
-  --help      Show this help"
+  --help      Show this help
+
+History metrics:
+  rom | ram | warnings | unknown_source
+  region:FLASH | section:.text | source:src/main.cpp
+  function:src/main.cpp::_ZN3app4mainEv | directory:src/app"
     )
 }
 

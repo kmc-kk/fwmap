@@ -71,6 +71,10 @@ cargo run -- history record --db history.db --elf build/app.elf --map build/app.
 cargo run -- history list --db history.db
 cargo run -- history show --db history.db --build 1
 cargo run -- history trend --db history.db --metric rom --last 20
+cargo run -- history trend --db history.db --metric source:src/main.cpp --last 20
+cargo run -- history trend --db history.db --metric function:src/main.cpp::_ZN3app4mainEv --last 20
+cargo run -- history trend --db history.db --metric directory:src/app --last 20
+cargo run -- history trend --db history.db --metric unknown_source --last 20
 ```
 
 JSON report example:
@@ -340,8 +344,16 @@ Trend metrics:
 - `rom`
 - `ram`
 - `warnings`
+- `unknown_source`
 - `region:<name>`
 - `section:<name>`
+- `source:<path>`
+- `function:<path>::<raw_symbol>`
+- `directory:<path>`
+
+History details now also include DWARF availability, unknown-source ratio, top source files, and top functions for each recorded build.
+
+The HTML report now includes lightweight client-side search and filtering for source files, functions, line hotspots, memory regions, and region sections. Long paths are shortened in tables while preserving the full path in hover tooltips, and each source row links to a ready-made history trend command block.
 
 ## Development
 

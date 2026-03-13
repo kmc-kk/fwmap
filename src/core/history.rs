@@ -28,8 +28,11 @@ pub struct BuildRecord {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BuildDetail {
     pub build: BuildRecord,
+    pub debug_info: BuildDebugInfo,
     pub top_sections: Vec<(String, u64)>,
     pub regions: Vec<(String, u64, u64, f64)>,
+    pub top_source_files: Vec<(String, u64, usize, usize)>,
+    pub top_functions: Vec<(String, String, u64)>,
     pub warnings: Vec<(String, String, Option<String>)>,
 }
 
@@ -39,6 +42,23 @@ pub struct TrendPoint {
     pub created_at: i64,
     pub label: String,
     pub value: i64,
+    pub format: TrendFormat,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BuildDebugInfo {
+    pub dwarf_used: bool,
+    pub unknown_source_ratio: f64,
+    pub compilation_units: usize,
+    pub source_file_count: usize,
+    pub function_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrendFormat {
+    Bytes,
+    Count,
+    Percent,
 }
 
 pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, String> {
@@ -74,6 +94,28 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
     let build_id = conn.last_insert_rowid();
 
     {
+        // Keep source aggregates in separate tables so existing history databases can
+        // migrate forward by simply creating the new tables on first access.
+        let mut debug_stmt = conn
+            .prepare(
+                "INSERT INTO debug_metrics (
+                    build_id, dwarf_used, unknown_source_ratio, compilation_units, source_file_count, function_count
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .map_err(|err| format!("failed to prepare debug insert: {err}"))?;
+        debug_stmt
+            .execute(params![
+                build_id,
+                input.analysis.debug_info.dwarf_used as i64,
+                input.analysis.debug_info.unknown_source_ratio,
+                input.analysis.debug_info.compilation_units as i64,
+                input.analysis.source_files.len() as i64,
+                input.analysis.function_attributions.len() as i64
+            ])
+            .map_err(|err| format!("failed to insert debug metric: {err}"))?;
+    }
+
+    {
         let mut section_stmt = conn
             .prepare("INSERT INTO section_metrics (build_id, section_name, size_bytes, category) VALUES (?1, ?2, ?3, ?4)")
             .map_err(|err| format!("failed to prepare section insert: {err}"))?;
@@ -101,6 +143,55 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
                     region.usage_ratio
                 ])
                 .map_err(|err| format!("failed to insert region metric: {err}"))?;
+        }
+    }
+
+    {
+        let mut source_stmt = conn
+            .prepare(
+                "INSERT INTO source_file_metrics (
+                    build_id, path, display_path, directory, size_bytes, function_count, line_range_count
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )
+            .map_err(|err| format!("failed to prepare source file insert: {err}"))?;
+        for source in &input.analysis.source_files {
+            source_stmt
+                .execute(params![
+                    build_id,
+                    source.path,
+                    source.display_path,
+                    source.directory,
+                    source.size as i64,
+                    source.functions as i64,
+                    source.line_ranges as i64
+                ])
+                .map_err(|err| format!("failed to insert source file metric: {err}"))?;
+        }
+    }
+
+    {
+        let mut function_stmt = conn
+            .prepare(
+                "INSERT INTO function_metrics (
+                    build_id, function_key, raw_name, demangled_name, path, size_bytes
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .map_err(|err| format!("failed to prepare function insert: {err}"))?;
+        for function in &input.analysis.function_attributions {
+            let function_key = match function.path.as_deref() {
+                Some(path) => format!("{path}::{}", function.raw_name),
+                None => function.raw_name.clone(),
+            };
+            function_stmt
+                .execute(params![
+                    build_id,
+                    function_key,
+                    function.raw_name,
+                    function.demangled_name,
+                    function.path,
+                    function.size as i64
+                ])
+                .map_err(|err| format!("failed to insert function metric: {err}"))?;
         }
     }
 
@@ -185,6 +276,31 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
         return Ok(None);
     };
 
+    let debug_info = conn
+        .query_row(
+            "SELECT dwarf_used, unknown_source_ratio, compilation_units, source_file_count, function_count
+             FROM debug_metrics WHERE build_id = ?1",
+            params![build_id],
+            |row| {
+                Ok(BuildDebugInfo {
+                    dwarf_used: row.get::<_, i64>(0)? != 0,
+                    unknown_source_ratio: row.get(1)?,
+                    compilation_units: row.get::<_, i64>(2)? as usize,
+                    source_file_count: row.get::<_, i64>(3)? as usize,
+                    function_count: row.get::<_, i64>(4)? as usize,
+                })
+            },
+        )
+        .optional()
+        .map_err(|err| format!("failed to query debug detail: {err}"))?
+        .unwrap_or(BuildDebugInfo {
+            dwarf_used: false,
+            unknown_source_ratio: 0.0,
+            compilation_units: 0,
+            source_file_count: 0,
+            function_count: 0,
+        });
+
     let top_sections = query_pairs_i64(
         &conn,
         "SELECT section_name, size_bytes FROM section_metrics WHERE build_id = ?1 ORDER BY size_bytes DESC, section_name ASC LIMIT 10",
@@ -210,6 +326,41 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|err| format!("failed to collect region detail: {err}"))?
     };
+    let top_source_files = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT display_path, size_bytes, function_count, line_range_count
+                 FROM source_file_metrics WHERE build_id = ?1 ORDER BY size_bytes DESC, display_path ASC LIMIT 10",
+            )
+            .map_err(|err| format!("failed to prepare source file detail query: {err}"))?;
+        let rows = stmt
+            .query_map(params![build_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get::<_, i64>(2)? as usize,
+                    row.get::<_, i64>(3)? as usize,
+                ))
+            })
+            .map_err(|err| format!("failed to query source file detail: {err}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("failed to collect source file detail: {err}"))?
+    };
+    let top_functions = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT COALESCE(demangled_name, raw_name), COALESCE(path, '-'), size_bytes
+                 FROM function_metrics WHERE build_id = ?1 ORDER BY size_bytes DESC, raw_name ASC LIMIT 10",
+            )
+            .map_err(|err| format!("failed to prepare function detail query: {err}"))?;
+        let rows = stmt
+            .query_map(params![build_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? as u64))
+            })
+            .map_err(|err| format!("failed to query function detail: {err}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("failed to collect function detail: {err}"))?
+    };
     let warnings = {
         let mut stmt = conn
             .prepare(
@@ -225,8 +376,11 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
 
     Ok(Some(BuildDetail {
         build,
+        debug_info,
         top_sections,
         regions,
+        top_source_files,
+        top_functions,
         warnings,
     }))
 }
@@ -235,26 +389,80 @@ pub fn trend_metric(db_path: &Path, metric: &str, last: usize) -> Result<Vec<Tre
     let conn = open_history_db(db_path)?;
     init_schema(&conn)?;
     if metric.eq_ignore_ascii_case("rom") {
-        return query_simple_trend(&conn, "rom_bytes", "rom", last);
+        return query_simple_trend(&conn, "rom_bytes", "rom", last, TrendFormat::Bytes);
     }
     if metric.eq_ignore_ascii_case("ram") {
-        return query_simple_trend(&conn, "ram_bytes", "ram", last);
+        return query_simple_trend(&conn, "ram_bytes", "ram", last, TrendFormat::Bytes);
     }
     if metric.eq_ignore_ascii_case("warnings") {
-        return query_simple_trend(&conn, "warning_count", "warnings", last);
+        return query_simple_trend(&conn, "warning_count", "warnings", last, TrendFormat::Count);
+    }
+    if metric.eq_ignore_ascii_case("unknown_source") || metric.eq_ignore_ascii_case("unknown_source_ratio") {
+        return query_unknown_source_trend(&conn, last);
     }
     if let Some(region) = metric.strip_prefix("region:") {
-        return query_named_metric(&conn, "region_metrics", "region_name", "used_bytes", region, last);
+        return query_named_metric(
+            &conn,
+            "region_metrics",
+            "region_name",
+            "used_bytes",
+            region,
+            last,
+            TrendFormat::Bytes,
+            NamedMetricMode::ByName,
+        );
     }
     if let Some(section) = metric.strip_prefix("section:") {
-        return query_named_metric(&conn, "section_metrics", "section_name", "size_bytes", section, last);
+        return query_named_metric(
+            &conn,
+            "section_metrics",
+            "section_name",
+            "size_bytes",
+            section,
+            last,
+            TrendFormat::Bytes,
+            NamedMetricMode::ByName,
+        );
+    }
+    if let Some(path) = metric.strip_prefix("source:") {
+        return query_named_metric(
+            &conn,
+            "source_file_metrics",
+            "path",
+            "size_bytes",
+            path,
+            last,
+            TrendFormat::Bytes,
+            NamedMetricMode::ByName,
+        );
+    }
+    if let Some(path) = metric.strip_prefix("function:") {
+        return query_named_metric(
+            &conn,
+            "function_metrics",
+            "function_key",
+            "size_bytes",
+            path,
+            last,
+            TrendFormat::Bytes,
+            NamedMetricMode::ByName,
+        );
+    }
+    if let Some(directory) = metric.strip_prefix("directory:") {
+        return query_directory_trend(&conn, directory, last);
     }
     Err(format!(
-        "unsupported trend metric '{metric}', expected rom|ram|warnings|region:<name>|section:<name>"
+        "unsupported trend metric '{metric}', expected rom|ram|warnings|unknown_source|region:<name>|section:<name>|source:<path>|function:<key>|directory:<path>"
     ))
 }
 
-fn query_simple_trend(conn: &Connection, column: &str, label: &str, last: usize) -> Result<Vec<TrendPoint>, String> {
+fn query_simple_trend(
+    conn: &Connection,
+    column: &str,
+    label: &str,
+    last: usize,
+    format: TrendFormat,
+) -> Result<Vec<TrendPoint>, String> {
     let sql = format!(
         "SELECT id, created_at, {column} FROM builds ORDER BY id DESC LIMIT ?1"
     );
@@ -268,6 +476,7 @@ fn query_simple_trend(conn: &Connection, column: &str, label: &str, last: usize)
                 created_at: row.get(1)?,
                 label: label.to_string(),
                 value: row.get::<_, i64>(2)?,
+                format,
             })
         })
         .map_err(|err| format!("failed to query trend metric: {err}"))?;
@@ -285,6 +494,8 @@ fn query_named_metric(
     value_column: &str,
     name: &str,
     last: usize,
+    format: TrendFormat,
+    mode: NamedMetricMode,
 ) -> Result<Vec<TrendPoint>, String> {
     let sql = format!(
         "SELECT b.id, b.created_at, t.{value_column}
@@ -296,19 +507,76 @@ fn query_named_metric(
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|err| format!("failed to prepare named trend query: {err}"))?;
+    let mut points = match mode {
+        NamedMetricMode::ByName => stmt
+            .query_map(params![name, last as i64], |row| {
+                Ok(TrendPoint {
+                    build_id: row.get(0)?,
+                    created_at: row.get(1)?,
+                    label: name.to_string(),
+                    value: row.get::<_, i64>(2)?,
+                    format,
+                })
+            })
+            .map_err(|err| format!("failed to query named trend metric: {err}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("failed to collect named trend metric: {err}"))?,
+    };
+    points.reverse();
+    Ok(points)
+}
+
+fn query_directory_trend(conn: &Connection, directory: &str, last: usize) -> Result<Vec<TrendPoint>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT b.id, b.created_at, COALESCE(SUM(s.size_bytes), 0)
+             FROM builds b
+             LEFT JOIN source_file_metrics s ON s.build_id = b.id AND s.directory = ?1
+             GROUP BY b.id, b.created_at
+             ORDER BY b.id DESC LIMIT ?2",
+        )
+        .map_err(|err| format!("failed to prepare directory trend query: {err}"))?;
     let rows = stmt
-        .query_map(params![name, last as i64], |row| {
+        .query_map(params![directory, last as i64], |row| {
             Ok(TrendPoint {
                 build_id: row.get(0)?,
                 created_at: row.get(1)?,
-                label: name.to_string(),
+                label: directory.to_string(),
                 value: row.get::<_, i64>(2)?,
+                format: TrendFormat::Bytes,
             })
         })
-        .map_err(|err| format!("failed to query named trend metric: {err}"))?;
+        .map_err(|err| format!("failed to query directory trend metric: {err}"))?;
     let mut points = rows
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| format!("failed to collect named trend metric: {err}"))?;
+        .map_err(|err| format!("failed to collect directory trend metric: {err}"))?;
+    points.reverse();
+    Ok(points)
+}
+
+fn query_unknown_source_trend(conn: &Connection, last: usize) -> Result<Vec<TrendPoint>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT b.id, b.created_at, CAST(d.unknown_source_ratio * 1000.0 AS INTEGER)
+             FROM builds b
+             JOIN debug_metrics d ON d.build_id = b.id
+             ORDER BY b.id DESC LIMIT ?1",
+        )
+        .map_err(|err| format!("failed to prepare unknown-source trend query: {err}"))?;
+    let rows = stmt
+        .query_map(params![last as i64], |row| {
+            Ok(TrendPoint {
+                build_id: row.get(0)?,
+                created_at: row.get(1)?,
+                label: "unknown_source".to_string(),
+                value: row.get::<_, i64>(2)?,
+                format: TrendFormat::Percent,
+            })
+        })
+        .map_err(|err| format!("failed to query unknown-source trend metric: {err}"))?;
+    let mut points = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("failed to collect unknown-source trend metric: {err}"))?;
     points.reverse();
     Ok(points)
 }
@@ -340,6 +608,14 @@ pub fn print_build_detail(detail: &BuildDetail) {
         detail.build.warning_count,
         detail.build.error_count
     );
+    println!(
+        "DWARF: {} | Unknown ratio: {:.1}% | CUs: {} | Source files: {} | Functions: {}",
+        if detail.debug_info.dwarf_used { "used" } else { "not used" },
+        detail.debug_info.unknown_source_ratio * 100.0,
+        detail.debug_info.compilation_units,
+        detail.debug_info.source_file_count,
+        detail.debug_info.function_count
+    );
     if !detail.build.metadata.is_empty() {
         println!("Metadata:");
         for (key, value) in &detail.build.metadata {
@@ -358,6 +634,18 @@ pub fn print_build_detail(detail: &BuildDetail) {
             println!("  {} used={} free={} usage={:.1}%", name, used, free, usage_ratio * 100.0);
         }
     }
+    if !detail.top_source_files.is_empty() {
+        println!("Top source files:");
+        for (path, size, functions, ranges) in &detail.top_source_files {
+            println!("  {} {} functions={} line_ranges={}", path, size, functions, ranges);
+        }
+    }
+    if !detail.top_functions.is_empty() {
+        println!("Top functions:");
+        for (name, path, size) in &detail.top_functions {
+            println!("  {} {} {}", name, path, size);
+        }
+    }
     if !detail.warnings.is_empty() {
         println!("Warnings:");
         for (code, level, related) in &detail.warnings {
@@ -372,8 +660,23 @@ pub fn print_trend(points: &[TrendPoint]) {
         return;
     }
     for point in points {
-        println!("#{} {} {}={}", point.build_id, point.created_at, point.label, point.value);
+        match point.format {
+            TrendFormat::Bytes => println!("#{} {} {}={}", point.build_id, point.created_at, point.label, point.value),
+            TrendFormat::Count => println!("#{} {} {}={}", point.build_id, point.created_at, point.label, point.value),
+            TrendFormat::Percent => println!(
+                "#{} {} {}={:.1}%",
+                point.build_id,
+                point.created_at,
+                point.label,
+                point.value as f64 / 10.0
+            ),
+        }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NamedMetricMode {
+    ByName,
 }
 
 fn query_pairs_i64(conn: &Connection, sql: &str, build_id: i64) -> Result<Vec<(String, u64)>, String> {
@@ -429,6 +732,39 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             related TEXT,
             message TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS debug_metrics (
+            build_id INTEGER PRIMARY KEY REFERENCES builds(id) ON DELETE CASCADE,
+            dwarf_used INTEGER NOT NULL,
+            unknown_source_ratio REAL NOT NULL,
+            compilation_units INTEGER NOT NULL,
+            source_file_count INTEGER NOT NULL,
+            function_count INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS source_file_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            build_id INTEGER NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            display_path TEXT NOT NULL,
+            directory TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            function_count INTEGER NOT NULL,
+            line_range_count INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS function_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            build_id INTEGER NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+            function_key TEXT NOT NULL,
+            raw_name TEXT NOT NULL,
+            demangled_name TEXT,
+            path TEXT,
+            size_bytes INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS schema_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        INSERT INTO schema_meta(key, value) VALUES ('history_schema_version', '2')
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value;
         ",
     )
     .map_err(|err| format!("failed to initialize history database schema: {err}"))
@@ -447,7 +783,7 @@ fn now_unix() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{list_builds, record_build, show_build, trend_metric, HistoryRecordInput};
+    use super::{list_builds, record_build, show_build, trend_metric, HistoryRecordInput, TrendFormat};
     use crate::model::{
         AnalysisResult, BinaryInfo, DebugInfoSummary, MemorySummary, SectionCategory, SectionTotal, SymbolInfo,
         ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket, WarningItem, WarningLevel,
@@ -475,6 +811,9 @@ mod tests {
         assert_eq!(items[0].id, id);
         let detail = show_build(&db, id).unwrap().unwrap();
         assert_eq!(detail.build.metadata.get("commit").map(String::as_str), Some("abc123"));
+        assert_eq!(detail.debug_info.source_file_count, 1);
+        assert_eq!(detail.top_source_files.len(), 1);
+        assert_eq!(detail.top_functions.len(), 1);
         let _ = fs::remove_file(db);
     }
 
@@ -502,6 +841,10 @@ mod tests {
         assert_eq!(rom[1].value, 120);
         let warnings = trend_metric(&db, "warnings", 10).unwrap();
         assert_eq!(warnings[1].value, 2);
+        let source = trend_metric(&db, "source:src/main.cpp", 10).unwrap();
+        assert_eq!(source[1].value, 120);
+        let unknown = trend_metric(&db, "unknown_source", 10).unwrap();
+        assert_eq!(unknown[1].format, TrendFormat::Percent);
         let _ = fs::remove_file(db);
     }
 
@@ -523,7 +866,13 @@ mod tests {
                 detected: None,
                 resolved: ToolchainKind::Gnu,
             },
-            debug_info: DebugInfoSummary::default(),
+            debug_info: DebugInfoSummary {
+                dwarf_mode: crate::model::DwarfMode::Auto,
+                source_lines: crate::model::SourceLinesMode::All,
+                dwarf_used: true,
+                unknown_source_ratio: if rom + ram == 0 { 0.0 } else { ram as f64 / (rom + ram) as f64 },
+                compilation_units: 1,
+            },
             sections: Vec::new(),
             symbols: vec![SymbolInfo {
                 name: "main".to_string(),
@@ -555,11 +904,32 @@ mod tests {
                 region_summaries: Vec::new(),
             },
             compilation_units: Vec::new(),
-            source_files: Vec::new(),
+            source_files: vec![crate::model::SourceFile {
+                path: "src/main.cpp".to_string(),
+                display_path: "src/main.cpp".to_string(),
+                directory: "src".to_string(),
+                size: rom,
+                functions: 1,
+                line_ranges: 1,
+            }],
             line_attributions: Vec::new(),
             line_hotspots: Vec::new(),
-            function_attributions: Vec::new(),
-            unknown_source: UnknownSourceBucket::default(),
+            function_attributions: vec![crate::model::FunctionAttribution {
+                raw_name: "_ZN4mainEv".to_string(),
+                demangled_name: Some("main()".to_string()),
+                path: Some("src/main.cpp".to_string()),
+                size: rom,
+                ranges: vec![crate::model::SourceSpan {
+                    path: "src/main.cpp".to_string(),
+                    line_start: 10,
+                    line_end: 12,
+                    column: None,
+                }],
+            }],
+            unknown_source: UnknownSourceBucket {
+                size: ram,
+                ranges: Vec::new(),
+            },
             warnings: (0..warnings)
                 .map(|index| WarningItem {
                     level: if index == warnings.saturating_sub(1) && warnings > 1 {
