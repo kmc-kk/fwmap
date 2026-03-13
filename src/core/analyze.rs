@@ -6,7 +6,7 @@ use crate::ingest::{dwarf, elf, lds, map};
 use crate::model::{
     AnalysisResult, ArchiveContribution, CustomRule, DemangleMode, DiffResult, DwarfMode, FunctionAttribution,
     LineAttribution, LineRangeAttribution, LinkerFamily, MapFormat, MapFormatSelection, MemoryRegion, MemorySummary,
-    ObjectContribution, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement,
+    ObjectContribution, ObjectSourceKind, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement,
     SectionTotal, SourceFile, SourceLinesMode, SourceSpan, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind,
     ToolchainSelection, WarningItem,
 };
@@ -334,14 +334,17 @@ fn compress_source_spans(mut spans: Vec<SourceSpan>) -> Vec<SourceSpan> {
 }
 
 fn aggregate_objects(items: &[ObjectContribution]) -> Vec<ObjectContribution> {
-    let mut totals = BTreeMap::<(String, Option<String>), u64>::new();
+    let mut totals = BTreeMap::<(String, ObjectSourceKind, Option<String>), u64>::new();
     for item in items {
-        *totals.entry((item.object_path.clone(), item.section_name.clone())).or_default() += item.size;
+        *totals
+            .entry((item.object_path.clone(), item.source_kind, item.section_name.clone()))
+            .or_default() += item.size;
     }
     let mut result = totals
         .into_iter()
-        .map(|((object_path, section_name), size)| ObjectContribution {
+        .map(|((object_path, source_kind, section_name), size)| ObjectContribution {
             object_path,
+            source_kind,
             section_name,
             size,
         })

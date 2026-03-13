@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::model::{AnalysisResult, ArchiveContribution, DiffChangeKind, DiffEntry, DiffResult, DiffSummary};
+use crate::model::{AnalysisResult, ArchiveContribution, DiffChangeKind, DiffEntry, DiffResult, DiffSummary, ObjectSourceKind};
 
 pub fn diff_results(current: &AnalysisResult, previous: &AnalysisResult) -> DiffResult {
     let section_diffs = diff_named(
@@ -12,8 +12,14 @@ pub fn diff_results(current: &AnalysisResult, previous: &AnalysisResult) -> Diff
         previous.symbols.iter().map(|item| (symbol_key(&item.name), item.size)),
     );
     let object_diffs = diff_named(
-        current.object_contributions.iter().map(|item| (object_key(&item.object_path), item.size)),
-        previous.object_contributions.iter().map(|item| (object_key(&item.object_path), item.size)),
+        current
+            .object_contributions
+            .iter()
+            .map(|item| (object_key(item.source_kind, &item.object_path), item.size)),
+        previous
+            .object_contributions
+            .iter()
+            .map(|item| (object_key(item.source_kind, &item.object_path), item.size)),
     );
     let archive_diffs = diff_named(
         current.archive_contributions.iter().map(|item| (archive_member_key(item), item.size)),
@@ -95,8 +101,12 @@ pub fn symbol_key(name: &str) -> String {
     name.to_string()
 }
 
-pub fn object_key(path: &str) -> String {
-    path.to_string()
+pub fn object_key(kind: ObjectSourceKind, path: &str) -> String {
+    match kind {
+        ObjectSourceKind::Object => path.to_string(),
+        // Preserve the visible <internal> marker while preventing collisions with a real file path.
+        ObjectSourceKind::Internal => format!("[internal] {path}"),
+    }
 }
 
 pub fn source_file_key(path: &str) -> String {
@@ -204,8 +214,8 @@ mod tests {
     };
     use crate::model::{
         AnalysisResult, ArchiveContribution, BinaryInfo, DebugInfoSummary, DiffChangeKind, FunctionAttribution,
-        LineRangeAttribution, MemorySummary, ObjectContribution, SectionCategory, SectionTotal, SourceFile, SourceSpan,
-        SymbolInfo, ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket,
+        LineRangeAttribution, MemorySummary, ObjectContribution, ObjectSourceKind, SectionCategory, SectionTotal,
+        SourceFile, SourceSpan, SymbolInfo, ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket,
     };
 
     #[test]
@@ -240,7 +250,8 @@ mod tests {
         assert!(names_for_kind(&diff.symbol_diffs, DiffChangeKind::Removed, 10).contains(&"c".to_string()));
         assert_eq!(section_key(".text"), ".text");
         assert_eq!(symbol_key("foo"), "foo");
-        assert_eq!(object_key("bar.o"), "bar.o");
+        assert_eq!(object_key(ObjectSourceKind::Object, "bar.o"), "bar.o");
+        assert_eq!(object_key(ObjectSourceKind::Internal, "<internal>"), "[internal] <internal>");
         assert_eq!(source_file_key("src/main.c"), "src/main.c");
         assert_eq!(function_key(Some("src/main.c"), "main"), "src/main.c::main");
         assert_eq!(line_key("src/main.c", 10, 12), "src/main.c:10-12");
@@ -351,6 +362,7 @@ mod tests {
                 .iter()
                 .map(|(path, size)| ObjectContribution {
                     object_path: (*path).to_string(),
+                    source_kind: ObjectSourceKind::Object,
                     section_name: None,
                     size: *size,
                 })

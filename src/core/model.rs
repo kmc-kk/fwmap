@@ -33,8 +33,16 @@ pub struct SymbolInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ObjectContribution {
     pub object_path: String,
+    pub source_kind: ObjectSourceKind,
     pub section_name: Option<String>,
     pub size: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectSourceKind {
+    Object,
+    Internal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

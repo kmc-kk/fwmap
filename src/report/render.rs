@@ -4,7 +4,10 @@ use std::path::Path;
 use crate::analyze::format_bytes;
 use crate::demangle::display_name;
 use crate::diff::{names_for_kind, top_increases};
-use crate::model::{AnalysisResult, CiFormat, DiffChangeKind, DiffEntry, DiffResult, ThresholdConfig, WarningItem, WarningLevel};
+use crate::model::{
+    AnalysisResult, CiFormat, DiffChangeKind, DiffEntry, DiffResult, ObjectSourceKind, ThresholdConfig, WarningItem,
+    WarningLevel,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SourceRenderOptions {
@@ -774,15 +777,25 @@ fn top_objects(current: &AnalysisResult) -> String {
         .take(30)
         .map(|item| {
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                 escape(&item.object_path),
+                escape(object_source_kind_label(item.source_kind)),
                 escape(item.section_name.as_deref().unwrap_or("-")),
                 format_bytes(item.size)
             )
         })
         .collect::<Vec<_>>()
         .join("");
-    format!("<section><h2>Top Object Contributions</h2><table><thead><tr><th>Object</th><th>Section</th><th>Size</th></tr></thead><tbody>{rows}</tbody></table></section>")
+    format!(
+        "<section><h2>Top Object Contributions</h2><table><thead><tr><th>Object</th><th>Kind</th><th>Section</th><th>Size</th></tr></thead><tbody>{rows}</tbody></table></section>"
+    )
+}
+
+fn object_source_kind_label(kind: ObjectSourceKind) -> &'static str {
+    match kind {
+        ObjectSourceKind::Object => "object",
+        ObjectSourceKind::Internal => "internal",
+    }
 }
 
 fn diff_section(current: &AnalysisResult, diff: Option<&DiffResult>, source_options: SourceRenderOptions) -> String {

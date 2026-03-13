@@ -2,8 +2,8 @@ use std::fs;
 use std::path::Path;
 
 use crate::model::{
-    ArchiveContribution, LinkerFamily, MapFormat, MapFormatSelection, MemoryRegion, ObjectContribution, ToolchainKind,
-    ToolchainSelection, WarningItem, WarningLevel, WarningSource,
+    ArchiveContribution, LinkerFamily, MapFormat, MapFormatSelection, MemoryRegion, ObjectContribution,
+    ObjectSourceKind, ToolchainKind, ToolchainSelection, WarningItem, WarningLevel, WarningSource,
 };
 
 #[derive(Debug, Clone)]
@@ -251,7 +251,7 @@ fn parse_lld_map_str(text: &str) -> Result<MapIngestResult, String> {
     result.map_format = MapFormat::LldNative;
     let mut current_section: Option<String> = None;
     let mut parsed_rows = 0usize;
-
+    let mut skipped_rows = 0usize;
     for (index, raw_line) in text.lines().enumerate() {
         let line = raw_line.trim_end();
         let trimmed = line.trim();
@@ -265,6 +265,9 @@ fn parse_lld_map_str(text: &str) -> Result<MapIngestResult, String> {
             parsed_rows += 1;
             continue;
         }
+        if is_lld_assignment_row(line) || is_lld_symbol_row(line) {
+            continue;
+        }
         match parse_lld_contribution_line(line) {
             Ok(Some((size, path))) => {
                 parsed_rows += 1;
@@ -273,14 +276,6 @@ fn parse_lld_map_str(text: &str) -> Result<MapIngestResult, String> {
                         "LLD_MISSING_PARENT_SECTION",
                         ParserWarningKind::MissingParentSection,
                         format!("lld-native contribution line {index} did not have an output section parent"),
-                        Some(format!("line:{index}")),
-                    ));
-                }
-                if path == "<internal>" {
-                    result.warnings.push(map_warning(
-                        "LLD_INTERNAL_ENTRY",
-                        ParserWarningKind::UnsupportedRowShape,
-                        format!("lld-native line {index} contains an internal synthetic input"),
                         Some(format!("line:{index}")),
                     ));
                 }
@@ -303,17 +298,20 @@ fn parse_lld_map_str(text: &str) -> Result<MapIngestResult, String> {
             continue;
         }
         if trimmed.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) || trimmed.starts_with('<') {
-            result.warnings.push(map_warning(
-                "MAP_LINE_SKIPPED",
-                ParserWarningKind::UnsupportedRowShape,
-                format!("Skipped unparsed lld-native map line {index}: {trimmed}"),
-                Some(format!("line:{index}")),
-            ));
+            skipped_rows += 1;
         }
     }
 
     if parsed_rows == 0 {
         return Err("lld-native header was detected but no output/input rows could be parsed; the map may be truncated or malformed".to_string());
+    }
+    if skipped_rows > 0 {
+        result.warnings.push(map_warning(
+            "MAP_LINE_SKIPPED_SUMMARY",
+            ParserWarningKind::UnsupportedRowShape,
+            format!("Skipped {skipped_rows} lld-native rows that did not match a supported row shape"),
+            None,
+        ));
     }
     Ok(result)
 }
@@ -407,6 +405,9 @@ fn parse_lld_contribution_line(line: &str) -> Result<Option<(u64, String)>, Stri
     if path.starts_with('.') || path.starts_with("0x") {
         return Ok(None);
     }
+    if path != "<internal>" && !path.contains(":(") {
+        return Ok(None);
+    }
     let path = path
         .split_once(":(")
         .map(|(item, _)| item.to_string())
@@ -417,9 +418,37 @@ fn parse_lld_contribution_line(line: &str) -> Result<Option<(u64, String)>, Stri
     Ok(Some((size, path)))
 }
 
+fn is_lld_assignment_row(line: &str) -> bool {
+    let parts = line.split_whitespace().collect::<Vec<_>>();
+    parts.len() >= 6
+        && parse_num(parts[0]).is_some()
+        && parse_num(parts[1]).is_some()
+        && parse_num(parts[2]).is_some()
+        && parts[4] != "<internal>"
+        && parts.iter().any(|part| *part == "=")
+}
+
+fn is_lld_symbol_row(line: &str) -> bool {
+    let parts = line.split_whitespace().collect::<Vec<_>>();
+    let tail = if parts.len() > 4 { parts[4..].join(" ") } else { String::new() };
+    parts.len() >= 5
+        && parse_num(parts[0]).is_some()
+        && parse_num(parts[1]).is_some()
+        && parse_num(parts[2]).is_some()
+        && !parts[4].starts_with('.')
+        && !tail.contains(":(")
+        && tail != "<internal>"
+}
+
 fn push_contribution(result: &mut MapIngestResult, section_name: Option<String>, path: String, size: u64) {
+    let source_kind = if path == "<internal>" {
+        ObjectSourceKind::Internal
+    } else {
+        ObjectSourceKind::Object
+    };
     result.object_contributions.push(ObjectContribution {
         object_path: path.clone(),
+        source_kind,
         section_name: section_name.clone(),
         size,
     });
@@ -449,9 +478,23 @@ fn split_archive_member(path: &str) -> Option<(&str, &str)> {
 fn parse_num(text: &str) -> Option<u64> {
     if let Some(hex) = text.strip_prefix("0x") {
         u64::from_str_radix(hex, 16).ok()
+    } else if let Some(value) = parse_scaled_num(text) {
+        Some(value)
+    } else if text.chars().any(|ch| ch.is_ascii_hexdigit() && ch.is_ascii_alphabetic()) {
+        u64::from_str_radix(text, 16).ok()
     } else {
         text.parse().ok()
     }
+}
+
+fn parse_scaled_num(text: &str) -> Option<u64> {
+    let (number, scale) = match text.chars().last()? {
+        'K' | 'k' => (&text[..text.len() - 1], 1024u64),
+        'M' | 'm' => (&text[..text.len() - 1], 1024u64 * 1024),
+        'G' | 'g' => (&text[..text.len() - 1], 1024u64 * 1024 * 1024),
+        _ => return None,
+    };
+    parse_num(number).map(|value| value.saturating_mul(scale))
 }
 
 fn map_warning(code: &str, kind: ParserWarningKind, message: String, related: Option<String>) -> WarningItem {
@@ -466,8 +509,8 @@ fn map_warning(code: &str, kind: ParserWarningKind, message: String, related: Op
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_map_format, detect_toolchain, parse_map_str};
-    use crate::model::{MapFormat, MapFormatSelection, ToolchainKind, ToolchainSelection};
+    use super::{detect_map_format, detect_toolchain, parse_map_str, parse_num};
+    use crate::model::{MapFormat, MapFormatSelection, ObjectSourceKind, ToolchainKind, ToolchainSelection};
 
     #[test]
     fn parses_gnu_ld_map_snippet() {
@@ -605,8 +648,11 @@ mod tests {
             MapFormatSelection::Auto,
         )
         .unwrap();
-        assert!(internal.object_contributions.iter().any(|item| item.object_path == "<internal>"));
-        assert!(internal.warnings.iter().any(|item| item.code == "LLD_INTERNAL_ENTRY"));
+        assert!(internal
+            .object_contributions
+            .iter()
+            .any(|item| item.object_path == "<internal>" && item.source_kind == ObjectSourceKind::Internal));
+        assert!(!internal.warnings.iter().any(|item| item.code == "LLD_INTERNAL_ENTRY_SUMMARY"));
     }
 
     #[test]
@@ -634,6 +680,22 @@ mod tests {
         .unwrap();
         assert!(malformed.object_contributions.iter().any(|item| item.object_path.ends_with("valid.o")));
         assert!(malformed.warnings.iter().any(|item| item.code == "LLD_MALFORMED_ROW"));
+    }
+
+    #[test]
+    fn ignores_common_lld_symbol_and_assignment_rows_without_warning_spam() {
+        let demo = include_str!("../../../tests/demo-task.map");
+        let result = parse_map_str(demo, ToolchainSelection::Auto, MapFormatSelection::Auto).unwrap();
+        assert!(result.object_contributions.iter().any(|item| item.object_path.contains("demo-task_all.o")));
+        assert_eq!(result.warnings.iter().filter(|item| item.code == "MAP_LINE_SKIPPED").count(), 0);
+        assert!(result.warnings.iter().filter(|item| item.code == "LLD_MALFORMED_ROW").count() <= 5);
+    }
+
+    #[test]
+    fn parses_bare_hex_and_scaled_lld_numbers() {
+        assert_eq!(parse_num("f8000000"), Some(0xf8000000));
+        assert_eq!(parse_num("5af78"), Some(0x5af78));
+        assert_eq!(parse_num("64K"), Some(64 * 1024));
     }
 
     #[test]
