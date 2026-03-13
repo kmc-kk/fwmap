@@ -6,7 +6,7 @@
 
 現行版は、単純なサイズ表示だけでなく、差分原因の追跡、memory region の可視化、JSON 出力、CI 向け要約、ルールベースの warning 判定、外部ルール設定、C++ symbol の demangle を主機能として扱います。
 
-さらに現行版では、`gimli` を用いた DWARF line table 読み込みにより、source file / line 単位の最小 attribution も扱えます。
+さらに現行版では、`gimli` を用いた DWARF line table 読み込みにより、source file / function / line-range 単位の attribution を扱えます。
 
 このツールで把握しやすい内容:
 
@@ -36,6 +36,7 @@
 - 外部 TOML ルール設定
 - C++ symbol demangle
 - DWARF line table 解析
+- source file / function / line-range 集計
 - SQLite ベースの履歴保存とトレンド表示
 - `--toolchain auto|gnu|lld|iar|armcc|keil`
 - `--verbose` / `--version`
@@ -43,9 +44,9 @@
 現時点で未対応または限定的な内容:
 
 - demangle の高度化
-- DWARF を用いたソース行解析
 - linker script の完全構文対応
 - 外部ルール設定の高度化
+- split DWARF (`.dwo` / `.dwp`)
 
 ## 3. ビルドとテスト
 
@@ -156,6 +157,18 @@ fwmap analyze \
   --source-root . \
   --path-remap build=src \
   --report-json build/fwmap_sources.json
+```
+
+### DWARF から source file / function / hotspot を出す
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --demangle=on \
+  --dwarf=on \
+  --source-lines all \
+  --out build/fwmap_sources.html
 ```
 
 ### map parser family を明示する
@@ -401,6 +414,9 @@ fwmap analyze \
 - thresholds
 - top symbols
 - top object contributions
+- source files
+- functions
+- line hotspots
 - regions
 - diff summary
 - diff 本体
@@ -775,6 +791,7 @@ JSON は固定 schema で出力されます。
 - `archive_contributions`
 - `source_files`
 - `functions`
+- `line_hotspots`
 - `line_attributions`
 - `unknown_source`
 - `regions`
@@ -792,14 +809,18 @@ HTML は以下の順で構成されます。
 1. Header
 2. Overview
 3. Warnings
-4. Memory Summary
-5. Memory Regions Overview
-6. Region Sections
-7. Section Breakdown
-8. Top Symbols
-9. Top Object Contributions
-10. Diff
-11. Footer
+4. Source Summary
+5. Source Files
+6. Top Functions
+7. Line Hotspots
+8. Memory Summary
+9. Memory Regions Overview
+10. Region Sections
+11. Section Breakdown
+12. Top Symbols
+13. Top Object Contributions
+14. Diff
+15. Footer
 
 ### 8.1 Overview
 
@@ -834,7 +855,30 @@ warning 判定はルール単位で分離され、さらに外部 TOML ルール
 - symbol table 欠損
 - map の一部読み飛ばし
 
-### 8.3 Memory Summary
+### 8.3 Source Summary / Source Files / Top Functions / Line Hotspots
+
+DWARF が使われた場合は、source 系のセクションが追加されます。
+
+確認できる内容:
+
+- `Source Summary`: compilation unit 数と unknown ratio
+- `Source Files`: ファイル別の寄与サイズ、ディレクトリ、関数数
+- `Top Functions`: symbol と source range を結び付けた関数別ランキング
+- `Line Hotspots`: 連続または近接する行を圧縮した line-range
+
+具体例:
+
+- `src/net/tcp.cpp` が 12 KiB
+- `net::TcpSession::poll()` が 4 KiB
+- `src/net/tcp.cpp:120-134` が 2 KiB
+
+追い方の目安:
+
+1. まず `Source Files` で大きいファイルを探す
+2. 次に `Top Functions` で関数へ絞る
+3. 最後に `Line Hotspots` で line-range を確認する
+
+### 8.4 Memory Summary
 
 section をサイズ順に表示し、次のいずれかに分類します。
 
@@ -847,7 +891,7 @@ section をサイズ順に表示し、次のいずれかに分類します。
 - ROM: `.text`, `.rodata`, read-only / executable な `ALLOC` section
 - RAM: `.data`, `.bss`, writable な `ALLOC` section
 
-### 8.4 Memory Regions Overview
+### 8.5 Memory Regions Overview
 
 linker script がある場合に表示されます。
 
@@ -864,7 +908,7 @@ linker script がある場合に表示されます。
 - `FLASH` や `RAM` の逼迫状況を一目で確認する
 - どの region から先に危険になるかを把握する
 
-### 8.5 Region Sections
+### 8.6 Region Sections
 
 region ごとの section 一覧を表示します。
 
@@ -1108,7 +1152,7 @@ fwmap history trend --db history.db --metric rom --last 20
 - 外部ルール設定は TOML 固定で、対応 `kind` は現在の実装範囲に限られる
 - 履歴保存はローカル SQLite 前提で、現時点では CLI 表示中心
 - `--toolchain auto` の検出は軽量判定であり、現時点では GNU ld / LLVM lld の主要パターンに限定
-- DWARF attribution は現時点では line table 中心で、function attribution は骨格段階
+- DWARF attribution は line table と ELF symbol range の組み合わせで集計している
 - 最適化ビルドでは line attribution は近似的であり、source order と一致しない場合がある
 - split DWARF (`.dwo` / `.dwp`) は未対応
 

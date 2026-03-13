@@ -38,6 +38,25 @@ pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, ver
             diff.summary.symbol_decreased
         );
     }
+    if let Some(file) = result.source_files.first() {
+        println!("Top source file: {} ({})", file.display_path, format_bytes(file.size));
+    }
+    if let Some(function) = result.function_attributions.first() {
+        println!(
+            "Top function: {} ({})",
+            function.demangled_name.as_deref().unwrap_or(&function.raw_name),
+            format_bytes(function.size)
+        );
+    }
+    if let Some(hotspot) = result.line_hotspots.first() {
+        println!(
+            "Top line hotspot: {}:{}-{} ({})",
+            hotspot.path,
+            hotspot.line_start,
+            hotspot.line_end,
+            format_bytes(hotspot.size)
+        );
+    }
     if verbose && !result.warnings.is_empty() {
         println!("Warnings:");
         for item in &result.warnings {
@@ -93,6 +112,9 @@ fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
             overview(current, diff),
             warning_section(&current.warnings),
             source_summary(current),
+            source_files_section(current),
+            top_functions(current),
+            line_hotspots(current),
             memory_summary(current),
             memory_regions(current),
             region_sections(current),
@@ -122,6 +144,7 @@ fn build_json(current: &AnalysisResult, diff: Option<&DiffResult>, thresholds: &
         "archive_contributions": current.archive_contributions.iter().take(30).collect::<Vec<_>>(),
         "source_files": &current.source_files,
         "functions": &current.function_attributions,
+        "line_hotspots": current.line_hotspots.iter().take(100).collect::<Vec<_>>(),
         "line_attributions": current.line_attributions.iter().take(200).collect::<Vec<_>>(),
         "unknown_source": &current.unknown_source,
         "regions": &current.memory.region_summaries,
@@ -260,6 +283,8 @@ fn build_ci_json(current: &AnalysisResult, diff: Option<&DiffResult>) -> Result<
         },
         "debug_info": &current.debug_info,
         "source_files": &current.source_files,
+        "functions": &current.function_attributions,
+        "line_hotspots": current.line_hotspots.iter().take(20).collect::<Vec<_>>(),
         "top_region": current.memory.region_summaries.first(),
         "top_section_growth": diff.and_then(|item| top_increases(&item.section_diffs, 1).first().cloned()),
         "top_object_growth": diff.and_then(|item| top_increases(&item.object_diffs, 1).first().cloned()),
@@ -355,6 +380,94 @@ fn source_summary(current: &AnalysisResult) -> String {
         current.debug_info.compilation_units,
         current.debug_info.unknown_source_ratio * 100.0,
         rows
+    )
+}
+
+fn source_files_section(current: &AnalysisResult) -> String {
+    if !current.debug_info.dwarf_used || current.source_files.is_empty() {
+        return String::new();
+    }
+    let rows = current
+        .source_files
+        .iter()
+        .take(30)
+        .map(|item| {
+            format!(
+                "<tr><td title=\"{}\">{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                escape(&item.path),
+                escape(&item.display_path),
+                escape(&item.directory),
+                item.functions,
+                format_bytes(item.size)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<section><h2>Source Files</h2><table><thead><tr><th>Path</th><th>Directory</th><th>Functions</th><th>Size</th></tr></thead><tbody>{rows}</tbody></table></section>"
+    )
+}
+
+fn top_functions(current: &AnalysisResult) -> String {
+    if !current.debug_info.dwarf_used || current.function_attributions.is_empty() {
+        return String::new();
+    }
+    let rows = current
+        .function_attributions
+        .iter()
+        .take(30)
+        .map(|item| {
+            let name = item.demangled_name.as_deref().unwrap_or(&item.raw_name);
+            let raw = if item.demangled_name.is_some() {
+                format!("<div class=\"muted mono\">{}</div>", escape(&item.raw_name))
+            } else {
+                String::new()
+            };
+            let ranges = item
+                .ranges
+                .iter()
+                .take(3)
+                .map(|range| format!("{}:{}-{}", range.path, range.line_start, range.line_end))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "<tr><td>{}{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                escape(name),
+                raw,
+                escape(item.path.as_deref().unwrap_or("-")),
+                escape(&ranges),
+                format_bytes(item.size)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<section><h2>Top Functions</h2><table><thead><tr><th>Function</th><th>Path</th><th>Ranges</th><th>Size</th></tr></thead><tbody>{rows}</tbody></table></section>"
+    )
+}
+
+fn line_hotspots(current: &AnalysisResult) -> String {
+    if !current.debug_info.dwarf_used || current.line_hotspots.is_empty() {
+        return String::new();
+    }
+    let rows = current
+        .line_hotspots
+        .iter()
+        .take(30)
+        .map(|item| {
+            format!(
+                "<tr><td>{}</td><td>{}-{} </td><td>{}</td><td>{}</td></tr>",
+                escape(&item.path),
+                item.line_start,
+                item.line_end,
+                escape(item.section_name.as_deref().unwrap_or("-")),
+                format_bytes(item.size)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<section><h2>Line Hotspots</h2><table><thead><tr><th>Path</th><th>Lines</th><th>Section</th><th>Size</th></tr></thead><tbody>{rows}</tbody></table></section>"
     )
 }
 
@@ -604,11 +717,14 @@ mod tests {
             "fwmap-report-{}.html",
             SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
         ));
-        let analysis = sample_analysis();
+        let analysis = sample_analysis_with_sources();
         write_html_report(&path, &analysis, None).unwrap();
         let html = fs::read_to_string(&path).unwrap();
         assert!(html.contains("Overview"));
         assert!(html.contains("Top Symbols"));
+        assert!(html.contains("Source Files"));
+        assert!(html.contains("Top Functions"));
+        assert!(html.contains("Line Hotspots"));
         assert!(html.contains("main"));
         let _ = fs::remove_file(path);
     }
@@ -705,12 +821,13 @@ mod tests {
         assert!(json.contains("\"toolchain\""));
         assert!(json.contains("\"debug_info\""));
         assert!(json.contains("\"source_files\""));
+        assert!(json.contains("\"line_hotspots\""));
         let _ = fs::remove_file(path);
     }
 
     #[test]
     fn ci_summary_supports_text_markdown_and_json() {
-        let mut analysis = sample_analysis();
+        let mut analysis = sample_analysis_with_sources();
         analysis.warnings.push(WarningItem {
             level: WarningLevel::Error,
             code: "forbid-main".to_string(),
@@ -748,6 +865,7 @@ mod tests {
         let text = build_ci_summary(&analysis, Some(&diff), CiFormat::Text).unwrap();
         assert!(text.contains("Errors: 1"));
         assert!(text.contains("Toolchain:"));
+        assert!(text.contains("DWARF:"));
         let markdown = build_ci_summary(&analysis, Some(&diff), CiFormat::Markdown).unwrap();
         assert!(markdown.contains("# fwmap CI Summary"));
         assert!(markdown.contains("| Toolchain |"));
@@ -781,6 +899,7 @@ mod tests {
                 demangled_name: None,
                 section_name: Some(".text".to_string()),
                 object_path: Some("main.o".to_string()),
+                addr: 0x8000,
                 size: 64,
             }],
             object_contributions: Vec::new(),
@@ -817,9 +936,43 @@ mod tests {
             compilation_units: Vec::new(),
             source_files: Vec::new(),
             line_attributions: Vec::new(),
+            line_hotspots: Vec::new(),
             function_attributions: Vec::new(),
             unknown_source: UnknownSourceBucket::default(),
             warnings: Vec::new(),
         }
+    }
+
+    fn sample_analysis_with_sources() -> AnalysisResult {
+        let mut analysis = sample_analysis();
+        analysis.debug_info.dwarf_used = true;
+        analysis.source_files = vec![crate::model::SourceFile {
+            path: "src/main.cpp".to_string(),
+            display_path: "src/main.cpp".to_string(),
+            directory: "src".to_string(),
+            size: 64,
+            functions: 1,
+            line_ranges: 2,
+        }];
+        analysis.function_attributions = vec![crate::model::FunctionAttribution {
+            raw_name: "_ZN3app4mainEv".to_string(),
+            demangled_name: Some("app::main()".to_string()),
+            path: Some("src/main.cpp".to_string()),
+            size: 64,
+            ranges: vec![crate::model::SourceSpan {
+                path: "src/main.cpp".to_string(),
+                line_start: 10,
+                line_end: 12,
+                column: None,
+            }],
+        }];
+        analysis.line_hotspots = vec![crate::model::LineRangeAttribution {
+            path: "src/main.cpp".to_string(),
+            line_start: 10,
+            line_end: 12,
+            section_name: Some(".text".to_string()),
+            size: 64,
+        }];
+        analysis
     }
 }

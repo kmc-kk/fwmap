@@ -26,6 +26,7 @@ pub struct SymbolInfo {
     pub demangled_name: Option<String>,
     pub section_name: Option<String>,
     pub object_path: Option<String>,
+    pub addr: u64,
     pub size: u64,
 }
 
@@ -126,6 +127,7 @@ pub struct AnalysisResult {
     pub compilation_units: Vec<CompilationUnit>,
     pub source_files: Vec<SourceFile>,
     pub line_attributions: Vec<LineAttribution>,
+    pub line_hotspots: Vec<LineRangeAttribution>,
     pub function_attributions: Vec<FunctionAttribution>,
     pub unknown_source: UnknownSourceBucket,
     pub warnings: Vec<WarningItem>,
@@ -282,6 +284,15 @@ pub struct FunctionAttribution {
     pub ranges: Vec<SourceSpan>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LineRangeAttribution {
+    pub path: String,
+    pub line_start: u64,
+    pub line_end: u64,
+    pub section_name: Option<String>,
+    pub size: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct UnknownSourceBucket {
     pub size: u64,
@@ -294,6 +305,7 @@ pub struct SourceFile {
     pub display_path: String,
     pub directory: String,
     pub size: u64,
+    pub functions: usize,
     pub line_ranges: usize,
 }
 

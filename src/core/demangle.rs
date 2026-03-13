@@ -99,6 +99,7 @@ mod tests {
             demangled_name: None,
             section_name: None,
             object_path: None,
+            addr: 0,
             size: 4,
         }];
         apply_demangling(&mut symbols, DemangleMode::On);

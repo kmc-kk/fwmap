@@ -1,6 +1,6 @@
 # fwmap
 
-`fwmap` is a Rust CLI prototype that analyzes firmware `ELF` and linker `map` outputs from GNU ld and LLVM lld, then emits a single-file HTML report focused on ROM/RAM usage, large symbols, object contributions, and build-to-build diffs.
+`fwmap` is a CLI tool that analyzes firmware `ELF` and linker `map` outputs from GNU ld and LLVM lld, then emits a single-file HTML report focused on ROM/RAM usage, large symbols, object contributions, and build-to-build diffs.
 
 ## Scope
 
@@ -17,7 +17,7 @@
 - Rule-based warning evaluation
 - External TOML rule configuration
 - C++ symbol demangling control
-- Optional DWARF-backed source file and line attribution
+- Optional DWARF-backed source file, function, and line-range attribution
 - JSON report output
 - CI summary in text / markdown / JSON formats
 - warning-based exit control
@@ -99,6 +99,18 @@ cargo run -- analyze \
   --report-json fwmap_sources.json
 ```
 
+DWARF-backed source ranking example:
+
+```bash
+cargo run -- analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --demangle=on \
+  --dwarf=on \
+  --source-lines all \
+  --out fwmap_sources.html
+```
+
 CI-oriented example:
 
 ```bash
@@ -138,6 +150,9 @@ Top growth object: drivers/net.o (+8192)
 - Top Symbols: largest symbols from the ELF symbol table
 - Top Object Contributions: object sizes from the map file
 - Diff: summary cards plus top section/symbol/object growth and added/removed lists
+- Source Files: top file-level attribution with function counts
+- Top Functions: symbol-linked function attribution with raw/demangled names
+- Line Hotspots: compressed source line ranges with byte totals
 - JSON: machine-readable report with binary, memory, warnings, diff, and region data
 - CI summary: compact text / markdown / JSON output for CI logs and PR comments
 
@@ -161,6 +176,7 @@ The JSON report uses a fixed top-level shape:
   "archive_contributions": [],
   "source_files": [],
   "functions": [],
+  "line_hotspots": [],
   "line_attributions": [],
   "unknown_source": { "...": "..." },
   "regions": [],
@@ -241,6 +257,12 @@ Path controls:
 
 The source attribution is intentionally approximate for optimized builds because line tables reflect compiler output, not source order.
 
+When DWARF and symbols are both available, `fwmap` rolls byte counts up into:
+
+- source files
+- top functions
+- compressed line hotspots such as `src/main.cpp:120-134`
+
 ## Toolchains
 
 Use `--toolchain auto|gnu|lld|iar|armcc|keil` to control map parser selection.
@@ -318,7 +340,7 @@ cargo test
 - Demangling currently prioritizes Itanium ABI names and falls back safely when conversion fails.
 - History storage currently uses a local SQLite file and focuses on summary, section, region, and rule-result metrics.
 - Toolchain auto-detection is intentionally lightweight and currently keys off GNU ld / LLVM lld map patterns only.
-- DWARF attribution currently uses line tables only; function-level attribution is still a skeleton and optimized builds may collapse or split line ranges.
+- DWARF attribution uses line tables plus ELF symbol ranges; optimized builds may still collapse, duplicate, or split line ranges.
 - Split DWARF (`.dwo` / `.dwp`) is not handled yet.
 
 ## CLI Compatibility

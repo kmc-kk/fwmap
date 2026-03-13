@@ -4,10 +4,10 @@ use std::path::Path;
 use crate::demangle::apply_demangling;
 use crate::ingest::{dwarf, elf, lds, map};
 use crate::model::{
-    AnalysisResult, ArchiveContribution, CustomRule, DemangleMode, DiffResult, DwarfMode, MemoryRegion, MemorySummary,
-    ObjectContribution, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement,
-    SectionTotal, SourceLinesMode, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection,
-    WarningItem,
+    AnalysisResult, ArchiveContribution, CustomRule, DemangleMode, DiffResult, DwarfMode, FunctionAttribution,
+    LineAttribution, LineRangeAttribution, MemoryRegion, MemorySummary, ObjectContribution, RegionSectionUsage,
+    RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SourceFile, SourceLinesMode,
+    SourceSpan, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection, WarningItem,
 };
 use crate::rules::{evaluate_default_rules, RuleContext};
 use crate::validation::quality::evaluate_quality_checks;
@@ -69,6 +69,9 @@ pub fn analyze_paths(
     let mut symbols = elf.symbols;
     apply_demangling(&mut symbols, options.demangle);
     let dwarf_data = dwarf::parse_dwarf(elf_path, &elf.sections, options)?;
+    let source_files = aggregate_source_files(&dwarf_data.line_attributions, &symbols);
+    let function_attributions = aggregate_function_attributions(&dwarf_data.line_attributions, &symbols);
+    let line_hotspots = aggregate_line_hotspots(&dwarf_data.line_attributions);
 
     let mut warnings = elf.warnings;
     if let Some(map_data) = map_data.as_ref() {
@@ -97,9 +100,10 @@ pub fn analyze_paths(
         linker_script: lds_data.map(|item| item.linker_script),
         memory,
         compilation_units: dwarf_data.compilation_units,
-        source_files: dwarf_data.source_files,
+        source_files,
         line_attributions: dwarf_data.line_attributions,
-        function_attributions: dwarf_data.function_attributions,
+        line_hotspots,
+        function_attributions,
         unknown_source: dwarf_data.unknown_source,
         warnings,
     };
@@ -167,6 +171,154 @@ pub fn evaluate_warnings(
 
 pub fn format_bytes(bytes: u64) -> String {
     format!("{bytes} bytes ({:.2} KiB)", bytes as f64 / 1024.0)
+}
+
+fn aggregate_source_files(lines: &[LineAttribution], symbols: &[SymbolInfo]) -> Vec<SourceFile> {
+    let mut totals = BTreeMap::<String, (u64, std::collections::BTreeSet<(u64, u64)>)>::new();
+    for line in lines {
+        let entry = totals
+            .entry(line.location.path.clone())
+            .or_insert_with(|| (0, std::collections::BTreeSet::new()));
+        entry.0 += line.size;
+        entry.1.insert((line.span.line_start, line.span.line_end));
+    }
+    let mut functions_per_path = BTreeMap::<String, usize>::new();
+    for function in aggregate_function_attributions(lines, symbols) {
+        if let Some(path) = function.path {
+            *functions_per_path.entry(path).or_default() += 1;
+        }
+    }
+    let mut files = totals
+        .into_iter()
+        .map(|(path, (size, ranges))| SourceFile {
+            directory: std::path::Path::new(&path)
+                .parent()
+                .map(|item| item.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default(),
+            display_path: path.clone(),
+            path: path.clone(),
+            size,
+            functions: functions_per_path.get(&path).copied().unwrap_or(0),
+            line_ranges: ranges.len(),
+        })
+        .collect::<Vec<_>>();
+    files.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
+    files
+}
+
+fn aggregate_function_attributions(lines: &[LineAttribution], symbols: &[SymbolInfo]) -> Vec<FunctionAttribution> {
+    let mut functions = symbols
+        .iter()
+        .filter(|symbol| symbol.size > 0)
+        .filter_map(|symbol| {
+            let symbol_start = symbol.addr;
+            let symbol_end = symbol.addr.saturating_add(symbol.size);
+            let mut size = 0u64;
+            let mut ranges = Vec::<SourceSpan>::new();
+            let mut path = None;
+            for line in lines {
+                let overlap_start = symbol_start.max(line.range.start);
+                let overlap_end = symbol_end.min(line.range.end);
+                if overlap_start >= overlap_end {
+                    continue;
+                }
+                let overlap_size = overlap_end - overlap_start;
+                size += overlap_size;
+                path.get_or_insert_with(|| line.location.path.clone());
+                ranges.push(line.span.clone());
+            }
+            if size == 0 {
+                return None;
+            }
+            Some(FunctionAttribution {
+                raw_name: symbol.name.clone(),
+                demangled_name: symbol.demangled_name.clone(),
+                path,
+                size,
+                ranges: compress_source_spans(ranges),
+            })
+        })
+        .collect::<Vec<_>>();
+    functions.sort_by(|a, b| {
+        b.size
+            .cmp(&a.size)
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.raw_name.cmp(&b.raw_name))
+    });
+    functions
+}
+
+fn aggregate_line_hotspots(lines: &[LineAttribution]) -> Vec<LineRangeAttribution> {
+    let mut grouped = BTreeMap::<(String, Option<String>), Vec<SourceSpan>>::new();
+    let mut totals = BTreeMap::<(String, Option<String>, u64, u64), u64>::new();
+    for line in lines {
+        let key = (line.location.path.clone(), line.range.section_name.clone(), line.span.line_start, line.span.line_end);
+        *totals.entry(key).or_default() += line.size;
+    }
+    for ((path, section_name, line_start, line_end), _) in &totals {
+        grouped
+            .entry((path.clone(), section_name.clone()))
+            .or_default()
+            .push(SourceSpan {
+                path: path.clone(),
+                line_start: *line_start,
+                line_end: *line_end,
+                column: None,
+            });
+    }
+
+    let mut hotspots = Vec::new();
+    for ((path, section_name), spans) in grouped {
+        for span in compress_source_spans(spans) {
+            let size = totals
+                .iter()
+                .filter(|((entry_path, entry_section, start, end), _)| {
+                    *entry_path == path
+                        && *entry_section == section_name
+                        && *start >= span.line_start
+                        && *end <= span.line_end
+                })
+                .map(|(_, size)| *size)
+                .sum();
+            hotspots.push(LineRangeAttribution {
+                path: path.clone(),
+                line_start: span.line_start,
+                line_end: span.line_end,
+                section_name: section_name.clone(),
+                size,
+            });
+        }
+    }
+    hotspots.sort_by(|a, b| {
+        b.size
+            .cmp(&a.size)
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.line_start.cmp(&b.line_start))
+    });
+    hotspots
+}
+
+fn compress_source_spans(mut spans: Vec<SourceSpan>) -> Vec<SourceSpan> {
+    if spans.is_empty() {
+        return spans;
+    }
+    spans.sort_by(|a, b| {
+        a.path
+            .cmp(&b.path)
+            .then_with(|| a.line_start.cmp(&b.line_start))
+            .then_with(|| a.line_end.cmp(&b.line_end))
+    });
+    let mut compressed: Vec<SourceSpan> = Vec::new();
+    for span in spans {
+        if let Some(last) = compressed.last_mut() {
+            if last.path == span.path && span.line_start <= last.line_end.saturating_add(1) {
+                last.line_end = last.line_end.max(span.line_end);
+                continue;
+            }
+        }
+        compressed.push(span);
+    }
+    compressed
 }
 
 fn aggregate_objects(items: &[ObjectContribution]) -> Vec<ObjectContribution> {
@@ -254,9 +406,9 @@ mod tests {
     use crate::diff::diff_results;
     use crate::model::{
         AnalysisResult, BinaryInfo, DebugInfoSummary, DiffChangeKind, DiffResult, DiffSummary, DwarfMode,
-        FunctionAttribution, LinkerScriptInfo, MemoryRegion, MemorySummary, SectionCategory, SectionInfo,
-        SectionPlacement, SectionTotal, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind,
-        ToolchainSelection, UnknownSourceBucket,
+        FunctionAttribution, LineAttribution, LinkerScriptInfo, MemoryRegion, MemorySummary, SectionCategory,
+        SectionInfo, SectionPlacement, SectionTotal, SourceLocation, SourceSpan, SymbolInfo, ThresholdConfig,
+        ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket,
     };
 
     #[test]
@@ -321,6 +473,7 @@ mod tests {
                 demangled_name: None,
                 section_name: None,
                 object_path: None,
+                addr: 0,
                 size: 1,
             },
             SymbolInfo {
@@ -328,6 +481,7 @@ mod tests {
                 demangled_name: None,
                 section_name: None,
                 object_path: None,
+                addr: 0,
                 size: 10,
             },
         ];
@@ -483,6 +637,81 @@ mod tests {
         assert_eq!(options.dwarf_mode, DwarfMode::Auto);
     }
 
+    #[test]
+    fn aggregates_functions_and_hotspots_from_line_ranges() {
+        let symbols = vec![
+            SymbolInfo {
+                name: "_ZN3app4tickEv".to_string(),
+                demangled_name: Some("app::tick()".to_string()),
+                section_name: Some(".text".to_string()),
+                object_path: None,
+                addr: 0x1000,
+                size: 12,
+            },
+            SymbolInfo {
+                name: "helper".to_string(),
+                demangled_name: None,
+                section_name: Some(".text".to_string()),
+                object_path: None,
+                addr: 0x2000,
+                size: 4,
+            },
+        ];
+        let lines = vec![
+            LineAttribution {
+                location: SourceLocation {
+                    path: "src/main.cpp".to_string(),
+                    line: 10,
+                    column: None,
+                },
+                span: SourceSpan {
+                    path: "src/main.cpp".to_string(),
+                    line_start: 10,
+                    line_end: 10,
+                    column: None,
+                },
+                range: crate::model::AddressRange {
+                    start: 0x1000,
+                    end: 0x1004,
+                    section_name: Some(".text".to_string()),
+                },
+                size: 4,
+            },
+            LineAttribution {
+                location: SourceLocation {
+                    path: "src/main.cpp".to_string(),
+                    line: 11,
+                    column: None,
+                },
+                span: SourceSpan {
+                    path: "src/main.cpp".to_string(),
+                    line_start: 11,
+                    line_end: 11,
+                    column: None,
+                },
+                range: crate::model::AddressRange {
+                    start: 0x1004,
+                    end: 0x100c,
+                    section_name: Some(".text".to_string()),
+                },
+                size: 8,
+            },
+        ];
+        let functions = super::aggregate_function_attributions(&lines, &symbols);
+        assert_eq!(functions[0].raw_name, "_ZN3app4tickEv");
+        assert_eq!(functions[0].size, 12);
+        assert_eq!(functions[0].ranges.len(), 1);
+
+        let hotspots = super::aggregate_line_hotspots(&lines);
+        assert_eq!(hotspots[0].path, "src/main.cpp");
+        assert_eq!(hotspots[0].line_start, 10);
+        assert_eq!(hotspots[0].line_end, 11);
+
+        let files = super::aggregate_source_files(&lines, &symbols);
+        assert_eq!(files[0].functions, 1);
+        assert_eq!(files[0].line_ranges, 2);
+    }
+
     fn stub_analysis(rom: u64, ram: u64, sections: &[(&str, u64)], symbols: &[(&str, u64)]) -> AnalysisResult {
         AnalysisResult {
             binary: BinaryInfo {
@@ -505,6 +734,7 @@ mod tests {
                     demangled_name: None,
                     section_name: None,
                     object_path: None,
+                    addr: 0,
                     size: *size,
                 })
                 .collect(),
@@ -528,6 +758,7 @@ mod tests {
             compilation_units: Vec::new(),
             source_files: Vec::new(),
             line_attributions: Vec::new(),
+            line_hotspots: Vec::new(),
             function_attributions: Vec::<FunctionAttribution>::new(),
             unknown_source: UnknownSourceBucket::default(),
             warnings: Vec::new(),

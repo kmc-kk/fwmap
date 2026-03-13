@@ -218,6 +218,7 @@ fn aggregate_source_files(lines: &[LineAttribution]) -> Vec<SourceFile> {
             display_path: path.clone(),
             path,
             size,
+            functions: 0,
             line_ranges: ranges.len(),
         })
         .collect::<Vec<_>>();

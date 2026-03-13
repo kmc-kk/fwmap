@@ -530,6 +530,7 @@ mod tests {
                 demangled_name: None,
                 section_name: None,
                 object_path: None,
+                addr: 0,
                 size: 32,
             }],
             object_contributions: Vec::new(),
@@ -556,6 +557,7 @@ mod tests {
             compilation_units: Vec::new(),
             source_files: Vec::new(),
             line_attributions: Vec::new(),
+            line_hotspots: Vec::new(),
             function_attributions: Vec::new(),
             unknown_source: UnknownSourceBucket::default(),
             warnings: (0..warnings)

@@ -194,15 +194,17 @@ fn parse_symbols(
         let count = section.size / section.entsize;
         for idx in 0..count {
             let base = offset_checked(section.offset, section.entsize, idx, bytes.len())?;
-            let (name_offset, section_index, size) = match class {
+            let (name_offset, section_index, value, size) = match class {
                 ELFCLASS32 => (
                     read_u32(bytes, base, endian)?,
                     read_u16(bytes, base + 14, endian)?,
+                    read_u32(bytes, base + 4, endian)? as u64,
                     read_u32(bytes, base + 8, endian)? as u64,
                 ),
                 ELFCLASS64 => (
                     read_u32(bytes, base, endian)?,
                     read_u16(bytes, base + 6, endian)?,
+                    read_u64(bytes, base + 8, endian)?,
                     read_u64(bytes, base + 16, endian)?,
                 ),
                 _ => unreachable!(),
@@ -222,6 +224,7 @@ fn parse_symbols(
                 demangled_name: None,
                 section_name,
                 object_path: None,
+                addr: value,
                 size,
             });
         }
