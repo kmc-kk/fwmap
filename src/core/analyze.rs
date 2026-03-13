@@ -73,9 +73,17 @@ pub fn analyze_paths(
     apply_demangling(&mut symbols, options.demangle);
     let dwarf_data = dwarf::parse_dwarf(elf_path, &elf.sections, options)?;
     // Rebuild source aggregates after demangling so reports and diffs share one normalized view.
-    let source_files = aggregate_source_files(&dwarf_data.line_attributions, &symbols);
-    let function_attributions = aggregate_function_attributions(&dwarf_data.line_attributions, &symbols);
-    let line_hotspots = aggregate_line_hotspots(&dwarf_data.line_attributions);
+    let function_attributions = match options.source_lines {
+        SourceLinesMode::Functions | SourceLinesMode::Lines | SourceLinesMode::All => {
+            aggregate_function_attributions(&dwarf_data.line_attributions, &symbols)
+        }
+        _ => Vec::new(),
+    };
+    let source_files = aggregate_source_files(&dwarf_data.line_attributions, &function_attributions);
+    let line_hotspots = match options.source_lines {
+        SourceLinesMode::Lines | SourceLinesMode::All => aggregate_line_hotspots(&dwarf_data.line_attributions),
+        _ => Vec::new(),
+    };
 
     let mut warnings = elf.warnings;
     if let Some(map_data) = map_data.as_ref() {
@@ -183,7 +191,7 @@ pub fn format_bytes(bytes: u64) -> String {
     format!("{bytes} bytes ({:.2} KiB)", bytes as f64 / 1024.0)
 }
 
-fn aggregate_source_files(lines: &[LineAttribution], symbols: &[SymbolInfo]) -> Vec<SourceFile> {
+fn aggregate_source_files(lines: &[LineAttribution], functions: &[FunctionAttribution]) -> Vec<SourceFile> {
     let mut totals = BTreeMap::<String, (u64, std::collections::BTreeSet<(u64, u64)>)>::new();
     for line in lines {
         let entry = totals
@@ -193,9 +201,9 @@ fn aggregate_source_files(lines: &[LineAttribution], symbols: &[SymbolInfo]) -> 
         entry.1.insert((line.span.line_start, line.span.line_end));
     }
     let mut functions_per_path = BTreeMap::<String, usize>::new();
-    for function in aggregate_function_attributions(lines, symbols) {
-        if let Some(path) = function.path {
-            *functions_per_path.entry(path).or_default() += 1;
+    for function in functions {
+        if let Some(path) = function.path.as_ref() {
+            *functions_per_path.entry(path.clone()).or_default() += 1;
         }
     }
     let mut files = totals
@@ -217,39 +225,63 @@ fn aggregate_source_files(lines: &[LineAttribution], symbols: &[SymbolInfo]) -> 
 }
 
 fn aggregate_function_attributions(lines: &[LineAttribution], symbols: &[SymbolInfo]) -> Vec<FunctionAttribution> {
-    let mut functions = symbols
+    if lines.is_empty() || symbols.is_empty() {
+        return Vec::new();
+    }
+    let mut sorted_lines = lines.iter().collect::<Vec<_>>();
+    sorted_lines.sort_by(|a, b| {
+        a.range
+            .start
+            .cmp(&b.range.start)
+            .then_with(|| a.range.end.cmp(&b.range.end))
+    });
+    let mut sorted_symbols = symbols
         .iter()
         .filter(|symbol| symbol.size > 0)
-        .filter_map(|symbol| {
-            let symbol_start = symbol.addr;
-            let symbol_end = symbol.addr.saturating_add(symbol.size);
-            let mut size = 0u64;
-            let mut ranges = Vec::<SourceSpan>::new();
-            let mut path = None;
-            for line in lines {
-                // Attribute bytes by address overlap so optimized code still contributes to the owning symbol.
-                let overlap_start = symbol_start.max(line.range.start);
-                let overlap_end = symbol_end.min(line.range.end);
-                if overlap_start >= overlap_end {
-                    continue;
-                }
-                let overlap_size = overlap_end - overlap_start;
-                size += overlap_size;
+        .collect::<Vec<_>>();
+    sorted_symbols.sort_by(|a, b| a.addr.cmp(&b.addr).then_with(|| a.name.cmp(&b.name)));
+
+    let mut line_start = 0usize;
+    let mut functions = Vec::new();
+    for symbol in sorted_symbols {
+        let symbol_start = symbol.addr;
+        let symbol_end = symbol.addr.saturating_add(symbol.size);
+
+        while line_start < sorted_lines.len() && sorted_lines[line_start].range.end <= symbol_start {
+            line_start += 1;
+        }
+
+        let mut size = 0u64;
+        let mut ranges = Vec::<SourceSpan>::new();
+        let mut path = None;
+        let mut index = line_start;
+        while index < sorted_lines.len() {
+            let line = sorted_lines[index];
+            if line.range.start >= symbol_end {
+                break;
+            }
+            // Attribute bytes by address overlap so optimized code still contributes to the owning symbol.
+            let overlap_start = symbol_start.max(line.range.start);
+            let overlap_end = symbol_end.min(line.range.end);
+            if overlap_start < overlap_end {
+                size += overlap_end - overlap_start;
                 path.get_or_insert_with(|| line.location.path.clone());
                 ranges.push(line.span.clone());
             }
-            if size == 0 {
-                return None;
-            }
-            Some(FunctionAttribution {
-                raw_name: symbol.name.clone(),
-                demangled_name: symbol.demangled_name.clone(),
-                path,
-                size,
-                ranges: compress_source_spans(ranges),
-            })
-        })
-        .collect::<Vec<_>>();
+            index += 1;
+        }
+        if size == 0 {
+            continue;
+        }
+        functions.push(FunctionAttribution {
+            raw_name: symbol.name.clone(),
+            demangled_name: symbol.demangled_name.clone(),
+            path,
+            size,
+            ranges: compress_source_spans(ranges),
+        });
+    }
+
     functions.sort_by(|a, b| {
         b.size
             .cmp(&a.size)
@@ -260,41 +292,32 @@ fn aggregate_function_attributions(lines: &[LineAttribution], symbols: &[SymbolI
 }
 
 fn aggregate_line_hotspots(lines: &[LineAttribution]) -> Vec<LineRangeAttribution> {
-    let mut grouped = BTreeMap::<(String, Option<String>), Vec<SourceSpan>>::new();
-    let mut totals = BTreeMap::<(String, Option<String>, u64, u64), u64>::new();
+    let mut grouped = BTreeMap::<(String, Option<String>), Vec<(u64, u64, u64)>>::new();
     for line in lines {
-        let key = (line.location.path.clone(), line.range.section_name.clone(), line.span.line_start, line.span.line_end);
-        *totals.entry(key).or_default() += line.size;
-    }
-    for ((path, section_name, line_start, line_end), _) in &totals {
         grouped
-            .entry((path.clone(), section_name.clone()))
+            .entry((line.location.path.clone(), line.range.section_name.clone()))
             .or_default()
-            .push(SourceSpan {
-                path: path.clone(),
-                line_start: *line_start,
-                line_end: *line_end,
-                column: None,
-            });
+            .push((line.span.line_start, line.span.line_end, line.size));
     }
-
     let mut hotspots = Vec::new();
-    for ((path, section_name), spans) in grouped {
-        for span in compress_source_spans(spans) {
-            let size = totals
-                .iter()
-                .filter(|((entry_path, entry_section, start, end), _)| {
-                    *entry_path == path
-                        && *entry_section == section_name
-                        && *start >= span.line_start
-                        && *end <= span.line_end
-                })
-                .map(|(_, size)| *size)
-                .sum();
+    for ((path, section_name), mut entries) in grouped {
+        entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        let mut merged: Vec<(u64, u64, u64)> = Vec::new();
+        for (line_start, line_end, size) in entries {
+            if let Some(last) = merged.last_mut() {
+                if line_start <= last.1.saturating_add(1) {
+                    last.1 = last.1.max(line_end);
+                    last.2 += size;
+                    continue;
+                }
+            }
+            merged.push((line_start, line_end, size));
+        }
+        for (line_start, line_end, size) in merged {
             hotspots.push(LineRangeAttribution {
                 path: path.clone(),
-                line_start: span.line_start,
-                line_end: span.line_end,
+                line_start,
+                line_end,
                 section_name: section_name.clone(),
                 size,
             });
@@ -730,7 +753,7 @@ mod tests {
         assert_eq!(hotspots[0].line_start, 10);
         assert_eq!(hotspots[0].line_end, 11);
 
-        let files = super::aggregate_source_files(&lines, &symbols);
+        let files = super::aggregate_source_files(&lines, &functions);
         assert_eq!(files[0].functions, 1);
         assert_eq!(files[0].line_ranges, 2);
     }

@@ -64,8 +64,11 @@ pub enum TrendFormat {
 }
 
 pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, String> {
-    let conn = open_history_db(db_path)?;
+    let mut conn = open_history_db(db_path)?;
     init_schema(&conn)?;
+    let tx = conn
+        .transaction()
+        .map_err(|err| format!("failed to start history transaction: {err}"))?;
 
     let created_at = now_unix();
     let metadata_json =
@@ -78,7 +81,7 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
         .filter(|item| item.level == WarningLevel::Error)
         .count() as i64;
 
-    conn.execute(
+    tx.execute(
         "INSERT INTO builds (
             created_at, elf_path, arch, linker_family, map_format, rom_bytes, ram_bytes, warning_count, error_count, metadata_json
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -96,12 +99,12 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
         ],
     )
     .map_err(|err| format!("failed to insert build history: {err}"))?;
-    let build_id = conn.last_insert_rowid();
+    let build_id = tx.last_insert_rowid();
 
     {
         // Keep source aggregates in separate tables so existing history databases can
         // migrate forward by simply creating the new tables on first access.
-        let mut debug_stmt = conn
+        let mut debug_stmt = tx
             .prepare(
                 "INSERT INTO debug_metrics (
                     build_id, dwarf_used, unknown_source_ratio, compilation_units, source_file_count, function_count
@@ -121,7 +124,7 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
     }
 
     {
-        let mut section_stmt = conn
+        let mut section_stmt = tx
             .prepare("INSERT INTO section_metrics (build_id, section_name, size_bytes, category) VALUES (?1, ?2, ?3, ?4)")
             .map_err(|err| format!("failed to prepare section insert: {err}"))?;
         for section in &input.analysis.memory.section_totals {
@@ -132,7 +135,7 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
     }
 
     {
-        let mut region_stmt = conn
+        let mut region_stmt = tx
             .prepare(
                 "INSERT INTO region_metrics (build_id, region_name, used_bytes, free_bytes, usage_ratio)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -152,7 +155,7 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
     }
 
     {
-        let mut source_stmt = conn
+        let mut source_stmt = tx
             .prepare(
                 "INSERT INTO source_file_metrics (
                     build_id, path, display_path, directory, size_bytes, function_count, line_range_count
@@ -175,7 +178,7 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
     }
 
     {
-        let mut function_stmt = conn
+        let mut function_stmt = tx
             .prepare(
                 "INSERT INTO function_metrics (
                     build_id, function_key, raw_name, demangled_name, path, size_bytes
@@ -201,7 +204,7 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
     }
 
     {
-        let mut warning_stmt = conn
+        let mut warning_stmt = tx
             .prepare(
                 "INSERT INTO rule_results (build_id, code, level, related, message)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -220,6 +223,8 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
         }
     }
 
+    tx.commit()
+        .map_err(|err| format!("failed to commit build history transaction: {err}"))?;
     Ok(build_id)
 }
 
