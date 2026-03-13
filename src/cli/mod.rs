@@ -9,8 +9,8 @@ use crate::history::{
 };
 use crate::linkage::{explain_object, explain_section, explain_symbol, ExplainResult};
 use crate::model::{
-    CiFormat, DebuginfodMode, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode, ThresholdConfig,
-    ToolchainSelection, WarningLevel,
+    CiFormat, CppGroupBy, DebuginfodMode, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode,
+    ThresholdConfig, ToolchainSelection, WarningLevel,
 };
 use crate::rule_config::{apply_threshold_overrides, load_rule_config};
 use crate::render::{
@@ -194,6 +194,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             fail_on_missing_dwarf,
             verbose,
             cpp_view,
+            group_by,
         } => {
             let mut options = AnalyzeOptions {
                 thresholds,
@@ -265,6 +266,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                     if let Some(object) = top_increases(&diff.object_diffs, 1).first() {
                         println!("Top growth object: {} ({:+})", object.name, object.delta);
                     }
+                    print_grouped_cpp_diff(diff, group_by);
                     if why_linked_top > 0 {
                         let why = crate::linkage::explain_top_growth(&current, diff, 1);
                         if let Some(item) = why.top_symbols.first() {
@@ -416,6 +418,7 @@ enum Command {
         fail_on_missing_dwarf: bool,
         verbose: bool,
         cpp_view: bool,
+        group_by: CppGroupBy,
     },
 }
 
@@ -474,6 +477,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut fail_on_missing_dwarf = false;
     let mut verbose = false;
     let mut cpp_view = false;
+    let mut group_by = CppGroupBy::Symbol;
     let mut index = 2usize;
     while index < args.len() {
         let key = &args[index];
@@ -486,6 +490,12 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
             "--cpp-view" => {
                 cpp_view = true;
                 index += 1;
+                continue;
+            }
+            "--group-by" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --group-by".to_string())?;
+                group_by = parse_cpp_group_by(value)?;
+                index += 2;
                 continue;
             }
             "--ci-summary" => {
@@ -700,6 +710,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         fail_on_missing_dwarf,
         verbose,
         cpp_view,
+        group_by,
     })
 }
 
@@ -744,7 +755,7 @@ fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--why-linked-top <n>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--cpp-view] [--verbose]
+fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--why-linked-top <n>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--cpp-view] [--group-by <mode>] [--verbose]
 fwmap explain --elf <path> [--map <path>] [--lds <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] (--symbol <name> | --object <name> | --section <name>)
 fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
 fwmap history list --db <path>
@@ -783,6 +794,7 @@ Options:
   --path-remap from=to Remap DWARF source path prefixes (repeatable)
   --fail-on-missing-dwarf Return an error when DWARF was requested but unavailable
   --cpp-view  Print C++ aggregate summaries in CLI output
+  --group-by symbol|cpp-template-family|cpp-class|cpp-runtime-overhead|cpp-lambda-group Select the top diff grouping shown in CLI output
   --ci-summary Print compact CI-friendly summary
   --ci-source-summary Include top growing source files, functions, and line ranges in CI output
   --ci-format text|markdown|json Select CI summary format
@@ -1244,10 +1256,39 @@ fn parse_path_remap(value: &str) -> Result<(String, String), String> {
         .ok_or_else(|| format!("invalid path remap '{value}', expected <from=to>"))
 }
 
+fn parse_cpp_group_by(value: &str) -> Result<CppGroupBy, String> {
+    match value {
+        "symbol" => Ok(CppGroupBy::Symbol),
+        "cpp-template-family" => Ok(CppGroupBy::CppTemplateFamily),
+        "cpp-class" => Ok(CppGroupBy::CppClass),
+        "cpp-runtime-overhead" => Ok(CppGroupBy::CppRuntimeOverhead),
+        "cpp-lambda-group" => Ok(CppGroupBy::CppLambdaGroup),
+        _ => Err(format!(
+            "invalid value for --group-by: '{value}', expected symbol|cpp-template-family|cpp-class|cpp-runtime-overhead|cpp-lambda-group"
+        )),
+    }
+}
+
+fn print_grouped_cpp_diff(diff: &crate::model::DiffResult, group_by: CppGroupBy) {
+    let (label, entries) = match group_by {
+        CppGroupBy::Symbol => return,
+        CppGroupBy::CppTemplateFamily => ("Top growth template family", &diff.cpp_template_family_diffs),
+        CppGroupBy::CppClass => ("Top growth class", &diff.cpp_class_diffs),
+        CppGroupBy::CppRuntimeOverhead => ("Top runtime overhead", &diff.cpp_runtime_overhead_diffs),
+        CppGroupBy::CppLambdaGroup => ("Top lambda group", &diff.cpp_lambda_group_diffs),
+    };
+    if let Some(entry) = top_increases(entries, 1).first() {
+        println!("{label}: {} ({:+})", entry.name, entry.delta);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{parse_args, Command};
-    use crate::model::{CiFormat, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode, ToolchainSelection, WarningLevel};
+    use crate::model::{
+        CiFormat, CppGroupBy, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode, ToolchainSelection,
+        WarningLevel,
+    };
     use std::path::PathBuf;
 
     #[test]
@@ -1280,6 +1321,20 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(cmd, Command::Analyze { cpp_view: true, .. }));
+    }
+
+    #[test]
+    fn parses_cpp_group_by_flag() {
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "analyze".to_string(),
+            "--elf".to_string(),
+            "Cargo.toml".to_string(),
+            "--group-by".to_string(),
+            "cpp-class".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(cmd, Command::Analyze { group_by: CppGroupBy::CppClass, .. }));
     }
 
     #[test]

@@ -656,6 +656,10 @@ mod tests {
             source_file_diffs: Vec::new(),
             function_diffs: Vec::new(),
             line_diffs: Vec::new(),
+            cpp_template_family_diffs: Vec::new(),
+            cpp_class_diffs: Vec::new(),
+            cpp_runtime_overhead_diffs: Vec::new(),
+            cpp_lambda_group_diffs: Vec::new(),
         };
         let warnings = evaluate_warnings(&current, Some(&diff), &ThresholdConfig::default(), &[]);
         assert!(warnings.iter().any(|w| w.code == "ROM_THRESHOLD"));
@@ -694,6 +698,10 @@ mod tests {
             source_file_diffs: Vec::new(),
             function_diffs: Vec::new(),
             line_diffs: Vec::new(),
+            cpp_template_family_diffs: Vec::new(),
+            cpp_class_diffs: Vec::new(),
+            cpp_runtime_overhead_diffs: Vec::new(),
+            cpp_lambda_group_diffs: Vec::new(),
         };
         let thresholds = ThresholdConfig {
             rom_percent: 95.0,

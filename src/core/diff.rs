@@ -1,6 +1,10 @@
 use std::collections::BTreeMap;
 
-use crate::model::{AnalysisResult, ArchiveContribution, DiffChangeKind, DiffEntry, DiffResult, DiffSummary, ObjectSourceKind};
+use crate::cpp::aggregate_group_sizes;
+use crate::model::{
+    AnalysisResult, ArchiveContribution, CppGroupBy, DiffChangeKind, DiffEntry, DiffResult, DiffSummary,
+    ObjectSourceKind,
+};
 
 pub fn diff_results(current: &AnalysisResult, previous: &AnalysisResult) -> DiffResult {
     let section_diffs = diff_named(
@@ -49,6 +53,22 @@ pub fn diff_results(current: &AnalysisResult, previous: &AnalysisResult) -> Diff
             .iter()
             .map(|item| (line_key(&item.path, item.line_start, item.line_end), item.size)),
     );
+    let cpp_template_family_diffs = diff_named(
+        aggregate_group_sizes(&current.cpp_view, CppGroupBy::CppTemplateFamily).into_iter(),
+        aggregate_group_sizes(&previous.cpp_view, CppGroupBy::CppTemplateFamily).into_iter(),
+    );
+    let cpp_class_diffs = diff_named(
+        aggregate_group_sizes(&current.cpp_view, CppGroupBy::CppClass).into_iter(),
+        aggregate_group_sizes(&previous.cpp_view, CppGroupBy::CppClass).into_iter(),
+    );
+    let cpp_runtime_overhead_diffs = diff_named(
+        aggregate_group_sizes(&current.cpp_view, CppGroupBy::CppRuntimeOverhead).into_iter(),
+        aggregate_group_sizes(&previous.cpp_view, CppGroupBy::CppRuntimeOverhead).into_iter(),
+    );
+    let cpp_lambda_group_diffs = diff_named(
+        aggregate_group_sizes(&current.cpp_view, CppGroupBy::CppLambdaGroup).into_iter(),
+        aggregate_group_sizes(&previous.cpp_view, CppGroupBy::CppLambdaGroup).into_iter(),
+    );
 
     // Keep every diff as the same name/current/previous/delta shape so HTML/JSON/CI can reuse one renderer.
     let summary = DiffSummary {
@@ -90,6 +110,10 @@ pub fn diff_results(current: &AnalysisResult, previous: &AnalysisResult) -> Diff
         source_file_diffs,
         function_diffs,
         line_diffs,
+        cpp_template_family_diffs,
+        cpp_class_diffs,
+        cpp_runtime_overhead_diffs,
+        cpp_lambda_group_diffs,
     }
 }
 
@@ -212,6 +236,7 @@ mod tests {
         archive_member_key, diff_results, function_key, line_key, names_for_kind, object_key, section_key,
         source_file_key, symbol_key, top_increases,
     };
+    use crate::cpp::build_cpp_view;
     use crate::model::{
         AnalysisResult, ArchiveContribution, BinaryInfo, DebugArtifactInfo, DebugInfoSummary, DiffChangeKind,
         FunctionAttribution, LineRangeAttribution, MemorySummary, ObjectContribution, ObjectSourceKind,
@@ -323,6 +348,28 @@ mod tests {
         assert!(diff.source_file_diffs.iter().any(|item| item.name == "src/main.c" && item.delta == 12));
         assert!(diff.function_diffs.iter().any(|item| item.name == "src/main.c::main" && item.delta == 12));
         assert!(diff.line_diffs.iter().any(|item| item.name == "src/main.c:10-12" && item.change == DiffChangeKind::Added));
+    }
+
+    #[test]
+    fn computes_cpp_group_diffs() {
+        let mut current = stub_analysis(&[], &[("_ZN3app3Foo3barEv", 30), ("_ZTVN3app3FooE", 20)], &[], &[]);
+        current.symbols[0].demangled_name = Some("app::Foo::bar()".to_string());
+        current.symbols[1].demangled_name = Some("vtable for app::Foo".to_string());
+        current.cpp_view = build_cpp_view(&current.symbols);
+
+        let mut previous = stub_analysis(&[], &[("_ZN3app3Foo3barEv", 10)], &[], &[]);
+        previous.symbols[0].demangled_name = Some("app::Foo::bar()".to_string());
+        previous.cpp_view = build_cpp_view(&previous.symbols);
+
+        let diff = diff_results(&current, &previous);
+        assert!(diff
+            .cpp_class_diffs
+            .iter()
+            .any(|item| item.name == "app::Foo" && item.delta == 40));
+        assert!(diff
+            .cpp_runtime_overhead_diffs
+            .iter()
+            .any(|item| item.name == "vtable" && item.delta == 20));
     }
 
     fn stub_analysis(

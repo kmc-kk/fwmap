@@ -540,6 +540,10 @@ mod tests {
             source_file_diffs: Vec::new(),
             function_diffs: Vec::new(),
             line_diffs: Vec::new(),
+            cpp_template_family_diffs: Vec::new(),
+            cpp_class_diffs: Vec::new(),
+            cpp_runtime_overhead_diffs: Vec::new(),
+            cpp_lambda_group_diffs: Vec::new(),
         };
         let context = RuleContext {
             current: &current,
@@ -589,6 +593,10 @@ mod tests {
             source_file_diffs: Vec::new(),
             function_diffs: Vec::new(),
             line_diffs: Vec::new(),
+            cpp_template_family_diffs: Vec::new(),
+            cpp_class_diffs: Vec::new(),
+            cpp_runtime_overhead_diffs: Vec::new(),
+            cpp_lambda_group_diffs: Vec::new(),
         };
         let thresholds = ThresholdConfig {
             rom_percent: 95.0,
@@ -667,6 +675,10 @@ mod tests {
                 change: DiffChangeKind::Increased,
             }],
             line_diffs: Vec::new(),
+            cpp_template_family_diffs: Vec::new(),
+            cpp_class_diffs: Vec::new(),
+            cpp_runtime_overhead_diffs: Vec::new(),
+            cpp_lambda_group_diffs: Vec::new(),
         };
         let custom_rules = vec![
             crate::model::CustomRule {

@@ -865,6 +865,10 @@ mod tests {
             source_file_diffs: Vec::new(),
             function_diffs: Vec::new(),
             line_diffs: Vec::new(),
+            cpp_template_family_diffs: Vec::new(),
+            cpp_class_diffs: Vec::new(),
+            cpp_runtime_overhead_diffs: Vec::new(),
+            cpp_lambda_group_diffs: Vec::new(),
         };
         let why = explain_top_growth(&analysis, &diff, 3);
         assert_eq!(why.top_symbols.len(), 1);

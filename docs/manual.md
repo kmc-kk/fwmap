@@ -194,6 +194,29 @@ fwmap analyze \
 
 このオプションを付けると、CLI に `Top template family` / `Top class` / `Runtime overhead` を短く出します。JSON には `cpp_view` が追加され、template family、class、method family、lambda group、`vtable` / `typeinfo` / `guard variable` / `thunk` の集約を確認できます。
 
+### C++ 集約単位で差分を見る
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --prev-elf prev/app.elf \
+  --prev-map prev/app.map \
+  --demangle=on \
+  --cpp-view \
+  --group-by cpp-class
+```
+
+`--group-by` には次を指定できます。
+
+- `symbol`
+- `cpp-template-family`
+- `cpp-class`
+- `cpp-runtime-overhead`
+- `cpp-lambda-group`
+
+HTML と JSON では、C++ diff として template family / class / runtime overhead / lambda group の増減を表示します。class と template family の diff 行には、上位 symbol と why-linked 要約も併記されます。
+
 ### DWARF から source line を読む
 
 ```bash

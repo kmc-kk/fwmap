@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::demangle::demangle_symbol;
-use crate::model::{CppAggregate, CppSymbolKind, CppSymbolSummary, CppView, SymbolInfo};
+use crate::model::{CppAggregate, CppGroupBy, CppSymbolKind, CppSymbolSummary, CppView, SymbolInfo};
 
 pub fn build_cpp_view(symbols: &[SymbolInfo]) -> CppView {
     let mut classified = symbols.iter().filter_map(classify_symbol).collect::<Vec<_>>();
@@ -23,6 +23,37 @@ pub fn build_cpp_view(symbols: &[SymbolInfo]) -> CppView {
         }),
         classified_symbols: classified,
     }
+}
+
+pub fn aggregate_group_sizes(view: &CppView, group_by: CppGroupBy) -> Vec<(String, u64)> {
+    let mut totals = BTreeMap::<String, u64>::new();
+    for symbol in &view.classified_symbols {
+        if let Some(key) = group_key(symbol, group_by) {
+            *totals.entry(key).or_default() += symbol.size;
+        }
+    }
+    totals.into_iter().collect()
+}
+
+pub fn top_group_symbols(view: &CppView, group_by: CppGroupBy, name: &str, limit: usize) -> Vec<String> {
+    let mut members = view
+        .classified_symbols
+        .iter()
+        .filter(|item| group_key(item, group_by).as_deref() == Some(name))
+        .map(|item| (item.display_name.clone(), item.size))
+        .collect::<Vec<_>>();
+    members.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    members.into_iter().take(limit).map(|item| item.0).collect()
+}
+
+pub fn group_symbols<'a>(view: &'a CppView, group_by: CppGroupBy, name: &str) -> Vec<&'a CppSymbolSummary> {
+    let mut members = view
+        .classified_symbols
+        .iter()
+        .filter(|item| group_key(item, group_by).as_deref() == Some(name))
+        .collect::<Vec<_>>();
+    members.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.display_name.cmp(&b.display_name)));
+    members
 }
 
 pub fn classify_symbol(symbol: &SymbolInfo) -> Option<CppSymbolSummary> {
@@ -169,6 +200,22 @@ where
     rows.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
     rows.truncate(20);
     rows
+}
+
+fn group_key(symbol: &CppSymbolSummary, group_by: CppGroupBy) -> Option<String> {
+    match group_by {
+        CppGroupBy::Symbol => Some(symbol.display_name.clone()),
+        CppGroupBy::CppTemplateFamily => symbol.template_family.clone(),
+        CppGroupBy::CppClass => symbol.class_name.clone(),
+        CppGroupBy::CppRuntimeOverhead => runtime_bucket(symbol.kind),
+        CppGroupBy::CppLambdaGroup => symbol.lambda_related.then(|| {
+            symbol
+                .class_name
+                .clone()
+                .or_else(|| symbol.namespace.clone())
+                .unwrap_or_else(|| "(global lambda scope)".to_string())
+        }),
+    }
 }
 
 fn runtime_bucket(kind: CppSymbolKind) -> Option<String> {

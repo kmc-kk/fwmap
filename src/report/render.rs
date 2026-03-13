@@ -2,12 +2,13 @@ use std::fs;
 use std::path::Path;
 
 use crate::analyze::format_bytes;
+use crate::cpp::{group_symbols, top_group_symbols};
 use crate::demangle::display_name;
 use crate::diff::{names_for_kind, top_increases};
-use crate::linkage::{explain_object, explain_top_growth, WhyLinkedCollection};
+use crate::linkage::{explain_object, explain_symbol, explain_top_growth, WhyLinkedCollection};
 use crate::model::{
-    AnalysisResult, CiFormat, CppAggregate, DiffChangeKind, DiffEntry, DiffResult, ObjectSourceKind, ThresholdConfig,
-    WarningItem, WarningLevel,
+    AnalysisResult, CiFormat, CppAggregate, CppGroupBy, DiffChangeKind, DiffEntry, DiffResult, ObjectSourceKind,
+    ThresholdConfig, WarningItem, WarningLevel,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -210,6 +211,7 @@ fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>, source_option
             header(current),
             overview(current, diff),
             warning_section(&current.warnings),
+            cpp_view_section(current),
             source_summary(current),
             source_files_section(current),
             top_functions(current),
@@ -266,6 +268,7 @@ fn build_json(
         "line_attributions": current.line_attributions.iter().take(200).collect::<Vec<_>>(),
         "unknown_source": &current.unknown_source,
         "cpp_view": &current.cpp_view,
+        "cpp_diff": diff.map(|item| cpp_diff_payload(current, item)),
         "regions": &current.memory.region_summaries,
         "diff_summary": diff.map(|item| &item.summary),
         "diff": diff,
@@ -599,6 +602,44 @@ fn warning_section(items: &[WarningItem]) -> String {
         format!("<table><thead><tr><th>Level</th><th>Source</th><th>Code</th><th>Related</th><th>Message</th></tr></thead><tbody>{rows}</tbody></table>")
     };
     format!("<section><h2>Warnings</h2>{body}</section>")
+}
+
+fn cpp_view_section(current: &AnalysisResult) -> String {
+    if current.cpp_view.classified_symbols.is_empty() {
+        return String::new();
+    }
+    let template_block =
+        cpp_aggregate_table("Top Template Families", &current.cpp_view.top_template_families, CppGroupBy::CppTemplateFamily, current);
+    let class_block = cpp_aggregate_table("Top Classes", &current.cpp_view.top_classes, CppGroupBy::CppClass, current);
+    let runtime_block =
+        cpp_aggregate_table("Runtime Overhead", &current.cpp_view.runtime_overhead, CppGroupBy::CppRuntimeOverhead, current);
+    let lambda_block = cpp_aggregate_table("Lambda Groups", &current.cpp_view.lambda_groups, CppGroupBy::CppLambdaGroup, current);
+    format!("<section id=\"cpp-view\"><h2>C++ View</h2>{template_block}{class_block}{runtime_block}{lambda_block}</section>")
+}
+
+fn cpp_aggregate_table(title: &str, entries: &[CppAggregate], group_by: CppGroupBy, current: &AnalysisResult) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+    let rows = entries
+        .iter()
+        .take(12)
+        .map(|item| {
+            let members = top_group_symbols(&current.cpp_view, group_by, &item.name, 3).join(", ");
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                escape(&item.name),
+                item.symbol_count,
+                format_bytes(item.size),
+                escape(&members)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<h3>{}</h3><table><thead><tr><th>Name</th><th>Symbols</th><th>Size</th><th>Top Symbols</th></tr></thead><tbody>{rows}</tbody></table>",
+        escape(title)
+    )
 }
 
 fn source_summary(current: &AnalysisResult) -> String {
@@ -1008,11 +1049,12 @@ fn object_source_kind_label(kind: ObjectSourceKind) -> &'static str {
 fn diff_section(current: &AnalysisResult, diff: Option<&DiffResult>, source_options: SourceRenderOptions) -> String {
     match diff {
         Some(diff) => format!(
-            "<section><h2>Diff</h2>{}{}{}{}{}{}{}{} </section>",
+            "<section><h2>Diff</h2>{}{}{}{}{}{}{}{}{} </section>",
             diff_summary(diff),
             diff_table("Top Section Growth", &top_increases(&diff.section_diffs, 10), 10),
             diff_table("Top Symbol Growth", &top_increases(&diff.symbol_diffs, 10), 10),
             diff_table("Top Object Growth", &top_increases(&diff.object_diffs, 10), 10),
+            cpp_diff_section(current, diff),
             source_diff_section(current, diff, source_options),
             string_list("Added Symbols", &names_for_kind(&diff.symbol_diffs, DiffChangeKind::Added, 20)),
             string_list("Removed Symbols", &names_for_kind(&diff.symbol_diffs, DiffChangeKind::Removed, 20)),
@@ -1020,6 +1062,76 @@ fn diff_section(current: &AnalysisResult, diff: Option<&DiffResult>, source_opti
         ),
         None => "<section><h2>Diff</h2><p>No previous build was provided.</p></section>".to_string(),
     }
+}
+
+fn cpp_diff_section(current: &AnalysisResult, diff: &DiffResult) -> String {
+    if diff.cpp_template_family_diffs.is_empty()
+        && diff.cpp_class_diffs.is_empty()
+        && diff.cpp_runtime_overhead_diffs.is_empty()
+        && diff.cpp_lambda_group_diffs.is_empty()
+    {
+        return String::new();
+    }
+    let template_block = cpp_diff_table(
+        current,
+        "Top Template Family Growth",
+        &top_increases(&diff.cpp_template_family_diffs, 8),
+        CppGroupBy::CppTemplateFamily,
+    );
+    let class_block =
+        cpp_diff_table(current, "Top Class Growth", &top_increases(&diff.cpp_class_diffs, 8), CppGroupBy::CppClass);
+    let runtime_block = diff_table(
+        "Runtime Overhead Growth",
+        &top_increases(&diff.cpp_runtime_overhead_diffs, 8),
+        8,
+    );
+    let lambda_block =
+        cpp_diff_table(current, "Lambda Group Growth", &top_increases(&diff.cpp_lambda_group_diffs, 8), CppGroupBy::CppLambdaGroup);
+    format!("<h3 id=\"diff-cpp\">C++ Diff</h3>{template_block}{class_block}{runtime_block}{lambda_block}")
+}
+
+fn cpp_diff_table(current: &AnalysisResult, title: &str, entries: &[DiffEntry], group_by: CppGroupBy) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+    let rows = entries
+        .iter()
+        .map(|entry| {
+            let members = group_symbols(&current.cpp_view, group_by, &entry.name);
+            let detail = members
+                .iter()
+                .take(3)
+                .map(|item| {
+                    let explain = explain_symbol(current, &item.raw_name)
+                        .map(|value| value.summary)
+                        .unwrap_or_else(|| "No why-linked evidence".to_string());
+                    format!("{}: {}", item.display_name, explain)
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
+            let drill_down = members
+                .iter()
+                .take(5)
+                .map(|item| format!("{} ({})", item.display_name, format_bytes(item.size)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td class=\"{}\">{:+}</td><td>{}</td><td>{}</td></tr>",
+                escape(&entry.name),
+                format_bytes(entry.current),
+                format_bytes(entry.previous),
+                delta_class(entry.delta),
+                entry.delta,
+                escape(&detail),
+                escape(&drill_down)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<h3>{}</h3><table><thead><tr><th>Name</th><th>Current</th><th>Previous</th><th>Delta</th><th>Why Linked</th><th>Symbols</th></tr></thead><tbody>{rows}</tbody></table>",
+        escape(title)
+    )
 }
 
 fn diff_summary(diff: &DiffResult) -> String {
@@ -1086,6 +1198,48 @@ fn source_diff_payload(diff: &DiffResult, source_options: SourceRenderOptions) -
         "functions": top_increases(&diff.function_diffs, source_options.max_diff_items.max(1)),
         "lines": filtered_line_diffs(diff, source_options),
     })
+}
+
+fn cpp_diff_payload(current: &AnalysisResult, diff: &DiffResult) -> serde_json::Value {
+    serde_json::json!({
+        "template_families": cpp_diff_payload_entries(current, &diff.cpp_template_family_diffs, CppGroupBy::CppTemplateFamily),
+        "classes": cpp_diff_payload_entries(current, &diff.cpp_class_diffs, CppGroupBy::CppClass),
+        "runtime_overhead": top_increases(&diff.cpp_runtime_overhead_diffs, 10),
+        "lambda_groups": cpp_diff_payload_entries(current, &diff.cpp_lambda_group_diffs, CppGroupBy::CppLambdaGroup),
+    })
+}
+
+fn cpp_diff_payload_entries(current: &AnalysisResult, entries: &[DiffEntry], group_by: CppGroupBy) -> serde_json::Value {
+    serde_json::Value::Array(
+        top_increases(entries, 10)
+            .into_iter()
+            .map(|entry| {
+                let symbols = group_symbols(&current.cpp_view, group_by, &entry.name)
+                    .into_iter()
+                    .take(5)
+                    .map(|item| item.display_name.clone())
+                    .collect::<Vec<_>>();
+                let why_linked = group_symbols(&current.cpp_view, group_by, &entry.name)
+                    .into_iter()
+                    .take(3)
+                    .map(|item| {
+                        explain_symbol(current, &item.raw_name)
+                            .map(|value| value.summary)
+                            .unwrap_or_else(|| "No why-linked evidence".to_string())
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::json!({
+                    "name": entry.name,
+                    "current": entry.current,
+                    "previous": entry.previous,
+                    "delta": entry.delta,
+                    "change": entry.change,
+                    "symbols": symbols,
+                    "why_linked": why_linked,
+                })
+            })
+            .collect(),
+    )
 }
 
 fn function_display_name(current: &AnalysisResult, key: &str) -> String {
@@ -1340,7 +1494,7 @@ mod tests {
                 change: DiffChangeKind::Increased,
             }],
             symbol_diffs: vec![DiffEntry {
-                name: "main".to_string(),
+                name: "_ZN3app3Foo3barEv".to_string(),
                 current: 64,
                 previous: 0,
                 delta: 64,
@@ -1369,6 +1523,28 @@ mod tests {
                 delta: 32,
                 change: DiffChangeKind::Increased,
             }],
+            cpp_template_family_diffs: vec![DiffEntry {
+                name: "app::Foo<...>".to_string(),
+                current: 32,
+                previous: 0,
+                delta: 32,
+                change: DiffChangeKind::Added,
+            }],
+            cpp_class_diffs: vec![DiffEntry {
+                name: "app::Foo".to_string(),
+                current: 64,
+                previous: 0,
+                delta: 64,
+                change: DiffChangeKind::Added,
+            }],
+            cpp_runtime_overhead_diffs: vec![DiffEntry {
+                name: "vtable".to_string(),
+                current: 16,
+                previous: 0,
+                delta: 16,
+                change: DiffChangeKind::Added,
+            }],
+            cpp_lambda_group_diffs: Vec::new(),
         };
         write_html_report(
             &path,
@@ -1387,6 +1563,8 @@ mod tests {
         assert!(html.contains("LARGE_SYMBOL"));
         assert!(html.contains("Added Symbols"));
         assert!(html.contains("Top Symbol Growth"));
+        assert!(html.contains("C++ View"));
+        assert!(html.contains("C++ Diff"));
         assert!(html.contains("Source Diff"));
         assert!(html.contains("Memory Regions Overview"));
         assert!(html.contains("Filter section"));
@@ -1474,6 +1652,10 @@ mod tests {
                 delta: 16,
                 change: DiffChangeKind::Increased,
             }],
+            cpp_template_family_diffs: Vec::new(),
+            cpp_class_diffs: Vec::new(),
+            cpp_runtime_overhead_diffs: Vec::new(),
+            cpp_lambda_group_diffs: Vec::new(),
         };
         let text = build_ci_summary(
             &analysis,
@@ -1542,8 +1724,8 @@ mod tests {
                 category: SectionCategory::Rom,
             }],
             symbols: vec![SymbolInfo {
-                name: "main".to_string(),
-                demangled_name: None,
+                name: "_ZN3app3Foo3barEv".to_string(),
+                demangled_name: Some("app::Foo::bar()".to_string()),
                 section_name: Some(".text".to_string()),
                 object_path: Some("main.o".to_string()),
                 addr: 0x8000,
@@ -1569,7 +1751,14 @@ mod tests {
             }],
             relocation_references: Vec::new(),
             cross_references: Vec::new(),
-            cpp_view: crate::model::CppView::default(),
+            cpp_view: crate::cpp::build_cpp_view(&[SymbolInfo {
+                name: "_ZN3app3Foo3barEv".to_string(),
+                demangled_name: Some("app::Foo::bar()".to_string()),
+                section_name: Some(".text".to_string()),
+                object_path: Some("main.o".to_string()),
+                addr: 0x8000,
+                size: 64,
+            }]),
             linker_script: None,
             memory: MemorySummary {
                 rom_bytes: 128,

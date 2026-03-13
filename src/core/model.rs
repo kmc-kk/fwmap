@@ -198,6 +198,10 @@ pub struct DiffResult {
     pub source_file_diffs: Vec<DiffEntry>,
     pub function_diffs: Vec<DiffEntry>,
     pub line_diffs: Vec<DiffEntry>,
+    pub cpp_template_family_diffs: Vec<DiffEntry>,
+    pub cpp_class_diffs: Vec<DiffEntry>,
+    pub cpp_runtime_overhead_diffs: Vec<DiffEntry>,
+    pub cpp_lambda_group_diffs: Vec<DiffEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
@@ -259,6 +263,17 @@ pub struct CppAggregate {
     pub name: String,
     pub size: u64,
     pub symbol_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum CppGroupBy {
+    #[default]
+    Symbol,
+    CppTemplateFamily,
+    CppClass,
+    CppRuntimeOverhead,
+    CppLambdaGroup,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]

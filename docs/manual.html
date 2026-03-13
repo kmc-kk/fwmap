@@ -140,6 +140,25 @@
   --report-json build/fwmap_cpp.json
 </code></pre>
 <p>このオプションを付けると、CLI に <code>Top template family</code> / <code>Top class</code> / <code>Runtime overhead</code> を短く出します。JSON には <code>cpp_view</code> が追加され、template family、class、method family、lambda group、<code>vtable</code> / <code>typeinfo</code> / <code>guard variable</code> / <code>thunk</code> の集約を確認できます。</p>
+<h3>C++ 集約単位で差分を見る</h3>
+<pre><code class="language-bash">fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --prev-elf prev/app.elf \
+  --prev-map prev/app.map \
+  --demangle=on \
+  --cpp-view \
+  --group-by cpp-class
+</code></pre>
+<p><code>--group-by</code> には次を指定できます。</p>
+<ul>
+<li><code>symbol</code></li>
+<li><code>cpp-template-family</code></li>
+<li><code>cpp-class</code></li>
+<li><code>cpp-runtime-overhead</code></li>
+<li><code>cpp-lambda-group</code></li>
+</ul>
+<p>HTML と JSON では、C++ diff として template family / class / runtime overhead / lambda group の増減を表示します。class と template family の diff 行には、上位 symbol と why-linked 要約も併記されます。</p>
 <h3>DWARF から source line を読む</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \

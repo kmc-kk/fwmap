@@ -166,6 +166,19 @@ cargo run -- analyze \
   --report-json fwmap_cpp.json
 ```
 
+C++ diff grouping example:
+
+```bash
+cargo run -- analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --prev-elf prev/app.elf \
+  --prev-map prev/app.map \
+  --demangle=on \
+  --cpp-view \
+  --group-by cpp-class
+```
+
 CI-oriented example:
 
 ```bash
@@ -216,6 +229,7 @@ Top growth object: drivers/net.o (+8192)
 - Top Functions: symbol-linked function attribution with raw/demangled names
 - Line Hotspots: compressed source line ranges with byte totals
 - C++ view: classified symbols plus top template families, classes, method families, lambda groups, and runtime overhead buckets
+- C++ diff: template-family, class, runtime-overhead, and lambda-group growth with symbol drill-down and why-linked summaries
 - JSON: machine-readable report with binary, memory, warnings, diff, and region data
 - SARIF: GitHub code scanning friendly warning output with rule ids, levels, locations, and stable fingerprints
 - CI summary: compact text / markdown / JSON output for CI logs and PR comments
