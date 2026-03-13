@@ -144,8 +144,9 @@ fn change_rank(kind: DiffChangeKind) -> usize {
 mod tests {
     use super::{archive_member_key, diff_results, names_for_kind, object_key, section_key, symbol_key, top_increases};
     use crate::model::{
-        AnalysisResult, ArchiveContribution, BinaryInfo, DiffChangeKind, MemorySummary, ObjectContribution, SectionCategory,
-        SectionTotal, SymbolInfo, ToolchainInfo, ToolchainKind, ToolchainSelection,
+        AnalysisResult, ArchiveContribution, BinaryInfo, DebugInfoSummary, DiffChangeKind, MemorySummary,
+        ObjectContribution, SectionCategory, SectionTotal, SymbolInfo, ToolchainInfo, ToolchainKind,
+        ToolchainSelection, UnknownSourceBucket,
     };
 
     #[test]
@@ -201,6 +202,7 @@ mod tests {
                 detected: None,
                 resolved: ToolchainKind::Gnu,
             },
+            debug_info: DebugInfoSummary::default(),
             sections: Vec::new(),
             symbols: symbols
                 .iter()
@@ -244,6 +246,11 @@ mod tests {
                 memory_regions: Vec::new(),
                 region_summaries: Vec::new(),
             },
+            compilation_units: Vec::new(),
+            source_files: Vec::new(),
+            line_attributions: Vec::new(),
+            function_attributions: Vec::new(),
+            unknown_source: UnknownSourceBucket::default(),
             warnings: Vec::new(),
         }
     }

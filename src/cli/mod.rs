@@ -7,7 +7,9 @@ use crate::history::{
     list_builds, print_build_detail, print_build_list, print_trend, record_build, show_build, trend_metric,
     HistoryRecordInput,
 };
-use crate::model::{CiFormat, DemangleMode, ThresholdConfig, ToolchainSelection, WarningLevel};
+use crate::model::{
+    CiFormat, DemangleMode, DwarfMode, SourceLinesMode, ThresholdConfig, ToolchainSelection, WarningLevel,
+};
 use crate::rule_config::{apply_threshold_overrides, load_rule_config};
 use crate::render::{print_ci_summary, print_cli_summary, write_ci_summary, write_html_report, write_json_report};
 
@@ -34,6 +36,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             rules,
             demangle,
             toolchain,
+            dwarf_mode,
+            source_lines,
+            source_root,
+            path_remaps,
+            fail_on_missing_dwarf,
             metadata,
         } => {
             let mut options = AnalyzeOptions {
@@ -41,6 +48,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 demangle,
                 custom_rules: Vec::new(),
                 toolchain,
+                dwarf_mode,
+                source_lines,
+                source_root,
+                path_remaps,
+                fail_on_missing_dwarf,
             };
             if let Some(rule_path) = rules.as_deref() {
                 let config = load_rule_config(rule_path)?;
@@ -87,6 +99,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             rules,
             demangle,
             toolchain,
+            dwarf_mode,
+            source_lines,
+            source_root,
+            path_remaps,
+            fail_on_missing_dwarf,
             verbose,
         } => {
             let mut options = AnalyzeOptions {
@@ -94,6 +111,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 demangle,
                 custom_rules: Vec::new(),
                 toolchain,
+                dwarf_mode,
+                source_lines,
+                source_root,
+                path_remaps,
+                fail_on_missing_dwarf,
             };
             if let Some(rule_path) = rules.as_deref() {
                 let config = load_rule_config(rule_path)?;
@@ -174,6 +196,11 @@ enum Command {
         rules: Option<PathBuf>,
         demangle: DemangleMode,
         toolchain: ToolchainSelection,
+        dwarf_mode: DwarfMode,
+        source_lines: SourceLinesMode,
+        source_root: Option<PathBuf>,
+        path_remaps: Vec<(String, String)>,
+        fail_on_missing_dwarf: bool,
         metadata: std::collections::BTreeMap<String, String>,
     },
     HistoryList {
@@ -204,6 +231,11 @@ enum Command {
         rules: Option<PathBuf>,
         demangle: DemangleMode,
         toolchain: ToolchainSelection,
+        dwarf_mode: DwarfMode,
+        source_lines: SourceLinesMode,
+        source_root: Option<PathBuf>,
+        path_remaps: Vec<(String, String)>,
+        fail_on_missing_dwarf: bool,
         verbose: bool,
     },
 }
@@ -237,6 +269,11 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut rules = None;
     let mut demangle = DemangleMode::Auto;
     let mut toolchain = ToolchainSelection::Auto;
+    let mut dwarf_mode = DwarfMode::Auto;
+    let mut source_lines = SourceLinesMode::Off;
+    let mut source_root = None;
+    let mut path_remaps = Vec::new();
+    let mut fail_on_missing_dwarf = false;
     let mut verbose = false;
     let mut index = 2usize;
     while index < args.len() {
@@ -260,6 +297,11 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
             }
             "--fail-on-warning" => {
                 fail_on_warning = true;
+                index += 1;
+                continue;
+            }
+            "--fail-on-missing-dwarf" => {
+                fail_on_missing_dwarf = true;
                 index += 1;
                 continue;
             }
@@ -295,13 +337,40 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                 index += 1;
                 continue;
             }
+            "--dwarf=auto" => {
+                dwarf_mode = DwarfMode::Auto;
+                index += 1;
+                continue;
+            }
+            "--dwarf=on" => {
+                dwarf_mode = DwarfMode::On;
+                index += 1;
+                continue;
+            }
+            "--dwarf=off" => {
+                dwarf_mode = DwarfMode::Off;
+                index += 1;
+                continue;
+            }
             "--toolchain" => {
                 let value = args.get(index + 1).ok_or_else(|| "missing value for --toolchain".to_string())?;
                 toolchain = parse_toolchain(value)?;
                 index += 2;
                 continue;
             }
-            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--rules" | "--ci-out" => {
+            "--source-lines" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --source-lines".to_string())?;
+                source_lines = parse_source_lines_mode(value)?;
+                index += 2;
+                continue;
+            }
+            "--path-remap" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --path-remap".to_string())?;
+                path_remaps.push(parse_path_remap(value)?);
+                index += 2;
+                continue;
+            }
+            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--rules" | "--ci-out" | "--source-root" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--elf" => elf = Some(PathBuf::from(value)),
@@ -313,6 +382,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                     "--report-json" => report_json = Some(PathBuf::from(value)),
                     "--rules" => rules = Some(PathBuf::from(value)),
                     "--ci-out" => ci_out = Some(PathBuf::from(value)),
+                    "--source-root" => source_root = Some(PathBuf::from(value)),
                     _ => {}
                 }
                 index += 2;
@@ -356,6 +426,11 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         rules,
         demangle,
         toolchain,
+        dwarf_mode,
+        source_lines,
+        source_root,
+        path_remaps,
+        fail_on_missing_dwarf,
         verbose,
     })
 }
@@ -379,8 +454,8 @@ fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--verbose]
-fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--meta key=value]
+fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--dwarf=auto|on|off] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--verbose]
+fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--dwarf=auto|on|off] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
 fwmap history list --db <path>
 fwmap history show --db <path> --build <id>
 fwmap history trend --db <path> --metric <rom|ram|warnings|region:NAME|section:NAME> [--last <n>]
@@ -396,6 +471,11 @@ Options:
   --rules     Load TOML rule configuration from the given path
   --demangle=auto|on|off Control C++ symbol demangling
   --toolchain auto|gnu|lld|iar|armcc|keil Select or detect the map parser family
+  --dwarf=auto|on|off Control DWARF line-table usage
+  --source-lines off|files|functions|lines|all Control source-level aggregation
+  --source-root Apply a root prefix to relative DWARF source paths
+  --path-remap from=to Remap DWARF source path prefixes (repeatable)
+  --fail-on-missing-dwarf Return an error when DWARF was requested but unavailable
   --ci-summary Print compact CI-friendly summary
   --ci-format text|markdown|json Select CI summary format
   --ci-out    Write CI summary to the given path
@@ -430,6 +510,11 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
     let mut rules = None;
     let mut demangle = DemangleMode::Auto;
     let mut toolchain = ToolchainSelection::Auto;
+    let mut dwarf_mode = DwarfMode::Auto;
+    let mut source_lines = SourceLinesMode::Off;
+    let mut source_root = None;
+    let mut path_remaps = Vec::new();
+    let mut fail_on_missing_dwarf = false;
     let mut metadata = std::collections::BTreeMap::new();
     let mut index = 3usize;
     while index < args.len() {
@@ -461,10 +546,36 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
                 demangle = DemangleMode::Off;
                 index += 1;
             }
+            "--dwarf=auto" => {
+                dwarf_mode = DwarfMode::Auto;
+                index += 1;
+            }
+            "--dwarf=on" => {
+                dwarf_mode = DwarfMode::On;
+                index += 1;
+            }
+            "--dwarf=off" => {
+                dwarf_mode = DwarfMode::Off;
+                index += 1;
+            }
             "--toolchain" => {
                 let value = args.get(index + 1).ok_or_else(|| "missing value for --toolchain".to_string())?;
                 toolchain = parse_toolchain(value)?;
                 index += 2;
+            }
+            "--source-lines" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --source-lines".to_string())?;
+                source_lines = parse_source_lines_mode(value)?;
+                index += 2;
+            }
+            "--path-remap" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --path-remap".to_string())?;
+                path_remaps.push(parse_path_remap(value)?);
+                index += 2;
+            }
+            "--fail-on-missing-dwarf" => {
+                fail_on_missing_dwarf = true;
+                index += 1;
             }
             "--meta" => {
                 let value = args.get(index + 1).ok_or_else(|| "missing value for --meta".to_string())?;
@@ -474,7 +585,7 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
                 metadata.insert(k.to_string(), v.to_string());
                 index += 2;
             }
-            "--db" | "--elf" | "--map" | "--lds" | "--rules" => {
+            "--db" | "--elf" | "--map" | "--lds" | "--rules" | "--source-root" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--db" => db = Some(PathBuf::from(value)),
@@ -482,6 +593,7 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
                     "--map" => map = Some(PathBuf::from(value)),
                     "--lds" => lds = Some(PathBuf::from(value)),
                     "--rules" => rules = Some(PathBuf::from(value)),
+                    "--source-root" => source_root = Some(PathBuf::from(value)),
                     _ => {}
                 }
                 index += 2;
@@ -510,6 +622,11 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
         rules,
         demangle,
         toolchain,
+        dwarf_mode,
+        source_lines,
+        source_root,
+        path_remaps,
+        fail_on_missing_dwarf,
         metadata,
     })
 }
@@ -607,10 +724,28 @@ fn parse_toolchain(value: &str) -> Result<ToolchainSelection, String> {
     }
 }
 
+fn parse_source_lines_mode(value: &str) -> Result<SourceLinesMode, String> {
+    match value {
+        "off" => Ok(SourceLinesMode::Off),
+        "files" => Ok(SourceLinesMode::Files),
+        "functions" => Ok(SourceLinesMode::Functions),
+        "lines" => Ok(SourceLinesMode::Lines),
+        "all" => Ok(SourceLinesMode::All),
+        _ => Err(format!("invalid source-lines mode '{value}', expected off|files|functions|lines|all")),
+    }
+}
+
+fn parse_path_remap(value: &str) -> Result<(String, String), String> {
+    value
+        .split_once('=')
+        .map(|(from, to)| (from.to_string(), to.to_string()))
+        .ok_or_else(|| format!("invalid path remap '{value}', expected <from=to>"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{parse_args, Command};
-    use crate::model::{CiFormat, DemangleMode, ToolchainSelection};
+    use crate::model::{CiFormat, DemangleMode, DwarfMode, SourceLinesMode, ToolchainSelection};
     use std::path::PathBuf;
 
     #[test]
@@ -758,6 +893,42 @@ mod tests {
         .unwrap();
         match cmd {
             Command::Analyze { toolchain, .. } => assert_eq!(toolchain, ToolchainSelection::Lld),
+            _ => panic!("expected analyze command"),
+        }
+    }
+
+    #[test]
+    fn parses_dwarf_options() {
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "analyze".to_string(),
+            "--elf".to_string(),
+            "Cargo.toml".to_string(),
+            "--dwarf=on".to_string(),
+            "--source-lines".to_string(),
+            "lines".to_string(),
+            "--source-root".to_string(),
+            "src".to_string(),
+            "--path-remap".to_string(),
+            "a=b".to_string(),
+            "--fail-on-missing-dwarf".to_string(),
+        ])
+        .unwrap();
+        match cmd {
+            Command::Analyze {
+                dwarf_mode,
+                source_lines,
+                source_root,
+                path_remaps,
+                fail_on_missing_dwarf,
+                ..
+            } => {
+                assert_eq!(dwarf_mode, DwarfMode::On);
+                assert_eq!(source_lines, SourceLinesMode::Lines);
+                assert_eq!(source_root, Some(PathBuf::from("src")));
+                assert_eq!(path_remaps, vec![("a".to_string(), "b".to_string())]);
+                assert!(fail_on_missing_dwarf);
+            }
             _ => panic!("expected analyze command"),
         }
     }

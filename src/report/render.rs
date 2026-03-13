@@ -10,6 +10,12 @@ pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, ver
     println!("ELF: {}", result.binary.path);
     println!("Toolchain: {} (requested: {})", result.toolchain.resolved, result.toolchain.requested);
     println!(
+        "DWARF: {} | Source lines: {} | Source files: {}",
+        if result.debug_info.dwarf_used { "used" } else { "not used" },
+        result.debug_info.source_lines,
+        result.source_files.len()
+    );
+    println!(
         "ROM: {} | RAM: {} | Sections: {} | Symbols: {} | Warnings: {}",
         format_bytes(result.memory.rom_bytes),
         format_bytes(result.memory.ram_bytes),
@@ -86,6 +92,7 @@ fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
             header(current),
             overview(current, diff),
             warning_section(&current.warnings),
+            source_summary(current),
             memory_summary(current),
             memory_regions(current),
             region_sections(current),
@@ -104,6 +111,7 @@ fn build_json(current: &AnalysisResult, diff: Option<&DiffResult>, thresholds: &
         "schema_version": 1,
         "binary": &current.binary,
         "toolchain": &current.toolchain,
+        "debug_info": &current.debug_info,
         "linker_script": &current.linker_script,
         "section_summary": &current.memory.section_totals,
         "memory_summary": &current.memory,
@@ -112,6 +120,10 @@ fn build_json(current: &AnalysisResult, diff: Option<&DiffResult>, thresholds: &
         "top_symbols": current.symbols.iter().take(50).collect::<Vec<_>>(),
         "top_object_contributions": current.object_contributions.iter().take(30).collect::<Vec<_>>(),
         "archive_contributions": current.archive_contributions.iter().take(30).collect::<Vec<_>>(),
+        "source_files": &current.source_files,
+        "functions": &current.function_attributions,
+        "line_attributions": current.line_attributions.iter().take(200).collect::<Vec<_>>(),
+        "unknown_source": &current.unknown_source,
         "regions": &current.memory.region_summaries,
         "diff_summary": diff.map(|item| &item.summary),
         "diff": diff,
@@ -131,6 +143,12 @@ fn build_ci_text(current: &AnalysisResult, diff: Option<&DiffResult>) -> String 
     lines.push(format!("Warnings: {}", current.warnings.len()));
     lines.push(format!("Errors: {}", current.warnings.iter().filter(|item| item.level == WarningLevel::Error).count()));
     lines.push(format!("Toolchain: {}", current.toolchain.resolved));
+    lines.push(format!(
+        "DWARF: {} (source files: {}, unknown ratio: {:.1}%)",
+        if current.debug_info.dwarf_used { "used" } else { "not used" },
+        current.source_files.len(),
+        current.debug_info.unknown_source_ratio * 100.0
+    ));
 
     if let Some(region) = current.memory.region_summaries.first() {
         lines.push(format!("Top region usage: {} ({:.1}%)", region.region_name, region.usage_ratio * 100.0));
@@ -181,6 +199,11 @@ fn build_ci_markdown(current: &AnalysisResult, diff: Option<&DiffResult>) -> Str
         current.warnings.iter().filter(|item| item.level == WarningLevel::Error).count()
     ));
     out.push(format!("| Toolchain | {} |", current.toolchain.resolved));
+    out.push(format!(
+        "| DWARF | {} ({:.1}% unknown) |",
+        if current.debug_info.dwarf_used { "used" } else { "not used" },
+        current.debug_info.unknown_source_ratio * 100.0
+    ));
     out.push(String::new());
 
     let mut growths = Vec::new();
@@ -232,7 +255,11 @@ fn build_ci_json(current: &AnalysisResult, diff: Option<&DiffResult>) -> Result<
             "warning_count": current.warnings.len(),
             "error_count": current.warnings.iter().filter(|item| item.level == WarningLevel::Error).count(),
             "toolchain": current.toolchain.resolved,
+            "dwarf_used": current.debug_info.dwarf_used,
+            "unknown_source_ratio": current.debug_info.unknown_source_ratio,
         },
+        "debug_info": &current.debug_info,
+        "source_files": &current.source_files,
         "top_region": current.memory.region_summaries.first(),
         "top_section_growth": diff.and_then(|item| top_increases(&item.section_diffs, 1).first().cloned()),
         "top_object_growth": diff.and_then(|item| top_increases(&item.object_diffs, 1).first().cloned()),
@@ -266,12 +293,14 @@ fn overview(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
         })
         .unwrap_or_default();
     format!(
-        "<section><h2>Overview</h2><div class=\"grid\"><div class=\"card\"><strong>Binary</strong><div>{}</div></div><div class=\"card\"><strong>Format</strong><div>{} / {}</div></div><div class=\"card\"><strong>Toolchain</strong><div>{} <span class=\"muted\">(requested: {})</span></div></div><div class=\"card\"><strong>Sections</strong><div>{}</div></div><div class=\"card\"><strong>ROM</strong><div>{}</div></div><div class=\"card\"><strong>RAM</strong><div>{}</div></div><div class=\"card\"><strong>Warnings</strong><div>{}</div></div>{}</div></section>",
+        "<section><h2>Overview</h2><div class=\"grid\"><div class=\"card\"><strong>Binary</strong><div>{}</div></div><div class=\"card\"><strong>Format</strong><div>{} / {}</div></div><div class=\"card\"><strong>Toolchain</strong><div>{} <span class=\"muted\">(requested: {})</span></div></div><div class=\"card\"><strong>DWARF</strong><div>{} <span class=\"muted\">({:.1}% unknown)</span></div></div><div class=\"card\"><strong>Sections</strong><div>{}</div></div><div class=\"card\"><strong>ROM</strong><div>{}</div></div><div class=\"card\"><strong>RAM</strong><div>{}</div></div><div class=\"card\"><strong>Warnings</strong><div>{}</div></div>{}</div></section>",
         escape(&current.binary.arch),
         escape(&current.binary.elf_class),
         escape(&current.binary.endian),
         escape(&current.toolchain.resolved.to_string()),
         escape(&current.toolchain.requested.to_string()),
+        if current.debug_info.dwarf_used { "used" } else { "not used" },
+        current.debug_info.unknown_source_ratio * 100.0,
         current.sections.len(),
         format_bytes(current.memory.rom_bytes),
         format_bytes(current.memory.ram_bytes),
@@ -301,6 +330,32 @@ fn warning_section(items: &[WarningItem]) -> String {
         format!("<table><thead><tr><th>Level</th><th>Source</th><th>Code</th><th>Related</th><th>Message</th></tr></thead><tbody>{rows}</tbody></table>")
     };
     format!("<section><h2>Warnings</h2>{body}</section>")
+}
+
+fn source_summary(current: &AnalysisResult) -> String {
+    if !current.debug_info.dwarf_used {
+        return "<section><h2>Source Summary</h2><p>No DWARF line information was used.</p></section>".to_string();
+    }
+    let rows = current
+        .source_files
+        .iter()
+        .take(20)
+        .map(|item| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
+                escape(&item.display_path),
+                item.line_ranges,
+                format_bytes(item.size)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<section><h2>Source Summary</h2><p>Compilation units: {} | Unknown ratio: {:.1}%</p><table><thead><tr><th>Path</th><th>Line Ranges</th><th>Size</th></tr></thead><tbody>{}</tbody></table></section>",
+        current.debug_info.compilation_units,
+        current.debug_info.unknown_source_ratio * 100.0,
+        rows
+    )
 }
 
 fn memory_summary(current: &AnalysisResult) -> String {
@@ -535,9 +590,10 @@ fn escape(text: &str) -> String {
 mod tests {
     use super::{build_ci_summary, write_html_report, write_json_report};
     use crate::model::{
-        AnalysisResult, BinaryInfo, CiFormat, DiffChangeKind, DiffEntry, DiffResult, DiffSummary, MemoryRegion,
-        MemorySummary, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionTotal, SymbolInfo,
-        ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection, WarningItem, WarningLevel, WarningSource,
+        AnalysisResult, BinaryInfo, CiFormat, DebugInfoSummary, DiffChangeKind, DiffEntry, DiffResult, DiffSummary,
+        MemoryRegion, MemorySummary, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo,
+        SectionTotal, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection,
+        UnknownSourceBucket, WarningItem, WarningLevel, WarningSource,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -647,6 +703,8 @@ mod tests {
         assert!(json.contains("\"regions\""));
         assert!(json.contains("\"demangled_name\""));
         assert!(json.contains("\"toolchain\""));
+        assert!(json.contains("\"debug_info\""));
+        assert!(json.contains("\"source_files\""));
         let _ = fs::remove_file(path);
     }
 
@@ -710,6 +768,7 @@ mod tests {
                 detected: Some(ToolchainKind::Gnu),
                 resolved: ToolchainKind::Gnu,
             },
+            debug_info: DebugInfoSummary::default(),
             sections: vec![SectionInfo {
                 name: ".text".to_string(),
                 addr: 0x8000,
@@ -755,6 +814,11 @@ mod tests {
                     }],
                 }],
             },
+            compilation_units: Vec::new(),
+            source_files: Vec::new(),
+            line_attributions: Vec::new(),
+            function_attributions: Vec::new(),
+            unknown_source: UnknownSourceBucket::default(),
             warnings: Vec::new(),
         }
     }

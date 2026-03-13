@@ -7,6 +7,7 @@
 - ELF32 / ELF64 parsing
 - GNU ld and LLVM lld style map parsing
 - GNU ld linker script subset parsing (`MEMORY`, `SECTIONS`, `> REGION`, `AT`, `ALIGN`, `KEEP`)
+- DWARF line-table parsing with `gimli`
 - ROM/RAM summary and section breakdown
 - Top symbols and top object contributions
 - Optional previous-build diff
@@ -16,6 +17,7 @@
 - Rule-based warning evaluation
 - External TOML rule configuration
 - C++ symbol demangling control
+- Optional DWARF-backed source file and line attribution
 - JSON report output
 - CI summary in text / markdown / JSON formats
 - warning-based exit control
@@ -80,7 +82,21 @@ cargo run -- analyze \
   --rules tests/fixtures/sample_rules.toml \
   --demangle=on \
   --toolchain lld \
+  --dwarf=auto \
+  --source-lines files \
   --report-json report.json
+```
+
+DWARF-backed source summary example:
+
+```bash
+cargo run -- analyze \
+  --elf build/app.elf \
+  --dwarf=on \
+  --source-lines lines \
+  --source-root . \
+  --path-remap build=src \
+  --report-json fwmap_sources.json
 ```
 
 CI-oriented example:
@@ -134,6 +150,7 @@ The JSON report uses a fixed top-level shape:
   "schema_version": 1,
   "binary": { "...": "..." },
   "toolchain": { "...": "..." },
+  "debug_info": { "...": "..." },
   "linker_script": { "...": "..." },
   "section_summary": [],
   "memory_summary": { "...": "..." },
@@ -142,6 +159,10 @@ The JSON report uses a fixed top-level shape:
   "top_symbols": [],
   "top_object_contributions": [],
   "archive_contributions": [],
+  "source_files": [],
+  "functions": [],
+  "line_attributions": [],
+  "unknown_source": { "...": "..." },
   "regions": [],
   "diff_summary": { "...": "..." },
   "diff": { "...": "..." }
@@ -203,6 +224,22 @@ message = "DTCM usage is above 90%"
 ## Demangling
 
 Use `--demangle=auto|on|off` to control C++ symbol demangling. `auto` only attempts Itanium-style names, `on` forces a demangle attempt, and `off` preserves raw symbol names.
+
+## DWARF Source Lines
+
+Use `--dwarf=auto|on|off` to control DWARF line-table usage and `--source-lines off|files|functions|lines|all` to choose the aggregation level.
+
+- `auto`: use DWARF when `.debug_line` is present, otherwise fall back silently
+- `on`: require DWARF and return an error when line info is missing
+- `off`: skip DWARF parsing entirely
+
+Path controls:
+
+- `--source-root <path>` prefixes relative source paths
+- `--path-remap <from=to>` remaps DWARF path prefixes and can be repeated
+- `--fail-on-missing-dwarf` upgrades missing DWARF from fallback to error
+
+The source attribution is intentionally approximate for optimized builds because line tables reflect compiler output, not source order.
 
 ## Toolchains
 
@@ -281,12 +318,14 @@ cargo test
 - Demangling currently prioritizes Itanium ABI names and falls back safely when conversion fails.
 - History storage currently uses a local SQLite file and focuses on summary, section, region, and rule-result metrics.
 - Toolchain auto-detection is intentionally lightweight and currently keys off GNU ld / LLVM lld map patterns only.
+- DWARF attribution currently uses line tables only; function-level attribution is still a skeleton and optimized builds may collapse or split line ranges.
+- Split DWARF (`.dwo` / `.dwp`) is not handled yet.
 
 ## CLI Compatibility
 
 - Existing `fwmap analyze --elf ...` usage remains valid.
 - `history record|list|show|trend` are additive subcommands.
-- `--verbose`, `--version`, `--lds`, `--report-json`, `--ci-summary`, `--ci-format`, `--ci-out`, `--fail-on-warning`, `--rules`, `--demangle=...`, and `--toolchain ...` are additive options.
+- `--verbose`, `--version`, `--lds`, `--report-json`, `--ci-summary`, `--ci-format`, `--ci-out`, `--fail-on-warning`, `--rules`, `--demangle=...`, `--toolchain ...`, `--dwarf=...`, `--source-lines ...`, `--source-root`, `--path-remap`, and `--fail-on-missing-dwarf` are additive options.
 - Existing required arguments remain unchanged.
 
 ## Planned Extensions

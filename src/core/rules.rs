@@ -402,9 +402,10 @@ fn memory_capacity(regions: &[crate::model::MemoryRegion], names: &[&str]) -> Op
 mod tests {
     use super::{evaluate_default_rules, RuleContext};
     use crate::model::{
-        AnalysisResult, BinaryInfo, DiffChangeKind, DiffEntry, DiffResult, DiffSummary, LinkerScriptInfo, MemoryRegion,
-        MemorySummary, RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SymbolInfo,
-        ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection, WarningLevel,
+        AnalysisResult, BinaryInfo, DebugInfoSummary, DiffChangeKind, DiffEntry, DiffResult, DiffSummary,
+        LinkerScriptInfo, MemoryRegion, MemorySummary, RegionUsageSummary, SectionCategory, SectionInfo,
+        SectionPlacement, SectionTotal, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind,
+        ToolchainSelection, UnknownSourceBucket, WarningLevel,
     };
 
     #[test]
@@ -560,6 +561,7 @@ mod tests {
                 detected: None,
                 resolved: ToolchainKind::Gnu,
             },
+            debug_info: DebugInfoSummary::default(),
             sections: Vec::new(),
             symbols: vec![SymbolInfo {
                 name: "blob".to_string(),
@@ -603,6 +605,11 @@ mod tests {
                     sections: Vec::new(),
                 }],
             },
+            compilation_units: Vec::new(),
+            source_files: Vec::new(),
+            line_attributions: Vec::new(),
+            function_attributions: Vec::new(),
+            unknown_source: UnknownSourceBucket::default(),
             warnings: Vec::new(),
         }
     }

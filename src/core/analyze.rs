@@ -2,11 +2,12 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::demangle::apply_demangling;
-use crate::ingest::{elf, lds, map};
+use crate::ingest::{dwarf, elf, lds, map};
 use crate::model::{
-    AnalysisResult, ArchiveContribution, CustomRule, DemangleMode, DiffResult, MemoryRegion, MemorySummary,
+    AnalysisResult, ArchiveContribution, CustomRule, DemangleMode, DiffResult, DwarfMode, MemoryRegion, MemorySummary,
     ObjectContribution, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement,
-    SectionTotal, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection, WarningItem,
+    SectionTotal, SourceLinesMode, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection,
+    WarningItem,
 };
 use crate::rules::{evaluate_default_rules, RuleContext};
 use crate::validation::quality::evaluate_quality_checks;
@@ -17,6 +18,11 @@ pub struct AnalyzeOptions {
     pub demangle: DemangleMode,
     pub custom_rules: Vec<CustomRule>,
     pub toolchain: ToolchainSelection,
+    pub dwarf_mode: DwarfMode,
+    pub source_lines: SourceLinesMode,
+    pub source_root: Option<std::path::PathBuf>,
+    pub path_remaps: Vec<(String, String)>,
+    pub fail_on_missing_dwarf: bool,
 }
 
 impl Default for AnalyzeOptions {
@@ -26,6 +32,11 @@ impl Default for AnalyzeOptions {
             demangle: DemangleMode::Auto,
             custom_rules: Vec::new(),
             toolchain: ToolchainSelection::Auto,
+            dwarf_mode: DwarfMode::Auto,
+            source_lines: SourceLinesMode::Off,
+            source_root: None,
+            path_remaps: Vec::new(),
+            fail_on_missing_dwarf: false,
         }
     }
 }
@@ -57,6 +68,7 @@ pub fn analyze_paths(
     let memory = build_memory_summary(&elf.sections, region_input, placements);
     let mut symbols = elf.symbols;
     apply_demangling(&mut symbols, options.demangle);
+    let dwarf_data = dwarf::parse_dwarf(elf_path, &elf.sections, options)?;
 
     let mut warnings = elf.warnings;
     if let Some(map_data) = map_data.as_ref() {
@@ -65,6 +77,7 @@ pub fn analyze_paths(
     if let Some(lds_data) = lds_data.as_ref() {
         warnings.extend(lds_data.warnings.clone());
     }
+    warnings.extend(dwarf_data.warnings.clone());
 
     let mut result = AnalysisResult {
         binary: elf.binary,
@@ -76,12 +89,18 @@ pub fn analyze_paths(
                 .map(|item| item.resolved_toolchain)
                 .unwrap_or_else(|| resolve_toolchain_without_map(options.toolchain)),
         },
+        debug_info: dwarf_data.debug_info,
         sections: elf.sections,
         symbols: sorted_symbols(symbols),
         object_contributions: aggregate_objects(map_data.as_ref().map(|item| item.object_contributions.as_slice()).unwrap_or(&[])),
         archive_contributions: aggregate_archives(map_data.as_ref().map(|item| item.archive_contributions.as_slice()).unwrap_or(&[])),
         linker_script: lds_data.map(|item| item.linker_script),
         memory,
+        compilation_units: dwarf_data.compilation_units,
+        source_files: dwarf_data.source_files,
+        line_attributions: dwarf_data.line_attributions,
+        function_attributions: dwarf_data.function_attributions,
+        unknown_source: dwarf_data.unknown_source,
         warnings,
     };
     result.warnings.extend(evaluate_quality_checks(&result));
@@ -234,9 +253,10 @@ mod tests {
     use super::{build_memory_summary, evaluate_warnings, sorted_symbols, AnalyzeOptions};
     use crate::diff::diff_results;
     use crate::model::{
-        AnalysisResult, BinaryInfo, DiffChangeKind, DiffResult, DiffSummary, LinkerScriptInfo, MemoryRegion,
-        MemorySummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SymbolInfo, ThresholdConfig,
-        ToolchainInfo, ToolchainKind, ToolchainSelection,
+        AnalysisResult, BinaryInfo, DebugInfoSummary, DiffChangeKind, DiffResult, DiffSummary, DwarfMode,
+        FunctionAttribution, LinkerScriptInfo, MemoryRegion, MemorySummary, SectionCategory, SectionInfo,
+        SectionPlacement, SectionTotal, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind,
+        ToolchainSelection, UnknownSourceBucket,
     };
 
     #[test]
@@ -460,6 +480,7 @@ mod tests {
         assert_eq!(options.thresholds.rom_percent, ThresholdConfig::default().rom_percent);
         assert!(options.custom_rules.is_empty());
         assert_eq!(options.toolchain, ToolchainSelection::Auto);
+        assert_eq!(options.dwarf_mode, DwarfMode::Auto);
     }
 
     fn stub_analysis(rom: u64, ram: u64, sections: &[(&str, u64)], symbols: &[(&str, u64)]) -> AnalysisResult {
@@ -475,6 +496,7 @@ mod tests {
                 detected: None,
                 resolved: ToolchainKind::Gnu,
             },
+            debug_info: DebugInfoSummary::default(),
             sections: Vec::new(),
             symbols: symbols
                 .iter()
@@ -503,6 +525,11 @@ mod tests {
                 memory_regions: Vec::new(),
                 region_summaries: Vec::new(),
             },
+            compilation_units: Vec::new(),
+            source_files: Vec::new(),
+            line_attributions: Vec::new(),
+            function_attributions: Vec::<FunctionAttribution>::new(),
+            unknown_source: UnknownSourceBucket::default(),
             warnings: Vec::new(),
         }
     }

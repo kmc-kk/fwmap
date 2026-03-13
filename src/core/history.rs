@@ -449,8 +449,9 @@ fn now_unix() -> i64 {
 mod tests {
     use super::{list_builds, record_build, show_build, trend_metric, HistoryRecordInput};
     use crate::model::{
-        AnalysisResult, BinaryInfo, MemorySummary, SectionCategory, SectionTotal, SymbolInfo, ToolchainInfo,
-        ToolchainKind, ToolchainSelection, WarningItem, WarningLevel, WarningSource,
+        AnalysisResult, BinaryInfo, DebugInfoSummary, MemorySummary, SectionCategory, SectionTotal, SymbolInfo,
+        ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket, WarningItem, WarningLevel,
+        WarningSource,
     };
     use std::collections::BTreeMap;
     use std::fs;
@@ -522,6 +523,7 @@ mod tests {
                 detected: None,
                 resolved: ToolchainKind::Gnu,
             },
+            debug_info: DebugInfoSummary::default(),
             sections: Vec::new(),
             symbols: vec![SymbolInfo {
                 name: "main".to_string(),
@@ -551,6 +553,11 @@ mod tests {
                 memory_regions: Vec::new(),
                 region_summaries: Vec::new(),
             },
+            compilation_units: Vec::new(),
+            source_files: Vec::new(),
+            line_attributions: Vec::new(),
+            function_attributions: Vec::new(),
+            unknown_source: UnknownSourceBucket::default(),
             warnings: (0..warnings)
                 .map(|index| WarningItem {
                     level: if index == warnings.saturating_sub(1) && warnings > 1 {

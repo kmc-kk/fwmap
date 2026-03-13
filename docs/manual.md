@@ -6,6 +6,8 @@
 
 現行版は、単純なサイズ表示だけでなく、差分原因の追跡、memory region の可視化、JSON 出力、CI 向け要約、ルールベースの warning 判定、外部ルール設定、C++ symbol の demangle を主機能として扱います。
 
+さらに現行版では、`gimli` を用いた DWARF line table 読み込みにより、source file / line 単位の最小 attribution も扱えます。
+
 このツールで把握しやすい内容:
 
 - どの section が ROM / RAM を使っているか
@@ -33,6 +35,7 @@
 - ルールベースの warning 判定
 - 外部 TOML ルール設定
 - C++ symbol demangle
+- DWARF line table 解析
 - SQLite ベースの履歴保存とトレンド表示
 - `--toolchain auto|gnu|lld|iar|armcc|keil`
 - `--verbose` / `--version`
@@ -141,6 +144,18 @@ fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
   --demangle=on
+```
+
+### DWARF から source line を読む
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --dwarf=auto \
+  --source-lines lines \
+  --source-root . \
+  --path-remap build=src \
+  --report-json build/fwmap_sources.json
 ```
 
 ### map parser family を明示する
@@ -659,6 +674,11 @@ fwmap history trend --db history.db --metric section:.bss --last 20
 | `--rules <path>` | 任意 | 外部 TOML ルール設定 |
 | `--demangle=auto|on|off` | 任意 | C++ symbol demangle 制御 |
 | `--toolchain <auto|gnu|lld|iar|armcc|keil>` | 任意 | map parser family の自動判定または強制指定 |
+| `--dwarf=auto|on|off` | 任意 | DWARF line table の使用有無 |
+| `--source-lines <off|files|functions|lines|all>` | 任意 | source attribution の粒度 |
+| `--source-root <path>` | 任意 | 相対 source path に付けるルート |
+| `--path-remap <from=to>` | 任意 | DWARF source path の prefix remap。複数指定可 |
+| `--fail-on-missing-dwarf` | 任意 | DWARF 必須時に欠落をエラー化 |
 | `--ci-summary` | 任意 | CI 向けの短い要約を表示 |
 | `--ci-format <text|markdown|json>` | 任意 | CI 要約の出力形式 |
 | `--ci-out <path>` | 任意 | CI 要約の出力先 |
@@ -749,9 +769,14 @@ JSON は固定 schema で出力されます。
 - `memory_summary`
 - `warnings`
 - `thresholds`
+- `debug_info`
 - `top_symbols`
 - `top_object_contributions`
 - `archive_contributions`
+- `source_files`
+- `functions`
+- `line_attributions`
+- `unknown_source`
 - `regions`
 - `diff_summary`
 - `diff`
@@ -1048,6 +1073,7 @@ fwmap history trend --db history.db --metric rom --last 20
 - `core`: 解析、モデル、diff、rules、history などの中核ロジック
 - `ingest`: ELF / map / linker script の読み込み
 - `report`: CLI / HTML / JSON / CI 出力
+- `ingest/dwarf`: gimli ベースの DWARF line table 読み込み
 - `validation`: 解析後の整合性チェック
 - `docs/toolchains.md`: toolchain family と parser 追加手順
 
@@ -1057,6 +1083,7 @@ fwmap history trend --db history.db --metric rom --last 20
 - ELF parser: [src/ingest/elf/mod.rs](/e:/work/git/fwmap/src/ingest/elf/mod.rs)
 - map parser: [src/ingest/map/mod.rs](/e:/work/git/fwmap/src/ingest/map/mod.rs)
 - linker script parser: [src/ingest/linker/mod.rs](/e:/work/git/fwmap/src/ingest/linker/mod.rs)
+- dwarf parser: [src/ingest/dwarf/mod.rs](/e:/work/git/fwmap/src/ingest/dwarf/mod.rs)
 - analyze: [src/core/analyze.rs](/e:/work/git/fwmap/src/core/analyze.rs)
 - rules: [src/core/rules.rs](/e:/work/git/fwmap/src/core/rules.rs)
 - rule config: [src/core/rule_config.rs](/e:/work/git/fwmap/src/core/rule_config.rs)
@@ -1081,6 +1108,9 @@ fwmap history trend --db history.db --metric rom --last 20
 - 外部ルール設定は TOML 固定で、対応 `kind` は現在の実装範囲に限られる
 - 履歴保存はローカル SQLite 前提で、現時点では CLI 表示中心
 - `--toolchain auto` の検出は軽量判定であり、現時点では GNU ld / LLVM lld の主要パターンに限定
+- DWARF attribution は現時点では line table 中心で、function attribution は骨格段階
+- 最適化ビルドでは line attribution は近似的であり、source order と一致しない場合がある
+- split DWARF (`.dwo` / `.dwp`) は未対応
 
 ## 14. 今後の予定
 

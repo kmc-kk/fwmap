@@ -116,12 +116,18 @@ pub struct WarningItem {
 pub struct AnalysisResult {
     pub binary: BinaryInfo,
     pub toolchain: ToolchainInfo,
+    pub debug_info: DebugInfoSummary,
     pub sections: Vec<SectionInfo>,
     pub symbols: Vec<SymbolInfo>,
     pub object_contributions: Vec<ObjectContribution>,
     pub archive_contributions: Vec<ArchiveContribution>,
     pub linker_script: Option<LinkerScriptInfo>,
     pub memory: MemorySummary,
+    pub compilation_units: Vec<CompilationUnit>,
+    pub source_files: Vec<SourceFile>,
+    pub line_attributions: Vec<LineAttribution>,
+    pub function_attributions: Vec<FunctionAttribution>,
+    pub unknown_source: UnknownSourceBucket,
     pub warnings: Vec<WarningItem>,
 }
 
@@ -230,6 +236,76 @@ pub struct ThresholdConfig {
     pub large_symbol_bytes: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CompilationUnit {
+    pub name: Option<String>,
+    pub comp_dir: Option<String>,
+    pub file_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SourceLocation {
+    pub path: String,
+    pub line: u64,
+    pub column: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SourceSpan {
+    pub path: String,
+    pub line_start: u64,
+    pub line_end: u64,
+    pub column: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AddressRange {
+    pub start: u64,
+    pub end: u64,
+    pub section_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LineAttribution {
+    pub location: SourceLocation,
+    pub span: SourceSpan,
+    pub range: AddressRange,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FunctionAttribution {
+    pub raw_name: String,
+    pub demangled_name: Option<String>,
+    pub path: Option<String>,
+    pub size: u64,
+    pub ranges: Vec<SourceSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct UnknownSourceBucket {
+    pub size: u64,
+    pub ranges: Vec<AddressRange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SourceFile {
+    pub path: String,
+    pub display_path: String,
+    pub directory: String,
+    pub size: u64,
+    pub line_ranges: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DebugInfoSummary {
+    pub dwarf_mode: DwarfMode,
+    pub source_lines: SourceLinesMode,
+    pub dwarf_used: bool,
+    pub unknown_source_ratio: f64,
+    pub compilation_units: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum DemangleMode {
@@ -237,6 +313,26 @@ pub enum DemangleMode {
     Auto,
     On,
     Off,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DwarfMode {
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceLinesMode {
+    #[default]
+    Off,
+    Files,
+    Functions,
+    Lines,
+    All,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -319,6 +415,18 @@ impl Default for ThresholdConfig {
     }
 }
 
+impl Default for DebugInfoSummary {
+    fn default() -> Self {
+        Self {
+            dwarf_mode: DwarfMode::Auto,
+            source_lines: SourceLinesMode::Off,
+            dwarf_used: false,
+            unknown_source_ratio: 0.0,
+            compilation_units: 0,
+        }
+    }
+}
+
 fn default_rule_schema_version() -> u32 {
     1
 }
@@ -393,6 +501,30 @@ impl fmt::Display for ToolchainKind {
         let text = match self {
             ToolchainKind::Gnu => "gnu",
             ToolchainKind::Lld => "lld",
+        };
+        write!(f, "{text}")
+    }
+}
+
+impl fmt::Display for DwarfMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            DwarfMode::Auto => "auto",
+            DwarfMode::On => "on",
+            DwarfMode::Off => "off",
+        };
+        write!(f, "{text}")
+    }
+}
+
+impl fmt::Display for SourceLinesMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            SourceLinesMode::Off => "off",
+            SourceLinesMode::Files => "files",
+            SourceLinesMode::Functions => "functions",
+            SourceLinesMode::Lines => "lines",
+            SourceLinesMode::All => "all",
         };
         write!(f, "{text}")
     }
