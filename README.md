@@ -21,6 +21,7 @@
 - Optional DWARF-backed source file, function, and line-range attribution
 - Separate debug, build-id, and split DWARF sidecar resolution
 - JSON report output
+- SARIF 2.1.0 report output
 - CI summary in text / markdown / JSON formats
 - warning-based exit control
 - SQLite-backed history recording and trend inspection
@@ -91,6 +92,17 @@ cargo run -- analyze \
   --dwarf=auto \
   --source-lines files \
   --report-json report.json
+```
+
+SARIF report example:
+
+```bash
+cargo run -- analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --sarif report.sarif \
+  --sarif-base-uri file:///workspace/ \
+  --sarif-min-level warn
 ```
 
 DWARF-backed source summary example:
@@ -176,6 +188,7 @@ Top growth object: drivers/net.o (+8192)
 - Top Functions: symbol-linked function attribution with raw/demangled names
 - Line Hotspots: compressed source line ranges with byte totals
 - JSON: machine-readable report with binary, memory, warnings, diff, and region data
+- SARIF: GitHub code scanning friendly warning output with rule ids, levels, locations, and stable fingerprints
 - CI summary: compact text / markdown / JSON output for CI logs and PR comments
 
 ## JSON Schema
@@ -353,6 +366,17 @@ Exit codes:
 - `1`: execution/input error, or `--fail-on-warning` triggered on non-error warnings
 - `2`: analysis succeeded and at least one error-severity rule fired
 
+## SARIF Output
+
+Use `--sarif <path>` to emit SARIF 2.1.0 for GitHub code scanning and similar consumers.
+
+- `--sarif-base-uri <uri>` maps repo-relative source paths through `originalUriBaseIds`
+- `--sarif-min-level info|warn|error` filters which warnings are emitted
+- `--sarif-include-pass true|false` controls pass metadata in SARIF properties
+- `--sarif-tool-name <name>` overrides `tool.driver.name`
+
+`fwmap` maps line-level findings to SARIF regions when DWARF attribution is available. File-level findings fall back to artifact-only locations, and symbol-oriented findings retain extra identity in `properties` plus a stable `partialFingerprints["fwmap/v1"]` value.
+
 ## History
 
 Use `history record` to store one analysis result in SQLite, then inspect it with `list`, `show`, and `trend`.
@@ -397,6 +421,7 @@ cargo test
 - Object paths are sourced from the map file; when `--map` is omitted, symbol-to-object mapping is unavailable.
 - Region usage relies on linker script declarations plus ELF section addresses, so unusual scripts may only be partially represented.
 - JSON schema is fixed at `schema_version = 1`.
+- SARIF output targets GitHub-compatible SARIF 2.1.0 fields rather than the full schema surface.
 - Demangling currently prioritizes Itanium ABI names and falls back safely when conversion fails.
 - History storage currently uses a local SQLite file and focuses on summary, section, region, rule-result, and source-attribution metrics.
 - Toolchain auto-detection is intentionally lightweight and currently keys off GNU ld / LLVM lld map patterns only.

@@ -3,6 +3,7 @@ pub mod core;
 pub mod debug;
 pub mod ingest;
 pub mod report;
+pub mod sarif;
 pub mod validation;
 
 pub use core::analyze;
@@ -13,3 +14,4 @@ pub use core::model;
 pub use core::rule_config;
 pub use core::rules;
 pub use report::render;
+pub use sarif as sarif_report;

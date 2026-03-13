@@ -101,6 +101,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
 <li>memory region overview</li>
 <li>section と region の対応表示</li>
 <li>JSON 出力</li>
+<li>SARIF 出力</li>
 <li>CI 向け要約出力</li>
 <li>warning ベースの終了コード制御</li>
 <li>しきい値カスタマイズ</li>
@@ -171,6 +172,14 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
   --elf build/app.elf \
   --map build/app.map \
   --report-json build/fwmap_report.json
+</code></pre>
+<h3 id="sarif">SARIF レポートを出力</h3>
+<pre><code class="language-bash">fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --sarif build/fwmap_report.sarif \
+  --sarif-base-uri file:///workspace/ \
+  --sarif-min-level warn
 </code></pre>
 <h3 id="_3">外部ルール設定を読み込む</h3>
 <pre><code class="language-bash">fwmap analyze \
@@ -709,6 +718,31 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 <td>JSON 出力先</td>
 </tr>
 <tr>
+<td><code>--sarif &lt;path&gt;</code></td>
+<td>任意</td>
+<td>SARIF 2.1.0 出力先</td>
+</tr>
+<tr>
+<td><code>--sarif-base-uri &lt;uri&gt;</code></td>
+<td>任意</td>
+<td>SARIF の repo relative path 用 base URI</td>
+</tr>
+<tr>
+<td><code>--sarif-min-level &lt;info|warn|error&gt;</code></td>
+<td>任意</td>
+<td>SARIF に含める最小 warning level</td>
+</tr>
+<tr>
+<td><code>--sarif-include-pass &lt;true|false&gt;</code></td>
+<td>任意</td>
+<td>SARIF properties に pass metadata を含めるか</td>
+</tr>
+<tr>
+<td><code>--sarif-tool-name &lt;name&gt;</code></td>
+<td>任意</td>
+<td>SARIF <code>tool.driver.name</code> の上書き</td>
+</tr>
+<tr>
 <td><code>--rules &lt;path&gt;</code></td>
 <td>任意</td>
 <td>外部 TOML ルール設定</td>
@@ -752,11 +786,6 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 <td><code>--fail-on-missing-dwarf</code></td>
 <td>任意</td>
 <td>DWARF 必須時に欠落をエラー化</td>
-</tr>
-<tr>
-<td><code>debug_info.cache_hit</code></td>
-<td>JSON</td>
-<td>同一 process 内の DWARF parse cache を再利用したか</td>
 </tr>
 <tr>
 <td><code>--ci-summary</code></td>

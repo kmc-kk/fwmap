@@ -29,6 +29,7 @@
 - memory region overview
 - section と region の対応表示
 - JSON 出力
+- SARIF 出力
 - CI 向け要約出力
 - warning ベースの終了コード制御
 - しきい値カスタマイズ
@@ -128,6 +129,17 @@ fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
   --report-json build/fwmap_report.json
+```
+
+### SARIF レポートを出力
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --sarif build/fwmap_report.sarif \
+  --sarif-base-uri file:///workspace/ \
+  --sarif-min-level warn
 ```
 
 ### 外部ルール設定を読み込む
@@ -764,6 +776,11 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 | `--prev-map <path>` | 任意 | 比較用の前回 map |
 | `--out <path>` | 任意 | HTML 出力先 |
 | `--report-json <path>` | 任意 | JSON 出力先 |
+| `--sarif <path>` | 任意 | SARIF 2.1.0 出力先 |
+| `--sarif-base-uri <uri>` | 任意 | SARIF の repo relative path 用 base URI |
+| `--sarif-min-level <info|warn|error>` | 任意 | SARIF に含める最小 warning level |
+| `--sarif-include-pass <true|false>` | 任意 | SARIF properties に pass metadata を含めるか |
+| `--sarif-tool-name <name>` | 任意 | SARIF `tool.driver.name` の上書き |
 | `--rules <path>` | 任意 | 外部 TOML ルール設定 |
 | `--demangle=auto|on|off` | 任意 | C++ symbol demangle 制御 |
 | `--toolchain <auto|gnu|lld|iar|armcc|keil>` | 任意 | map parser family の自動判定または強制指定 |
@@ -773,7 +790,6 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 | `--source-root <path>` | 任意 | 相対 source path に付けるルート |
 | `--path-remap <from=to>` | 任意 | DWARF source path の prefix remap。複数指定可 |
 | `--fail-on-missing-dwarf` | 任意 | DWARF 必須時に欠落をエラー化 |
-| `debug_info.cache_hit` | JSON | 同一 process 内の DWARF parse cache を再利用したか |
 | `--ci-summary` | 任意 | CI 向けの短い要約を表示 |
 | `--ci-format <text|markdown|json>` | 任意 | CI 要約の出力形式 |
 | `--ci-out <path>` | 任意 | CI 要約の出力先 |

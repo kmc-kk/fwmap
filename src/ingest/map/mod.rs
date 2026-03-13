@@ -684,9 +684,9 @@ mod tests {
 
     #[test]
     fn ignores_common_lld_symbol_and_assignment_rows_without_warning_spam() {
-        let demo = include_str!("../../../tests/demo-task.map");
+        let demo = include_str!("../../../tests/fixtures/lld_internal.map");
         let result = parse_map_str(demo, ToolchainSelection::Auto, MapFormatSelection::Auto).unwrap();
-        assert!(result.object_contributions.iter().any(|item| item.object_path.contains("demo-task_all.o")));
+        assert!(result.object_contributions.iter().any(|item| item.object_path.contains("<internal>")));
         assert_eq!(result.warnings.iter().filter(|item| item.code == "MAP_LINE_SKIPPED").count(), 0);
         assert!(result.warnings.iter().filter(|item| item.code == "LLD_MALFORMED_ROW").count() <= 5);
     }

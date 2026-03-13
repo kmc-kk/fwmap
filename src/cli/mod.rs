@@ -13,6 +13,7 @@ use crate::model::{
 };
 use crate::rule_config::{apply_threshold_overrides, load_rule_config};
 use crate::render::{print_ci_summary, print_cli_summary, write_ci_summary, write_html_report, write_json_report};
+use crate::sarif::{write_sarif_report, SarifOptions};
 
 const DEFAULT_OUT: &str = "fwmap_report.html";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -105,6 +106,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             prev_map,
             out,
             report_json,
+            sarif,
+            sarif_base_uri,
+            sarif_min_level,
+            sarif_include_pass,
+            sarif_tool_name,
             ci_summary,
             ci_format,
             ci_out,
@@ -212,6 +218,21 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                     println!("JSON: {}", path.display());
                 }
             }
+            if let Some(path) = sarif.as_deref() {
+                write_sarif_report(
+                    path,
+                    &current,
+                    &SarifOptions {
+                        base_uri: sarif_base_uri,
+                        min_level: sarif_min_level,
+                        include_pass: sarif_include_pass,
+                        tool_name: sarif_tool_name,
+                    },
+                )?;
+                if !ci_summary {
+                    println!("SARIF: {}", path.display());
+                }
+            }
             if !ci_summary {
                 println!("Report: {}", out.display());
             }
@@ -272,6 +293,11 @@ enum Command {
         prev_map: Option<PathBuf>,
         out: PathBuf,
         report_json: Option<PathBuf>,
+        sarif: Option<PathBuf>,
+        sarif_base_uri: Option<String>,
+        sarif_min_level: WarningLevel,
+        sarif_include_pass: bool,
+        sarif_tool_name: String,
         ci_summary: bool,
         ci_format: Option<CiFormat>,
         ci_out: Option<PathBuf>,
@@ -320,6 +346,11 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut prev_map = None;
     let mut out = PathBuf::from(DEFAULT_OUT);
     let mut report_json = None;
+    let mut sarif = None;
+    let mut sarif_base_uri = None;
+    let mut sarif_min_level = WarningLevel::Warn;
+    let mut sarif_include_pass = false;
+    let mut sarif_tool_name = env!("CARGO_PKG_NAME").to_string();
     let mut ci_summary = false;
     let mut ci_format = None;
     let mut ci_out = None;
@@ -391,7 +422,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
             }
             "--help" | "-h" => return Ok(Command::Help),
             "--version" | "-V" => return Ok(Command::Version),
-            "--threshold-rom" | "--threshold-ram" | "--threshold-symbol-growth" | "--threshold-region" | "--max-source-diff-items" | "--min-line-diff-bytes" => {
+            "--threshold-rom" | "--threshold-ram" | "--threshold-symbol-growth" | "--threshold-region" | "--max-source-diff-items" | "--min-line-diff-bytes" | "--sarif-min-level" | "--sarif-include-pass" | "--sarif-tool-name" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--threshold-rom" => thresholds.rom_percent = parse_percent(value, key)?,
@@ -403,6 +434,9 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                     }
                     "--max-source-diff-items" => max_source_diff_items = parse_usize(value, key)?,
                     "--min-line-diff-bytes" => min_line_diff_bytes = parse_u64(value, key)?,
+                    "--sarif-min-level" => sarif_min_level = parse_warning_level(value, key)?,
+                    "--sarif-include-pass" => sarif_include_pass = parse_bool(value, key)?,
+                    "--sarif-tool-name" => sarif_tool_name = value.to_string(),
                     _ => {}
                 }
                 index += 2;
@@ -477,7 +511,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                 index += 2;
                 continue;
             }
-            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--rules" | "--ci-out" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" => {
+            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--sarif" | "--sarif-base-uri" | "--rules" | "--ci-out" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--elf" => elf = Some(PathBuf::from(value)),
@@ -487,6 +521,8 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                     "--prev-map" => prev_map = Some(PathBuf::from(value)),
                     "--out" => out = PathBuf::from(value),
                     "--report-json" => report_json = Some(PathBuf::from(value)),
+                    "--sarif" => sarif = Some(PathBuf::from(value)),
+                    "--sarif-base-uri" => sarif_base_uri = Some(value.to_string()),
                     "--rules" => rules = Some(PathBuf::from(value)),
                     "--ci-out" => ci_out = Some(PathBuf::from(value)),
                     "--source-root" => source_root = Some(PathBuf::from(value)),
@@ -528,6 +564,11 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         prev_map,
         out,
         report_json,
+        sarif,
+        sarif_base_uri,
+        sarif_min_level,
+        sarif_include_pass,
+        sarif_tool_name,
         ci_summary,
         ci_format,
         ci_out,
@@ -584,7 +625,7 @@ fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--verbose]
+fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--verbose]
 fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
 fwmap history list --db <path>
 fwmap history show --db <path> --build <id>
@@ -598,6 +639,11 @@ Options:
   --prev-map  Previous map file for diff
   --out       Output HTML path (default: fwmap_report.html)
   --report-json Write JSON report to the given path
+  --sarif     Write SARIF 2.1.0 report to the given path
+  --sarif-base-uri Base URI used for repo-relative SARIF locations
+  --sarif-min-level info|warn|error Minimum warning level included in SARIF output
+  --sarif-include-pass true|false Include pass metadata in SARIF properties
+  --sarif-tool-name Override the SARIF driver name
   --rules     Load TOML rule configuration from the given path
   --demangle=auto|on|off Control C++ symbol demangling
   --toolchain auto|gnu|lld|iar|armcc|keil Select or detect the map parser family
@@ -929,6 +975,23 @@ fn parse_source_lines_mode(value: &str) -> Result<SourceLinesMode, String> {
     }
 }
 
+fn parse_warning_level(value: &str, key: &str) -> Result<WarningLevel, String> {
+    match value {
+        "info" | "note" => Ok(WarningLevel::Info),
+        "warn" | "warning" => Ok(WarningLevel::Warn),
+        "error" => Ok(WarningLevel::Error),
+        _ => Err(format!("invalid value for {key}: '{value}', expected info|warn|error")),
+    }
+}
+
+fn parse_bool(value: &str, key: &str) -> Result<bool, String> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(format!("invalid value for {key}: '{value}', expected true|false")),
+    }
+}
+
 fn parse_path_remap(value: &str) -> Result<(String, String), String> {
     value
         .split_once('=')
@@ -939,7 +1002,7 @@ fn parse_path_remap(value: &str) -> Result<(String, String), String> {
 #[cfg(test)]
 mod tests {
     use super::{parse_args, Command};
-    use crate::model::{CiFormat, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode, ToolchainSelection};
+    use crate::model::{CiFormat, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode, ToolchainSelection, WarningLevel};
     use std::path::PathBuf;
 
     #[test]
@@ -990,6 +1053,16 @@ mod tests {
             "Cargo.toml".to_string(),
             "--report-json".to_string(),
             "out.json".to_string(),
+            "--sarif".to_string(),
+            "out.sarif".to_string(),
+            "--sarif-base-uri".to_string(),
+            "file:///workspace/".to_string(),
+            "--sarif-min-level".to_string(),
+            "info".to_string(),
+            "--sarif-include-pass".to_string(),
+            "true".to_string(),
+            "--sarif-tool-name".to_string(),
+            "fwmap-ci".to_string(),
             "--ci-format".to_string(),
             "markdown".to_string(),
             "--ci-out".to_string(),
@@ -1018,6 +1091,11 @@ mod tests {
         match cmd {
             Command::Analyze {
                 report_json,
+                sarif,
+                sarif_base_uri,
+                sarif_min_level,
+                sarif_include_pass,
+                sarif_tool_name,
                 ci_summary,
                 ci_format,
                 ci_out,
@@ -1033,6 +1111,11 @@ mod tests {
                 ..
             } => {
                 assert_eq!(report_json.unwrap(), PathBuf::from("out.json"));
+                assert_eq!(sarif.unwrap(), PathBuf::from("out.sarif"));
+                assert_eq!(sarif_base_uri.as_deref(), Some("file:///workspace/"));
+                assert_eq!(sarif_min_level, WarningLevel::Info);
+                assert!(sarif_include_pass);
+                assert_eq!(sarif_tool_name, "fwmap-ci");
                 assert!(matches!(ci_format, Some(CiFormat::Markdown)));
                 assert_eq!(ci_out.unwrap(), PathBuf::from("ci.md"));
                 assert_eq!(rules.unwrap(), PathBuf::from("Cargo.toml"));
