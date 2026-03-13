@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::cpp::build_cpp_view;
 use crate::debug::{resolve_debug_artifact, DebugArtifactResolver};
 use crate::demangle::apply_demangling;
 use crate::ingest::{dwarf, elf, lds, map};
@@ -115,6 +116,9 @@ pub fn analyze_paths(
     }
     warnings.extend(dwarf_data.warnings.clone());
 
+    let sorted_symbols = sorted_symbols(symbols);
+    let cpp_view = build_cpp_view(&sorted_symbols);
+
     let mut result = AnalysisResult {
         binary: elf.binary,
         toolchain: ToolchainInfo {
@@ -134,7 +138,7 @@ pub fn analyze_paths(
         debug_info: dwarf_data.debug_info,
         debug_artifact: dwarf_data.debug_artifact,
         sections: elf.sections,
-        symbols: sorted_symbols(symbols),
+        symbols: sorted_symbols,
         object_contributions: aggregate_objects(map_data.as_ref().map(|item| item.object_contributions.as_slice()).unwrap_or(&[])),
         archive_contributions: aggregate_archives(map_data.as_ref().map(|item| item.archive_contributions.as_slice()).unwrap_or(&[])),
         archive_pulls: map_data.as_ref().map(|item| item.archive_pulls.clone()).unwrap_or_default(),
@@ -144,6 +148,7 @@ pub fn analyze_paths(
             .unwrap_or_default(),
         relocation_references: elf.relocation_references,
         cross_references: map_data.map(|item| item.cross_references).unwrap_or_default(),
+        cpp_view,
         linker_script: lds_data.map(|item| item.linker_script),
         memory,
         compilation_units: dwarf_data.compilation_units,
@@ -823,6 +828,7 @@ mod tests {
             whole_archive_candidates: Vec::new(),
             relocation_references: Vec::new(),
             cross_references: Vec::new(),
+            cpp_view: crate::model::CppView::default(),
             linker_script: None,
             memory: MemorySummary {
                 rom_bytes: rom,

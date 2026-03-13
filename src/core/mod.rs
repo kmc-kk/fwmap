@@ -1,4 +1,5 @@
 pub mod analyze;
+pub mod cpp;
 pub mod demangle;
 pub mod diff;
 pub mod history;

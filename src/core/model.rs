@@ -164,6 +164,7 @@ pub struct AnalysisResult {
     pub whole_archive_candidates: Vec<WholeArchiveCandidate>,
     pub relocation_references: Vec<RelocationReference>,
     pub cross_references: Vec<CrossReference>,
+    pub cpp_view: CppView,
     pub linker_script: Option<LinkerScriptInfo>,
     pub memory: MemorySummary,
     pub compilation_units: Vec<CompilationUnit>,
@@ -225,6 +226,53 @@ pub struct DiffSummary {
     pub line_removed: usize,
     pub line_increased: usize,
     pub line_decreased: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct CppView {
+    pub classified_symbols: Vec<CppSymbolSummary>,
+    pub top_namespaces: Vec<CppAggregate>,
+    pub top_classes: Vec<CppAggregate>,
+    pub top_method_families: Vec<CppAggregate>,
+    pub top_template_families: Vec<CppAggregate>,
+    pub runtime_overhead: Vec<CppAggregate>,
+    pub lambda_groups: Vec<CppAggregate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CppSymbolSummary {
+    pub raw_name: String,
+    pub display_name: String,
+    pub kind: CppSymbolKind,
+    pub namespace: Option<String>,
+    pub class_name: Option<String>,
+    pub method_family: Option<String>,
+    pub template_family: Option<String>,
+    pub lambda_related: bool,
+    pub anonymous_namespace: bool,
+    pub template_instantiation: bool,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CppAggregate {
+    pub name: String,
+    pub size: u64,
+    pub symbol_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CppSymbolKind {
+    Function,
+    Method,
+    Constructor,
+    Destructor,
+    Vtable,
+    Typeinfo,
+    GuardVariable,
+    Thunk,
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]

@@ -7,6 +7,7 @@ pub mod sarif;
 pub mod validation;
 
 pub use core::analyze;
+pub use core::cpp;
 pub use core::demangle;
 pub use core::diff;
 pub use core::history;

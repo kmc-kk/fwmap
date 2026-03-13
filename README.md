@@ -20,6 +20,7 @@
 - C++ symbol demangling control
 - Optional DWARF-backed source file, function, and line-range attribution
 - Separate debug, build-id, and split DWARF sidecar resolution
+- C++ symbol classification and aggregate summaries for classes, templates, and runtime overhead
 - JSON report output
 - SARIF 2.1.0 report output
 - Why-linked explanation for symbols, objects, archive members, and sections
@@ -154,6 +155,17 @@ cargo run -- analyze \
   --out fwmap_sources.html
 ```
 
+C++ aggregate summary example:
+
+```bash
+cargo run -- analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --demangle=on \
+  --cpp-view \
+  --report-json fwmap_cpp.json
+```
+
 CI-oriented example:
 
 ```bash
@@ -203,6 +215,7 @@ Top growth object: drivers/net.o (+8192)
 - Source Files: top file-level attribution with function counts
 - Top Functions: symbol-linked function attribution with raw/demangled names
 - Line Hotspots: compressed source line ranges with byte totals
+- C++ view: classified symbols plus top template families, classes, method families, lambda groups, and runtime overhead buckets
 - JSON: machine-readable report with binary, memory, warnings, diff, and region data
 - SARIF: GitHub code scanning friendly warning output with rule ids, levels, locations, and stable fingerprints
 - CI summary: compact text / markdown / JSON output for CI logs and PR comments

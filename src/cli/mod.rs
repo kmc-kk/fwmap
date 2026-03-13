@@ -13,7 +13,9 @@ use crate::model::{
     ToolchainSelection, WarningLevel,
 };
 use crate::rule_config::{apply_threshold_overrides, load_rule_config};
-use crate::render::{print_ci_summary, print_cli_summary, write_ci_summary, write_html_report, write_json_report};
+use crate::render::{
+    print_ci_summary, print_cli_summary, print_cpp_cli_summary, write_ci_summary, write_html_report, write_json_report,
+};
 use crate::sarif::{write_sarif_report, SarifOptions};
 
 const DEFAULT_OUT: &str = "fwmap_report.html";
@@ -191,6 +193,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             path_remaps,
             fail_on_missing_dwarf,
             verbose,
+            cpp_view,
         } => {
             let mut options = AnalyzeOptions {
                 thresholds,
@@ -246,6 +249,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 }
             } else {
                 print_cli_summary(&current, diff.as_ref(), verbose);
+                if cpp_view {
+                    print_cpp_cli_summary(&current);
+                }
                 if let Some(diff) = diff.as_ref() {
                     if let Some(symbol) = top_increases(&diff.symbol_diffs, 1).first() {
                         let display = current
@@ -409,6 +415,7 @@ enum Command {
         path_remaps: Vec<(String, String)>,
         fail_on_missing_dwarf: bool,
         verbose: bool,
+        cpp_view: bool,
     },
 }
 
@@ -466,12 +473,18 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut path_remaps = Vec::new();
     let mut fail_on_missing_dwarf = false;
     let mut verbose = false;
+    let mut cpp_view = false;
     let mut index = 2usize;
     while index < args.len() {
         let key = &args[index];
         match key.as_str() {
             "--verbose" => {
                 verbose = true;
+                index += 1;
+                continue;
+            }
+            "--cpp-view" => {
+                cpp_view = true;
                 index += 1;
                 continue;
             }
@@ -686,6 +699,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         path_remaps,
         fail_on_missing_dwarf,
         verbose,
+        cpp_view,
     })
 }
 
@@ -730,7 +744,7 @@ fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--why-linked-top <n>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--verbose]
+fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--why-linked-top <n>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--cpp-view] [--verbose]
 fwmap explain --elf <path> [--map <path>] [--lds <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] (--symbol <name> | --object <name> | --section <name>)
 fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
 fwmap history list --db <path>
@@ -768,6 +782,7 @@ Options:
   --source-root Apply a root prefix to relative DWARF source paths
   --path-remap from=to Remap DWARF source path prefixes (repeatable)
   --fail-on-missing-dwarf Return an error when DWARF was requested but unavailable
+  --cpp-view  Print C++ aggregate summaries in CLI output
   --ci-summary Print compact CI-friendly summary
   --ci-source-summary Include top growing source files, functions, and line ranges in CI output
   --ci-format text|markdown|json Select CI summary format
@@ -1252,6 +1267,19 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(cmd, Command::Analyze { verbose: true, .. }));
+    }
+
+    #[test]
+    fn parses_cpp_view_flag() {
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "analyze".to_string(),
+            "--elf".to_string(),
+            "Cargo.toml".to_string(),
+            "--cpp-view".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(cmd, Command::Analyze { cpp_view: true, .. }));
     }
 
     #[test]

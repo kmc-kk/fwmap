@@ -583,6 +583,7 @@ mod tests {
             whole_archive_candidates: Vec::new(),
             relocation_references: Vec::new(),
             cross_references: Vec::new(),
+            cpp_view: crate::model::CppView::default(),
             linker_script: None,
             memory: MemorySummary {
                 rom_bytes: 16,

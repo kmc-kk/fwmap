@@ -942,6 +942,7 @@ mod tests {
                 defined_in: "libapp.a(startup.o)".to_string(),
                 referenced_by: vec!["build/main.o".to_string()],
             }],
+            cpp_view: crate::model::CppView::default(),
             linker_script: Some(LinkerScriptInfo {
                 path: "sample.ld".to_string(),
                 regions: Vec::new(),

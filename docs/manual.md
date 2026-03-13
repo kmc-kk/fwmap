@@ -37,6 +37,7 @@
 - ルールベースの warning 判定
 - 外部 TOML ルール設定
 - C++ symbol demangle
+- C++ symbol classification and aggregate summaries
 - DWARF line table 解析
 - source file / function / line-range 集計
 - SQLite ベースの履歴保存とトレンド表示
@@ -179,6 +180,19 @@ fwmap analyze \
   --map build/app.map \
   --demangle=on
 ```
+
+### C++ 集約サマリを CLI と JSON に出す
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --demangle=on \
+  --cpp-view \
+  --report-json build/fwmap_cpp.json
+```
+
+このオプションを付けると、CLI に `Top template family` / `Top class` / `Runtime overhead` を短く出します。JSON には `cpp_view` が追加され、template family、class、method family、lambda group、`vtable` / `typeinfo` / `guard variable` / `thunk` の集約を確認できます。
 
 ### DWARF から source line を読む
 

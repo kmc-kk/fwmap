@@ -6,8 +6,8 @@ use crate::demangle::display_name;
 use crate::diff::{names_for_kind, top_increases};
 use crate::linkage::{explain_object, explain_top_growth, WhyLinkedCollection};
 use crate::model::{
-    AnalysisResult, CiFormat, DiffChangeKind, DiffEntry, DiffResult, ObjectSourceKind, ThresholdConfig, WarningItem,
-    WarningLevel,
+    AnalysisResult, CiFormat, CppAggregate, DiffChangeKind, DiffEntry, DiffResult, ObjectSourceKind, ThresholdConfig,
+    WarningItem, WarningLevel,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -108,6 +108,37 @@ pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, ver
             println!("  [{}:{}] {}", item.source, item.code, item.message);
         }
     }
+}
+
+pub fn print_cpp_cli_summary(result: &AnalysisResult) {
+    if result.cpp_view.classified_symbols.is_empty() {
+        println!("C++ view: no classified C++ symbols");
+        return;
+    }
+    println!(
+        "C++ view: {} classified symbols, {} template families, {} classes",
+        result.cpp_view.classified_symbols.len(),
+        result.cpp_view.top_template_families.len(),
+        result.cpp_view.top_classes.len()
+    );
+    if let Some(item) = result.cpp_view.top_template_families.first() {
+        print_cpp_aggregate("Top template family", item);
+    }
+    if let Some(item) = result.cpp_view.top_classes.first() {
+        print_cpp_aggregate("Top class", item);
+    }
+    if let Some(item) = result.cpp_view.runtime_overhead.first() {
+        print_cpp_aggregate("Runtime overhead", item);
+    }
+}
+
+fn print_cpp_aggregate(label: &str, item: &CppAggregate) {
+    println!(
+        "{label}: {} ({}, {} symbols)",
+        item.name,
+        format_bytes(item.size),
+        item.symbol_count
+    );
 }
 
 pub fn write_html_report(
@@ -234,6 +265,7 @@ fn build_json(
         "line_hotspots": current.line_hotspots.iter().take(100).collect::<Vec<_>>(),
         "line_attributions": current.line_attributions.iter().take(200).collect::<Vec<_>>(),
         "unknown_source": &current.unknown_source,
+        "cpp_view": &current.cpp_view,
         "regions": &current.memory.region_summaries,
         "diff_summary": diff.map(|item| &item.summary),
         "diff": diff,
@@ -1380,6 +1412,7 @@ mod tests {
         assert!(json.contains("\"debug_info\""));
         assert!(json.contains("\"source_files\""));
         assert!(json.contains("\"line_hotspots\""));
+        assert!(json.contains("\"cpp_view\""));
         let _ = fs::remove_file(path);
     }
 
@@ -1536,6 +1569,7 @@ mod tests {
             }],
             relocation_references: Vec::new(),
             cross_references: Vec::new(),
+            cpp_view: crate::model::CppView::default(),
             linker_script: None,
             memory: MemorySummary {
                 rom_bytes: 128,
@@ -1605,6 +1639,7 @@ mod tests {
             section_name: Some(".text".to_string()),
             size: 64,
         }];
+        analysis.cpp_view = crate::cpp::build_cpp_view(&analysis.symbols);
         analysis
     }
 }
