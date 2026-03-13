@@ -33,46 +33,227 @@ fn looks_like_itanium(name: &str) -> bool {
 }
 
 fn parse_itanium(name: &str) -> Option<String> {
-    let mut rest = name.strip_prefix("_Z")?;
-    let mut parts = Vec::new();
-
-    if let Some(stripped) = rest.strip_prefix('N') {
-        rest = stripped;
-        while !rest.is_empty() && !rest.starts_with('E') {
-            let (part, next) = parse_length_prefixed(rest)?;
-            parts.push(part);
-            rest = next;
-        }
-        rest = rest.strip_prefix('E')?;
+    let mut parser = ItaniumParser::new(name.strip_prefix("_Z")?);
+    let path = if parser.consume('N') {
+        let path = parser.parse_nested_name()?;
+        parser.expect('E')?;
+        path
     } else {
-        let (part, next) = parse_length_prefixed(rest)?;
-        parts.push(part);
-        rest = next;
-    }
-
-    let suffix = if rest == "v" {
-        "()"
-    } else if rest.is_empty() {
-        ""
-    } else {
-        ""
+        vec![parser.parse_name_component()?]
     };
-
-    Some(format!("{}{}", parts.join("::"), suffix))
+    let signature = parser.parse_function_suffix();
+    if !parser.is_done() {
+        return None;
+    }
+    Some(format!("{}{}", path.join("::"), signature))
 }
 
-fn parse_length_prefixed(input: &str) -> Option<(String, &str)> {
-    let digits_len = input.chars().take_while(|ch| ch.is_ascii_digit()).count();
-    if digits_len == 0 {
-        return None;
+struct ItaniumParser<'a> {
+    input: &'a str,
+    offset: usize,
+    substitutions: Vec<String>,
+}
+
+impl<'a> ItaniumParser<'a> {
+    fn new(input: &'a str) -> Self {
+        Self {
+            input,
+            offset: 0,
+            substitutions: Vec::new(),
+        }
     }
-    let (digits, tail) = input.split_at(digits_len);
-    let len = digits.parse::<usize>().ok()?;
-    if tail.len() < len {
-        return None;
+
+    fn parse_nested_name(&mut self) -> Option<Vec<String>> {
+        let mut parts = Vec::new();
+        while !self.peek_is('E') {
+            parts.push(self.parse_name_component()?);
+        }
+        Some(parts)
     }
-    let (part, next) = tail.split_at(len);
-    Some((part.to_string(), next))
+
+    fn parse_name_component(&mut self) -> Option<String> {
+        let mut name = match self.peek_char()? {
+            'S' => self.parse_substitution()?,
+            c if c.is_ascii_digit() => self.parse_source_name()?,
+            _ => return None,
+        };
+
+        if self.consume('I') {
+            let mut args = Vec::new();
+            while !self.peek_is('E') {
+                args.push(self.parse_type()?);
+            }
+            self.expect('E')?;
+            name = format!("{name}<{}>", args.join(", "));
+        }
+        self.substitutions.push(name.clone());
+        Some(name)
+    }
+
+    fn parse_type(&mut self) -> Option<String> {
+        match self.peek_char()? {
+            'P' => {
+                self.consume('P');
+                let inner = self.parse_type()?;
+                Some(format!("{inner}*"))
+            }
+            'R' => {
+                self.consume('R');
+                let inner = self.parse_type()?;
+                Some(format!("{inner}&"))
+            }
+            'K' => {
+                self.consume('K');
+                let inner = self.parse_type()?;
+                Some(format!("const {inner}"))
+            }
+            'S' => self.parse_substitution(),
+            'N' => {
+                self.consume('N');
+                let path = self.parse_nested_name()?;
+                self.expect('E')?;
+                let name = path.join("::");
+                self.substitutions.push(name.clone());
+                Some(name)
+            }
+            c if c.is_ascii_digit() => self.parse_name_component(),
+            'v' => {
+                self.consume('v');
+                Some("void".to_string())
+            }
+            'b' => {
+                self.consume('b');
+                Some("bool".to_string())
+            }
+            'c' => {
+                self.consume('c');
+                Some("char".to_string())
+            }
+            'i' => {
+                self.consume('i');
+                Some("int".to_string())
+            }
+            'j' => {
+                self.consume('j');
+                Some("unsigned int".to_string())
+            }
+            'l' => {
+                self.consume('l');
+                Some("long".to_string())
+            }
+            'm' => {
+                self.consume('m');
+                Some("unsigned long".to_string())
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_source_name(&mut self) -> Option<String> {
+        let len = self.parse_number()?;
+        let tail = self.input.get(self.offset..)?;
+        if tail.starts_with("_GLOBAL__N_1") && len == 12 {
+            self.offset += 12;
+            return Some("(anonymous namespace)".to_string());
+        }
+        let end = self.offset.checked_add(len)?;
+        let name = self.input.get(self.offset..end)?.to_string();
+        self.offset = end;
+        Some(name)
+    }
+
+    fn parse_substitution(&mut self) -> Option<String> {
+        self.expect('S')?;
+        if self.consume('_') {
+            return self.substitutions.first().cloned();
+        }
+        let mut seq = String::new();
+        while let Some(ch) = self.peek_char() {
+            if ch == '_' {
+                break;
+            }
+            seq.push(ch);
+            self.offset += ch.len_utf8();
+        }
+        self.expect('_')?;
+        let index = if seq.is_empty() {
+            0
+        } else {
+            usize::from_str_radix(&seq, 36).ok()?.saturating_add(1)
+        };
+        self.substitutions.get(index).cloned()
+    }
+
+    fn parse_function_suffix(&mut self) -> String {
+        if self.is_done() {
+            return String::new();
+        }
+        if self.remaining() == "v" {
+            self.offset += 1;
+            return "()".to_string();
+        }
+        let start = self.offset;
+        let mut args = Vec::new();
+        while self.offset < self.input.len() {
+            if let Some(arg) = self.parse_type() {
+                if arg == "void" && self.offset == start + 1 {
+                    return "()".to_string();
+                }
+                args.push(arg);
+            } else {
+                break;
+            }
+        }
+        if args.is_empty() {
+            String::new()
+        } else {
+            format!("({})", args.join(", "))
+        }
+    }
+
+    fn parse_number(&mut self) -> Option<usize> {
+        let start = self.offset;
+        while let Some(ch) = self.peek_char() {
+            if !ch.is_ascii_digit() {
+                break;
+            }
+            self.offset += ch.len_utf8();
+        }
+        (self.offset > start)
+            .then(|| self.input.get(start..self.offset))
+            .flatten()?
+            .parse()
+            .ok()
+    }
+
+    fn expect(&mut self, ch: char) -> Option<()> {
+        self.consume(ch).then_some(())
+    }
+
+    fn consume(&mut self, ch: char) -> bool {
+        if self.peek_is(ch) {
+            self.offset += ch.len_utf8();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn peek_is(&self, ch: char) -> bool {
+        self.peek_char() == Some(ch)
+    }
+
+    fn peek_char(&self) -> Option<char> {
+        self.input.get(self.offset..)?.chars().next()
+    }
+
+    fn remaining(&self) -> &str {
+        self.input.get(self.offset..).unwrap_or("")
+    }
+
+    fn is_done(&self) -> bool {
+        self.offset >= self.input.len()
+    }
 }
 
 #[cfg(test)]
@@ -85,6 +266,32 @@ mod tests {
         let value = demangle_symbol("_ZN3foo3barEv", DemangleMode::On).unwrap();
         assert!(value.contains("foo"));
         assert!(value.contains("bar"));
+    }
+
+    #[test]
+    fn demangles_nested_templates_and_anonymous_namespace() {
+        let value = demangle_symbol(
+            "_ZN12_GLOBAL__N_116itanium_demangle22AbstractManglingParserINS0_14ManglingParserINS_16DefaultAllocatorEEES3_E16parseExprPrimaryEv",
+            DemangleMode::On,
+        )
+        .unwrap();
+        assert!(value.contains("(anonymous namespace)::itanium_demangle::AbstractManglingParser<"));
+        assert!(value.contains("ManglingParser<"));
+        assert!(value.contains("DefaultAllocator"));
+        assert!(value.contains("parseExprPrimary()"));
+    }
+
+    #[test]
+    fn demangles_pointer_and_const_arguments() {
+        let value = demangle_symbol(
+            "_ZN3kmg5solid3elf9ELFObject5CheckEPKcP20_SOLID_LDR_FILEINFO_",
+            DemangleMode::On,
+        )
+        .unwrap();
+        assert_eq!(
+            value,
+            "kmg::solid::elf::ELFObject::Check(const char*, _SOLID_LDR_FILEINFO_*)"
+        );
     }
 
     #[test]
