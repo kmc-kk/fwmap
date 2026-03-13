@@ -46,7 +46,7 @@
 - demangle の高度化
 - linker script の完全構文対応
 - 外部ルール設定の高度化
-- split DWARF (`.dwo` / `.dwp`)
+- split DWARF (`.dwo` / `.dwp`) の外部 debug object 読み込み
 
 ## 3. ビルドとテスト
 
@@ -158,6 +158,12 @@ fwmap analyze \
   --path-remap build=src \
   --report-json build/fwmap_sources.json
 ```
+
+補足:
+
+- 同じ ELF を同一 process 内で繰り返し解析した場合、DWARF parse 結果は in-memory cache を再利用します
+- `line = 0` や compiler-generated range は `unknown source` に寄せて表示します
+- split DWARF の marker だけがある場合、`--dwarf=auto` は info warning 付きで fallback し、`--dwarf=on` は明確にエラーを返します
 
 ### DWARF から source file / function / hotspot を出す
 
@@ -739,6 +745,7 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 | `--source-root <path>` | 任意 | 相対 source path に付けるルート |
 | `--path-remap <from=to>` | 任意 | DWARF source path の prefix remap。複数指定可 |
 | `--fail-on-missing-dwarf` | 任意 | DWARF 必須時に欠落をエラー化 |
+| `debug_info.cache_hit` | JSON | 同一 process 内の DWARF parse cache を再利用したか |
 | `--ci-summary` | 任意 | CI 向けの短い要約を表示 |
 | `--ci-format <text|markdown|json>` | 任意 | CI 要約の出力形式 |
 | `--ci-out <path>` | 任意 | CI 要約の出力先 |
@@ -1215,7 +1222,8 @@ fwmap history trend --db history.db --metric rom --last 20
 - `--toolchain auto` の検出は軽量判定であり、現時点では GNU ld / LLVM lld の主要パターンに限定
 - DWARF attribution は line table と ELF symbol range の組み合わせで集計している
 - 最適化ビルドでは line attribution は近似的であり、source order と一致しない場合がある
-- split DWARF (`.dwo` / `.dwp`) は未対応
+- line 0 や compiler-generated range は `unknown source` に寄せて表示する
+- split DWARF (`.dwo` / `.dwp`) は検出のみ対応で、外部 debug object の読込は未対応
 
 ## 14. 今後の予定
 

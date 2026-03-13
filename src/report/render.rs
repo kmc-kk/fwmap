@@ -29,10 +29,13 @@ pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, ver
     println!("ELF: {}", result.binary.path);
     println!("Toolchain: {} (requested: {})", result.toolchain.resolved, result.toolchain.requested);
     println!(
-        "DWARF: {} | Source lines: {} | Source files: {}",
+        "DWARF: {} | Source lines: {} | Source files: {} | Unknown ratio: {:.1}%{}{}",
         if result.debug_info.dwarf_used { "used" } else { "not used" },
         result.debug_info.source_lines,
-        result.source_files.len()
+        result.source_files.len(),
+        result.debug_info.unknown_source_ratio * 100.0,
+        if result.debug_info.split_dwarf_detected { " | split-dwarf detected" } else { "" },
+        if result.debug_info.cache_hit { " | cache hit" } else { "" }
     );
     println!(
         "ROM: {} | RAM: {} | Sections: {} | Symbols: {} | Warnings: {}",
@@ -473,9 +476,16 @@ fn source_summary(current: &AnalysisResult) -> String {
         .collect::<Vec<_>>()
         .join("");
     format!(
-        "<section id=\"source-summary\"><h2>Source Summary</h2><p>Compilation units: {} | Unknown ratio: {:.1}%</p><p class=\"hint\">Use the trend links below to jump to ready-made history metrics for source files, functions, and unknown source ratio.</p><table><thead><tr><th>Path</th><th>Line Ranges</th><th>Size</th></tr></thead><tbody>{}</tbody></table></section>",
+        "<section id=\"source-summary\"><h2>Source Summary</h2><p>Compilation units: {} | Unknown ratio: {:.1}% | Line-0 ranges: {}{}</p><p class=\"hint\">Use the trend links below to jump to ready-made history metrics for source files, functions, and unknown source ratio.</p><table><thead><tr><th>Path</th><th>Line Ranges</th><th>Size</th></tr></thead><tbody>{}</tbody></table></section>",
         current.debug_info.compilation_units,
         current.debug_info.unknown_source_ratio * 100.0,
+        current.debug_info.line_zero_ranges,
+        current
+            .debug_info
+            .split_dwarf_kind
+            .as_ref()
+            .map(|kind| format!(" | Split DWARF: {}", escape(kind)))
+            .unwrap_or_default(),
         rows
     )
 }

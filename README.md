@@ -276,6 +276,8 @@ Path controls:
 - `--fail-on-missing-dwarf` upgrades missing DWARF from fallback to error
 
 The source attribution is intentionally approximate for optimized builds because line tables reflect compiler output, not source order.
+Line-0 or compiler-generated ranges are counted into `unknown_source` instead of being silently dropped, which makes partial attribution easier to diagnose.
+Split DWARF is currently detection-only: `--dwarf=auto` falls back with an informational warning, while `--dwarf=on` returns a clear error if only `.dwo` / `.dwp` style markers are present.
 
 When DWARF and symbols are both available, `fwmap` rolls byte counts up into:
 
@@ -309,6 +311,7 @@ Source-diff oriented flags:
 - `--max-source-diff-items <n>` limits source diff rows
 - `--min-line-diff-bytes <n>` suppresses tiny line-range noise
 - `--hide-unknown-source` omits unknown-source diff rows from summaries
+- repeated analysis of the same ELF within one process reuses an in-memory DWARF parse cache and reports `cache_hit` in `debug_info`
 
 ```bash
 cargo run -- analyze \
@@ -373,10 +376,10 @@ cargo test
 - Region usage relies on linker script declarations plus ELF section addresses, so unusual scripts may only be partially represented.
 - JSON schema is fixed at `schema_version = 1`.
 - Demangling currently prioritizes Itanium ABI names and falls back safely when conversion fails.
-- History storage currently uses a local SQLite file and focuses on summary, section, region, and rule-result metrics.
+- History storage currently uses a local SQLite file and focuses on summary, section, region, rule-result, and source-attribution metrics.
 - Toolchain auto-detection is intentionally lightweight and currently keys off GNU ld / LLVM lld map patterns only.
 - DWARF attribution uses line tables plus ELF symbol ranges; optimized builds may still collapse, duplicate, or split line ranges.
-- Split DWARF (`.dwo` / `.dwp`) is not handled yet.
+- Split DWARF (`.dwo` / `.dwp`) is detected but external debug objects are not loaded yet.
 
 ## CLI Compatibility
 

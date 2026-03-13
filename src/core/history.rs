@@ -870,8 +870,13 @@ mod tests {
                 dwarf_mode: crate::model::DwarfMode::Auto,
                 source_lines: crate::model::SourceLinesMode::All,
                 dwarf_used: true,
+                cache_hit: false,
+                split_dwarf_detected: false,
+                split_dwarf_kind: None,
                 unknown_source_ratio: if rom + ram == 0 { 0.0 } else { ram as f64 / (rom + ram) as f64 },
                 compilation_units: 1,
+                line_zero_ranges: 0,
+                generated_ranges: 0,
             },
             sections: Vec::new(),
             symbols: vec![SymbolInfo {

@@ -34,5 +34,28 @@ pub fn evaluate_quality_checks(current: &AnalysisResult) -> Vec<WarningItem> {
         }
     }
 
+    if current.debug_info.split_dwarf_detected && !current.debug_info.dwarf_used {
+        warnings.push(WarningItem {
+            level: WarningLevel::Info,
+            code: "SPLIT_DWARF_DETECTED".to_string(),
+            message: "Split DWARF markers were detected but external debug objects are not loaded yet".to_string(),
+            source: WarningSource::Analyze,
+            related: current.debug_info.split_dwarf_kind.clone(),
+        });
+    }
+
+    if current.debug_info.line_zero_ranges > 0 {
+        warnings.push(WarningItem {
+            level: WarningLevel::Info,
+            code: "DWARF_LINE_ZERO_RANGES".to_string(),
+            message: format!(
+                "{} DWARF ranges used line 0 and were counted as unknown source",
+                current.debug_info.line_zero_ranges
+            ),
+            source: WarningSource::Analyze,
+            related: Some("unknown_source".to_string()),
+        });
+    }
+
     warnings
 }

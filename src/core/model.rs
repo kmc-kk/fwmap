@@ -331,8 +331,13 @@ pub struct DebugInfoSummary {
     pub dwarf_mode: DwarfMode,
     pub source_lines: SourceLinesMode,
     pub dwarf_used: bool,
+    pub cache_hit: bool,
+    pub split_dwarf_detected: bool,
+    pub split_dwarf_kind: Option<String>,
     pub unknown_source_ratio: f64,
     pub compilation_units: usize,
+    pub line_zero_ranges: usize,
+    pub generated_ranges: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -353,7 +358,7 @@ pub enum DwarfMode {
     Off,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceLinesMode {
     #[default]
@@ -457,8 +462,13 @@ impl Default for DebugInfoSummary {
             dwarf_mode: DwarfMode::Auto,
             source_lines: SourceLinesMode::Off,
             dwarf_used: false,
+            cache_hit: false,
+            split_dwarf_detected: false,
+            split_dwarf_kind: None,
             unknown_source_ratio: 0.0,
             compilation_units: 0,
+            line_zero_ranges: 0,
+            generated_ranges: 0,
         }
     }
 }

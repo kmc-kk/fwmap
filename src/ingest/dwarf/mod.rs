@@ -1,7 +1,9 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
+use std::time::UNIX_EPOCH;
 
 use gimli::{Dwarf, DwarfSections, EndianSlice, LittleEndian, SectionId};
 use object::{Object, ObjectSection};
@@ -9,7 +11,8 @@ use object::{Object, ObjectSection};
 use crate::analyze::AnalyzeOptions;
 use crate::model::{
     AddressRange, CompilationUnit, DebugInfoSummary, DwarfMode, FunctionAttribution, LineAttribution, SectionInfo,
-    SourceFile, SourceLinesMode, SourceLocation, SourceSpan, UnknownSourceBucket, WarningItem,
+    SourceFile, SourceLinesMode, SourceLocation, SourceSpan, UnknownSourceBucket, WarningItem, WarningLevel,
+    WarningSource,
 };
 
 #[derive(Debug, Clone)]
@@ -23,6 +26,18 @@ pub struct DwarfIngestResult {
     pub warnings: Vec<WarningItem>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DwarfCacheKey {
+    path: String,
+    modified_nanos: u128,
+    len: u64,
+    source_root: Option<String>,
+    path_remaps: Vec<(String, String)>,
+    source_lines: SourceLinesMode,
+}
+
+static DWARF_CACHE: OnceLock<Mutex<HashMap<DwarfCacheKey, DwarfIngestResult>>> = OnceLock::new();
+
 pub fn parse_dwarf(path: &Path, sections: &[SectionInfo], options: &AnalyzeOptions) -> Result<DwarfIngestResult, String> {
     match options.dwarf_mode {
         DwarfMode::Off => Ok(empty_result(options)),
@@ -31,9 +46,38 @@ pub fn parse_dwarf(path: &Path, sections: &[SectionInfo], options: &AnalyzeOptio
 }
 
 fn parse_dwarf_enabled(path: &Path, sections: &[SectionInfo], options: &AnalyzeOptions) -> Result<DwarfIngestResult, String> {
+    if let Some(cache_key) = dwarf_cache_key(path, options) {
+        if let Some(cached) = lookup_cache(&cache_key)? {
+            return Ok(cached);
+        }
+    }
+
     let bytes = fs::read(path).map_err(|err| format!("failed to read ELF for DWARF '{}': {err}", path.display()))?;
     let file = object::File::parse(&*bytes).map_err(|err| format!("failed to parse object for DWARF '{}': {err}", path.display()))?;
+    let split_dwarf = detect_split_dwarf(&file);
     let has_debug_line = file.section_by_name(".debug_line").is_some();
+    if let Some(kind) = split_dwarf.as_deref() {
+        if !has_debug_line {
+            let message = format!(
+                "split DWARF ({kind}) was detected in '{}' but external debug objects are not supported yet",
+                path.display()
+            );
+            if options.dwarf_mode == DwarfMode::On || options.fail_on_missing_dwarf {
+                return Err(message);
+            }
+            let mut result = empty_result(options);
+            result.debug_info.split_dwarf_detected = true;
+            result.debug_info.split_dwarf_kind = Some(kind.to_string());
+            result.warnings.push(WarningItem {
+                level: WarningLevel::Info,
+                code: "SPLIT_DWARF_UNSUPPORTED".to_string(),
+                message,
+                source: WarningSource::Elf,
+                related: Some(path.display().to_string()),
+            });
+            return Ok(result);
+        }
+    }
     if !has_debug_line {
         if options.dwarf_mode == DwarfMode::On || options.fail_on_missing_dwarf {
             return Err(format!(
@@ -50,6 +94,19 @@ fn parse_dwarf_enabled(path: &Path, sections: &[SectionInfo], options: &AnalyzeO
 
     let mut result = empty_result(options);
     result.debug_info.dwarf_used = true;
+    result.debug_info.split_dwarf_detected = split_dwarf.is_some();
+    result.debug_info.split_dwarf_kind = split_dwarf.clone();
+    if let Some(kind) = split_dwarf {
+        result.warnings.push(WarningItem {
+            level: WarningLevel::Info,
+            code: "SPLIT_DWARF_PARTIAL".to_string(),
+            message: format!(
+                "split DWARF marker ({kind}) was detected; attribution uses only embedded DWARF sections that are currently available"
+            ),
+            source: WarningSource::Elf,
+            related: Some(path.display().to_string()),
+        });
+    }
 
     let mut units = dwarf.units();
     while let Some(header) = units.next().map_err(|err| format!("failed to iterate DWARF units: {err}"))? {
@@ -100,6 +157,10 @@ fn parse_dwarf_enabled(path: &Path, sections: &[SectionInfo], options: &AnalyzeO
                                 size,
                             });
                         } else {
+                            // Optimized builds often emit line 0 or compiler-generated gaps. Track
+                            // them explicitly so unknown attribution is explainable instead of silent.
+                            result.debug_info.line_zero_ranges += 1;
+                            result.debug_info.generated_ranges += 1;
                             result.unknown_source.size += size;
                             result.unknown_source.ranges.push(range);
                         }
@@ -114,6 +175,9 @@ fn parse_dwarf_enabled(path: &Path, sections: &[SectionInfo], options: &AnalyzeO
                     gimli::ColumnType::LeftEdge => None,
                     gimli::ColumnType::Column(value) => Some(value.get()),
                 };
+                if path.is_none() {
+                    result.debug_info.generated_ranges += 1;
+                }
                 previous = path.map(|path| (current_address, path, line, column));
             }
         }
@@ -129,6 +193,21 @@ fn parse_dwarf_enabled(path: &Path, sections: &[SectionInfo], options: &AnalyzeO
     if matches!(options.source_lines, SourceLinesMode::Off) {
         result.source_files.clear();
         result.line_attributions.clear();
+    }
+    if result.debug_info.line_zero_ranges > 0 {
+        result.warnings.push(WarningItem {
+            level: WarningLevel::Info,
+            code: "DWARF_LINE_ZERO".to_string(),
+            message: format!(
+                "DWARF emitted {} line-0 ranges; these bytes were counted as unknown source",
+                result.debug_info.line_zero_ranges
+            ),
+            source: WarningSource::Elf,
+            related: Some(path.display().to_string()),
+        });
+    }
+    if let Some(cache_key) = dwarf_cache_key(path, options) {
+        store_cache(cache_key, &result)?;
     }
     Ok(result)
 }
@@ -154,6 +233,57 @@ fn load_section<'a>(file: &'a object::File<'a>, id: SectionId) -> Result<Cow<'a,
         .section_by_name(id.name())
         .and_then(|section| section.uncompressed_data().ok())
         .unwrap_or(Cow::Borrowed(&[])))
+}
+
+fn dwarf_cache_key(path: &Path, options: &AnalyzeOptions) -> Option<DwarfCacheKey> {
+    let metadata = fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_nanos();
+    Some(DwarfCacheKey {
+        path: path.display().to_string(),
+        modified_nanos: modified,
+        len: metadata.len(),
+        source_root: options.source_root.as_ref().map(|item| item.to_string_lossy().into_owned()),
+        path_remaps: options.path_remaps.clone(),
+        source_lines: options.source_lines,
+    })
+}
+
+fn lookup_cache(key: &DwarfCacheKey) -> Result<Option<DwarfIngestResult>, String> {
+    let cache = DWARF_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cached = cache
+        .lock()
+        .map_err(|_| "failed to lock DWARF cache".to_string())?
+        .get(key)
+        .cloned();
+    if let Some(result) = cached.as_mut() {
+        result.debug_info.cache_hit = true;
+    }
+    Ok(cached)
+}
+
+fn store_cache(key: DwarfCacheKey, result: &DwarfIngestResult) -> Result<(), String> {
+    let cache = DWARF_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    cache
+        .lock()
+        .map_err(|_| "failed to lock DWARF cache".to_string())?
+        .insert(key, result.clone());
+    Ok(())
+}
+
+fn detect_split_dwarf(file: &object::File<'_>) -> Option<String> {
+    const SPLIT_SECTIONS: [(&str, &str); 7] = [
+        (".debug_info.dwo", ".dwo sections"),
+        (".debug_abbrev.dwo", ".dwo sections"),
+        (".debug_str.dwo", ".dwo sections"),
+        (".debug_line.dwo", ".dwo sections"),
+        (".gnu_debugaltlink", "gnu debug altlink"),
+        (".debug_cu_index", ".dwp index"),
+        (".debug_tu_index", ".dwp index"),
+    ];
+    SPLIT_SECTIONS
+        .iter()
+        .find(|(name, _)| file.section_by_name(name).is_some())
+        .map(|(_, kind)| (*kind).to_string())
 }
 
 fn resolve_row_path<R: gimli::Reader<Offset = usize>>(
@@ -243,9 +373,11 @@ fn code_section_bytes(sections: &[SectionInfo]) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{aggregate_source_files, normalize_path};
+    use super::{aggregate_source_files, detect_split_dwarf, normalize_path};
     use crate::analyze::AnalyzeOptions;
     use crate::model::{AddressRange, LineAttribution, SourceLocation, SourceSpan};
+    use object::write::{Object, StandardSection, Symbol, SymbolSection};
+    use object::{Architecture, BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind, SymbolScope};
     use std::path::PathBuf;
 
     #[test]
@@ -304,5 +436,27 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].size, 8);
         assert_eq!(files[0].line_ranges, 2);
+    }
+
+    #[test]
+    fn detects_split_dwarf_sections() {
+        let mut object = Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+        let section = object.add_section(Vec::new(), b".debug_info.dwo".to_vec(), SectionKind::Debug);
+        object.append_section_data(section, &[1, 2, 3], 1);
+        let text = object.section_id(StandardSection::Text);
+        object.append_section_data(text, &[0x90], 1);
+        object.add_symbol(Symbol {
+            name: b"main".to_vec(),
+            value: 0,
+            size: 1,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Compilation,
+            weak: false,
+            section: SymbolSection::Section(text),
+            flags: SymbolFlags::None,
+        });
+        let bytes = object.write().unwrap();
+        let parsed = object::File::parse(&*bytes).unwrap();
+        assert_eq!(detect_split_dwarf(&parsed), Some(".dwo sections".to_string()));
     }
 }

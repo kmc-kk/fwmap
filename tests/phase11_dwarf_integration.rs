@@ -63,6 +63,104 @@ fn dwarf_on_fails_when_debug_line_is_missing() {
     let _ = fs::remove_dir(dir);
 }
 
+#[test]
+fn split_dwarf_is_reported_cleanly_in_auto_mode() {
+    let dir = temp_dir("phase15-split-auto");
+    fs::create_dir_all(&dir).unwrap();
+    let elf_path = dir.join("split.elf");
+    fs::write(&elf_path, build_split_dwarf_elf32()).unwrap();
+
+    let result = analyze_paths(
+        &elf_path,
+        None,
+        None,
+        &AnalyzeOptions {
+            dwarf_mode: DwarfMode::Auto,
+            source_lines: SourceLinesMode::All,
+            ..AnalyzeOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert!(!result.debug_info.dwarf_used);
+    assert!(result.debug_info.split_dwarf_detected);
+    assert!(result.warnings.iter().any(|item| item.code == "SPLIT_DWARF_UNSUPPORTED"));
+
+    let _ = fs::remove_file(elf_path);
+    let _ = fs::remove_dir(dir);
+}
+
+#[test]
+fn split_dwarf_fails_cleanly_when_explicitly_required() {
+    let dir = temp_dir("phase15-split-on");
+    fs::create_dir_all(&dir).unwrap();
+    let elf_path = dir.join("split.elf");
+    fs::write(&elf_path, build_split_dwarf_elf32()).unwrap();
+
+    let err = analyze_paths(
+        &elf_path,
+        None,
+        None,
+        &AnalyzeOptions {
+            dwarf_mode: DwarfMode::On,
+            source_lines: SourceLinesMode::All,
+            ..AnalyzeOptions::default()
+        },
+    )
+    .unwrap_err();
+    assert!(err.contains("split DWARF"));
+
+    let _ = fs::remove_file(elf_path);
+    let _ = fs::remove_dir(dir);
+}
+
+#[test]
+fn line_zero_ranges_fall_back_to_unknown_source() {
+    let dir = temp_dir("phase15-line-zero");
+    fs::create_dir_all(&dir).unwrap();
+    let elf_path = dir.join("line_zero.elf");
+    fs::write(&elf_path, build_dwarf_elf32_with_line_zero()).unwrap();
+
+    let result = analyze_paths(
+        &elf_path,
+        None,
+        None,
+        &AnalyzeOptions {
+            dwarf_mode: DwarfMode::On,
+            source_lines: SourceLinesMode::Lines,
+            ..AnalyzeOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(result.debug_info.line_zero_ranges > 0);
+    assert!(result.unknown_source.size >= 4);
+    assert!(result.warnings.iter().any(|item| item.code == "DWARF_LINE_ZERO"));
+
+    let _ = fs::remove_file(elf_path);
+    let _ = fs::remove_dir(dir);
+}
+
+#[test]
+fn repeated_dwarf_analysis_uses_in_process_cache() {
+    let dir = temp_dir("phase15-cache");
+    fs::create_dir_all(&dir).unwrap();
+    let elf_path = dir.join("cache.elf");
+    fs::write(&elf_path, build_dwarf_elf32()).unwrap();
+
+    let options = AnalyzeOptions {
+        dwarf_mode: DwarfMode::On,
+        source_lines: SourceLinesMode::All,
+        ..AnalyzeOptions::default()
+    };
+    let first = analyze_paths(&elf_path, None, None, &options).unwrap();
+    let second = analyze_paths(&elf_path, None, None, &options).unwrap();
+    assert!(!first.debug_info.cache_hit);
+    assert!(second.debug_info.cache_hit);
+
+    let _ = fs::remove_file(elf_path);
+    let _ = fs::remove_dir(dir);
+}
+
 fn temp_dir(label: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     std::env::temp_dir().join(format!("fwmap-{label}-{nanos}"))
@@ -133,6 +231,32 @@ fn build_plain_elf32() -> Vec<u8> {
     data
 }
 
+fn build_split_dwarf_elf32() -> Vec<u8> {
+    let shstrtab = b"\0.shstrtab\0.text\0.debug_info.dwo\0";
+    let mut data = vec![0u8; 0x280];
+    data[0..4].copy_from_slice(b"\x7fELF");
+    data[4] = 1;
+    data[5] = 1;
+    data[6] = 1;
+    write_u16(&mut data, 16, 2);
+    write_u16(&mut data, 18, 0x28);
+    write_u32(&mut data, 20, 1);
+    write_u32(&mut data, 32, 0x80);
+    write_u16(&mut data, 40, 52);
+    write_u16(&mut data, 46, 40);
+    write_u16(&mut data, 48, 4);
+    write_u16(&mut data, 50, 1);
+
+    let shdr = 0x80usize;
+    write_shdr32(&mut data, shdr + 40, 1, 3, 0, 0, 0x180, shstrtab.len() as u32, 0, 0, 1, 0);
+    write_shdr32(&mut data, shdr + 80, 11, 1, 0x6, 0x1000, 0x1c0, 4, 0, 0, 4, 0);
+    write_shdr32(&mut data, shdr + 120, 17, 1, 0, 0, 0x1d0, 4, 0, 0, 1, 0);
+    data[0x180..0x180 + shstrtab.len()].copy_from_slice(shstrtab);
+    data[0x1c0..0x1c4].copy_from_slice(&[0x00, 0xbf, 0x00, 0xbf]);
+    data[0x1d0..0x1d4].copy_from_slice(&[1, 2, 3, 4]);
+    data
+}
+
 fn build_debug_abbrev() -> Vec<u8> {
     vec![
         0x01, // abbrev code
@@ -187,6 +311,80 @@ fn build_debug_line() -> Vec<u8> {
     program.push(1); // copy line 10
     program.extend_from_slice(&[2, 4]); // advance_pc 4
     program.extend_from_slice(&[0, 1, 1]); // end_sequence
+
+    let mut line = Vec::new();
+    line.extend_from_slice(&0u32.to_le_bytes());
+    line.extend_from_slice(&4u16.to_le_bytes());
+    line.extend_from_slice(&(header.len() as u32).to_le_bytes());
+    line.extend_from_slice(&header);
+    line.extend_from_slice(&program);
+    let unit_length = (line.len() - 4) as u32;
+    line[0..4].copy_from_slice(&unit_length.to_le_bytes());
+    line
+}
+
+fn build_dwarf_elf32_with_line_zero() -> Vec<u8> {
+    let shstrtab = b"\0.shstrtab\0.text\0.debug_abbrev\0.debug_info\0.debug_line\0.symtab\0.strtab\0";
+    let debug_abbrev = build_debug_abbrev();
+    let debug_info = build_debug_info();
+    let debug_line = build_debug_line_with_line_zero();
+    let strtab = b"\0main\0";
+
+    let mut data = vec![0u8; 0x500];
+    data[0..4].copy_from_slice(b"\x7fELF");
+    data[4] = 1;
+    data[5] = 1;
+    data[6] = 1;
+    write_u16(&mut data, 16, 2);
+    write_u16(&mut data, 18, 0x28);
+    write_u32(&mut data, 20, 1);
+    write_u32(&mut data, 32, 0x80);
+    write_u16(&mut data, 40, 52);
+    write_u16(&mut data, 46, 40);
+    write_u16(&mut data, 48, 8);
+    write_u16(&mut data, 50, 1);
+
+    let shdr = 0x80usize;
+    write_shdr32(&mut data, shdr + 40, 1, 3, 0, 0, 0x340, shstrtab.len() as u32, 0, 0, 1, 0);
+    write_shdr32(&mut data, shdr + 80, 11, 1, 0x6, 0x1000, 0x200, 8, 0, 0, 4, 0);
+    write_shdr32(&mut data, shdr + 120, 17, 1, 0, 0, 0x208, debug_abbrev.len() as u32, 0, 0, 1, 0);
+    write_shdr32(&mut data, shdr + 160, 31, 1, 0, 0, 0x220, debug_info.len() as u32, 0, 0, 1, 0);
+    write_shdr32(&mut data, shdr + 200, 43, 1, 0, 0, 0x240, debug_line.len() as u32, 0, 0, 1, 0);
+    write_shdr32(&mut data, shdr + 240, 55, 2, 0, 0, 0x300, 32, 7, 1, 4, 16);
+    write_shdr32(&mut data, shdr + 280, 63, 3, 0, 0, 0x320, strtab.len() as u32, 0, 0, 1, 0);
+
+    data[0x200..0x208].copy_from_slice(&[0x00, 0xbf, 0x00, 0x20, 0x00, 0xbf, 0x00, 0xbf]);
+    data[0x208..0x208 + debug_abbrev.len()].copy_from_slice(&debug_abbrev);
+    data[0x220..0x220 + debug_info.len()].copy_from_slice(&debug_info);
+    data[0x240..0x240 + debug_line.len()].copy_from_slice(&debug_line);
+    write_sym32(&mut data, 0x300, 0, 0, 0, 0, 0, 0);
+    write_sym32(&mut data, 0x310, 1, 0x1000, 8, 0x12, 0, 2);
+    data[0x320..0x320 + strtab.len()].copy_from_slice(strtab);
+    data[0x340..0x340 + shstrtab.len()].copy_from_slice(shstrtab);
+    data
+}
+
+fn build_debug_line_with_line_zero() -> Vec<u8> {
+    let mut header = vec![
+        1, 1, 1, 0xfb, 14, 13,
+    ];
+    header.extend_from_slice(&[0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1]);
+    header.extend_from_slice(b"src\0");
+    header.push(0);
+    header.extend_from_slice(b"main.c\0");
+    header.extend_from_slice(&[1, 0, 0]);
+    header.push(0);
+
+    let mut program = Vec::new();
+    program.extend_from_slice(&[0, 5, 2]);
+    program.extend_from_slice(&0x1000u32.to_le_bytes());
+    program.extend_from_slice(&[3, 0x7f]); // advance_line -1 => line 0
+    program.push(1); // copy line 0
+    program.extend_from_slice(&[2, 4]); // advance_pc 4
+    program.extend_from_slice(&[3, 10]); // advance_line +10 => line 10
+    program.push(1); // copy line 10
+    program.extend_from_slice(&[2, 4]);
+    program.extend_from_slice(&[0, 1, 1]);
 
     let mut line = Vec::new();
     line.extend_from_slice(&0u32.to_le_bytes());
