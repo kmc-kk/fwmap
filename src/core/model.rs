@@ -126,6 +126,7 @@ pub struct AnalysisResult {
     pub binary: BinaryInfo,
     pub toolchain: ToolchainInfo,
     pub debug_info: DebugInfoSummary,
+    pub debug_artifact: DebugArtifactInfo,
     pub sections: Vec<SectionInfo>,
     pub symbols: Vec<SymbolInfo>,
     pub object_contributions: Vec<ObjectContribution>,
@@ -378,6 +379,41 @@ pub struct DebugInfoSummary {
     pub generated_ranges: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct DebugArtifactInfo {
+    pub kind: DebugArtifactKind,
+    pub source: DebugArtifactSource,
+    pub path: Option<String>,
+    pub build_id: Option<String>,
+    pub split_dwarf: bool,
+    pub debuginfod_used: bool,
+    pub resolution_steps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum DebugArtifactKind {
+    #[default]
+    None,
+    Embedded,
+    SeparateDebug,
+    SplitDwo,
+    SplitDwp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum DebugArtifactSource {
+    #[default]
+    None,
+    Embedded,
+    UserDir,
+    GnuDebuglink,
+    BuildId,
+    SplitDwarf,
+    Debuginfod,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum DemangleMode {
@@ -390,6 +426,15 @@ pub enum DemangleMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum DwarfMode {
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DebuginfodMode {
     #[default]
     Auto,
     On,
@@ -642,6 +687,45 @@ impl fmt::Display for SourceLinesMode {
             SourceLinesMode::Functions => "functions",
             SourceLinesMode::Lines => "lines",
             SourceLinesMode::All => "all",
+        };
+        write!(f, "{text}")
+    }
+}
+
+impl fmt::Display for DebugArtifactKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            DebugArtifactKind::None => "none",
+            DebugArtifactKind::Embedded => "embedded",
+            DebugArtifactKind::SeparateDebug => "separate-debug",
+            DebugArtifactKind::SplitDwo => "split-dwo",
+            DebugArtifactKind::SplitDwp => "split-dwp",
+        };
+        write!(f, "{text}")
+    }
+}
+
+impl fmt::Display for DebugArtifactSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            DebugArtifactSource::None => "none",
+            DebugArtifactSource::Embedded => "embedded",
+            DebugArtifactSource::UserDir => "user-dir",
+            DebugArtifactSource::GnuDebuglink => "gnu-debuglink",
+            DebugArtifactSource::BuildId => "build-id",
+            DebugArtifactSource::SplitDwarf => "split-dwarf",
+            DebugArtifactSource::Debuginfod => "debuginfod",
+        };
+        write!(f, "{text}")
+    }
+}
+
+impl fmt::Display for DebuginfodMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            DebuginfodMode::Auto => "auto",
+            DebuginfodMode::On => "on",
+            DebuginfodMode::Off => "off",
         };
         write!(f, "{text}")
     }

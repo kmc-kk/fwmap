@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod core;
+pub mod debug;
 pub mod ingest;
 pub mod report;
 pub mod validation;

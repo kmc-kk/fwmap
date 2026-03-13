@@ -213,9 +213,10 @@ mod tests {
         source_file_key, symbol_key, top_increases,
     };
     use crate::model::{
-        AnalysisResult, ArchiveContribution, BinaryInfo, DebugInfoSummary, DiffChangeKind, FunctionAttribution,
-        LineRangeAttribution, MemorySummary, ObjectContribution, ObjectSourceKind, SectionCategory, SectionTotal,
-        SourceFile, SourceSpan, SymbolInfo, ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket,
+        AnalysisResult, ArchiveContribution, BinaryInfo, DebugArtifactInfo, DebugInfoSummary, DiffChangeKind,
+        FunctionAttribution, LineRangeAttribution, MemorySummary, ObjectContribution, ObjectSourceKind,
+        SectionCategory, SectionTotal, SourceFile, SourceSpan, SymbolInfo, ToolchainInfo, ToolchainKind,
+        ToolchainSelection, UnknownSourceBucket,
     };
 
     #[test]
@@ -346,6 +347,7 @@ mod tests {
                 parser_warnings_count: 0,
             },
             debug_info: DebugInfoSummary::default(),
+            debug_artifact: DebugArtifactInfo::default(),
             sections: Vec::new(),
             symbols: symbols
                 .iter()

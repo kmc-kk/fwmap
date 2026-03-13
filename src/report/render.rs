@@ -46,6 +46,19 @@ pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, ver
         if result.debug_info.split_dwarf_detected { " | split-dwarf detected" } else { "" },
         if result.debug_info.cache_hit { " | cache hit" } else { "" }
     );
+    if result.debug_artifact.kind != crate::model::DebugArtifactKind::None {
+        println!(
+            "Debug artifact: {} via {}{}",
+            result.debug_artifact.kind,
+            result.debug_artifact.source,
+            result
+                .debug_artifact
+                .path
+                .as_deref()
+                .map(|path| format!(" ({path})"))
+                .unwrap_or_default()
+        );
+    }
     println!(
         "ROM: {} | RAM: {} | Sections: {} | Symbols: {} | Warnings: {}",
         format_bytes(result.memory.rom_bytes),
@@ -191,6 +204,7 @@ fn build_json(
         "map_format": current.toolchain.map_format,
         "linker_family": current.toolchain.linker_family,
         "debug_info": &current.debug_info,
+        "debug_artifact": &current.debug_artifact,
         "linker_script": &current.linker_script,
         "section_summary": &current.memory.section_totals,
         "memory_summary": &current.memory,
@@ -444,7 +458,7 @@ fn overview(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
         })
         .unwrap_or_default();
     format!(
-        "<section><h2>Overview</h2><div class=\"grid\"><div class=\"card\"><strong>Binary</strong><div>{}</div></div><div class=\"card\"><strong>Format</strong><div>{} / {}</div></div><div class=\"card\"><strong>Toolchain</strong><div>{} <span class=\"muted\">(requested: {})</span></div></div><div class=\"card\"><strong>Map</strong><div>{} / {} <span class=\"muted\">({} parser warnings)</span></div></div><div class=\"card\"><strong>DWARF</strong><div>{} <span class=\"muted\">({:.1}% unknown)</span></div></div><div class=\"card\"><strong>Sections</strong><div>{}</div></div><div class=\"card\"><strong>ROM</strong><div>{}</div></div><div class=\"card\"><strong>RAM</strong><div>{}</div></div><div class=\"card\"><strong>Warnings</strong><div>{}</div></div>{}</div></section>",
+        "<section><h2>Overview</h2><div class=\"grid\"><div class=\"card\"><strong>Binary</strong><div>{}</div></div><div class=\"card\"><strong>Format</strong><div>{} / {}</div></div><div class=\"card\"><strong>Toolchain</strong><div>{} <span class=\"muted\">(requested: {})</span></div></div><div class=\"card\"><strong>Map</strong><div>{} / {} <span class=\"muted\">({} parser warnings)</span></div></div><div class=\"card\"><strong>DWARF</strong><div>{} <span class=\"muted\">({:.1}% unknown)</span></div></div><div class=\"card\"><strong>Debug Artifact</strong><div>{}</div></div><div class=\"card\"><strong>Sections</strong><div>{}</div></div><div class=\"card\"><strong>ROM</strong><div>{}</div></div><div class=\"card\"><strong>RAM</strong><div>{}</div></div><div class=\"card\"><strong>Warnings</strong><div>{}</div></div>{}</div></section>",
         escape(&current.binary.arch),
         escape(&current.binary.elf_class),
         escape(&current.binary.endian),
@@ -455,6 +469,7 @@ fn overview(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
         current.toolchain.parser_warnings_count,
         if current.debug_info.dwarf_used { "used" } else { "not used" },
         current.debug_info.unknown_source_ratio * 100.0,
+        escape(&debug_artifact_summary(current)),
         current.sections.len(),
         format_bytes(current.memory.rom_bytes),
         format_bytes(current.memory.ram_bytes),
@@ -931,6 +946,17 @@ fn footer() -> String {
     "<section><h2>Footer</h2><p class=\"muted\">Generated locally by fwmap.</p></section>".to_string()
 }
 
+fn debug_artifact_summary(current: &AnalysisResult) -> String {
+    if current.debug_artifact.kind == crate::model::DebugArtifactKind::None {
+        return "not found".to_string();
+    }
+    let mut text = format!("{} via {}", current.debug_artifact.kind, current.debug_artifact.source);
+    if let Some(path) = current.debug_artifact.path.as_deref() {
+        text.push_str(&format!(" ({})", short_path(path)));
+    }
+    text
+}
+
 fn trend_links_section(current: &AnalysisResult) -> String {
     if !current.debug_info.dwarf_used {
         return String::new();
@@ -1016,9 +1042,9 @@ fn function_metric_key(path: Option<&str>, raw_name: &str) -> String {
 mod tests {
     use super::{build_ci_summary, write_html_report, write_json_report, SourceRenderOptions};
     use crate::model::{
-        AnalysisResult, BinaryInfo, CiFormat, DebugInfoSummary, DiffChangeKind, DiffEntry, DiffResult, DiffSummary,
-        MemoryRegion, MemorySummary, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo,
-        SectionTotal, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection,
+        AnalysisResult, BinaryInfo, CiFormat, DebugArtifactInfo, DebugInfoSummary, DiffChangeKind, DiffEntry,
+        DiffResult, DiffSummary, MemoryRegion, MemorySummary, RegionSectionUsage, RegionUsageSummary, SectionCategory,
+        SectionInfo, SectionTotal, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection,
         UnknownSourceBucket, WarningItem, WarningLevel, WarningSource,
     };
     use std::fs;
@@ -1303,6 +1329,7 @@ mod tests {
                 parser_warnings_count: 0,
             },
             debug_info: DebugInfoSummary::default(),
+            debug_artifact: DebugArtifactInfo::default(),
             sections: vec![SectionInfo {
                 name: ".text".to_string(),
                 addr: 0x8000,

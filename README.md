@@ -19,6 +19,7 @@
 - External TOML rule configuration
 - C++ symbol demangling control
 - Optional DWARF-backed source file, function, and line-range attribution
+- Separate debug, build-id, and split DWARF sidecar resolution
 - JSON report output
 - CI summary in text / markdown / JSON formats
 - warning-based exit control
@@ -102,6 +103,18 @@ cargo run -- analyze \
   --source-root . \
   --path-remap build=src \
   --report-json fwmap_sources.json
+```
+
+Separate debug and debug artifact trace example:
+
+```bash
+cargo run -- analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --dwarf=on \
+  --source-lines lines \
+  --debug-file-dir build/debug \
+  --debug-trace
 ```
 
 DWARF-backed source ranking example:
@@ -275,10 +288,14 @@ Path controls:
 - `--source-root <path>` prefixes relative source paths
 - `--path-remap <from=to>` remaps DWARF path prefixes and can be repeated
 - `--fail-on-missing-dwarf` upgrades missing DWARF from fallback to error
+- `--debug-file-dir <path>` adds a directory searched for separate debug files and split DWARF sidecars
+- `--debug-trace` prints the resolution steps used to locate debug artifacts
+- `--debuginfod=auto|on|off`, `--debuginfod-url`, and `--debuginfod-cache-dir` control graceful debuginfod fallback metadata
 
 The source attribution is intentionally approximate for optimized builds because line tables reflect compiler output, not source order.
 Line-0 or compiler-generated ranges are counted into `unknown_source` instead of being silently dropped, which makes partial attribution easier to diagnose.
-Split DWARF is currently detection-only: `--dwarf=auto` falls back with an informational warning, while `--dwarf=on` returns a clear error if only `.dwo` / `.dwp` style markers are present.
+Debug artifacts are resolved in this order: embedded debug sections, user-provided debug dirs, `.gnu_debuglink`, build-id lookup, split DWARF sidecars, then optional debuginfod fallback.
+Split DWARF is supported at a basic sidecar level: `.dwo` / `.dwp` artifacts are used when they can be resolved, and unresolved or unsupported variants degrade with explicit warnings instead of aborting the whole analysis.
 
 When DWARF and symbols are both available, `fwmap` rolls byte counts up into:
 
@@ -375,10 +392,7 @@ cargo test
 
 - ELF parsing currently reads the standard symbol table (`SHT_SYMTAB`) only.
 - `map` parsing targets common GNU ld / LLVM lld output and intentionally tolerates unknown lines with warnings.
-- Warning items now retain their source and related entity so skipped input can be explained in reports and verbose CLI output.
 - Toolchain metadata now records linker family, map format, and parser warning count in CLI / HTML / JSON / history output.
-- Warning evaluation is separated into a rule engine so new checks can be added without rewriting core analysis flow.
-- External rule files are validated before analysis starts.
 - Linker script support is currently a subset parser aimed at common GNU ld patterns.
 - Object paths are sourced from the map file; when `--map` is omitted, symbol-to-object mapping is unavailable.
 - Region usage relies on linker script declarations plus ELF section addresses, so unusual scripts may only be partially represented.
@@ -388,18 +402,8 @@ cargo test
 - Toolchain auto-detection is intentionally lightweight and currently keys off GNU ld / LLVM lld map patterns only.
 - `lld-native` parsing is aimed at ELF `ld.lld -Map` / `--print-map` text output and may not cover every future column variation.
 - DWARF attribution uses line tables plus ELF symbol ranges; optimized builds may still collapse, duplicate, or split line ranges.
-- Split DWARF (`.dwo` / `.dwp`) is detected but external debug objects are not loaded yet.
-
-## CLI Compatibility
-
-- Existing `fwmap analyze --elf ...` usage remains valid.
-- `history record|list|show|trend` are additive subcommands.
-- `--verbose`, `--version`, `--lds`, `--report-json`, `--ci-summary`, `--ci-format`, `--ci-out`, `--fail-on-warning`, `--rules`, `--demangle=...`, `--toolchain ...`, `--dwarf=...`, `--source-lines ...`, `--source-root`, `--path-remap`, and `--fail-on-missing-dwarf` are additive options.
-- Existing required arguments remain unchanged.
-
-## Planned Extensions
-
-- Better demangling and C++ symbol analysis
+- Separate debug lookup supports user dirs, `.gnu_debuglink`, build-id paths, and basic split DWARF sidecars.
+- `debuginfod` currently records provenance and degrades cleanly when lookup is unavailable; remote fetch itself is not implemented yet.
 
 ## Additional Docs
 

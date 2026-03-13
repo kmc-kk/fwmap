@@ -71,8 +71,19 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
         .map_err(|err| format!("failed to start history transaction: {err}"))?;
 
     let created_at = now_unix();
+    let mut stored_metadata = input.metadata.clone();
+    if input.analysis.debug_artifact.kind != crate::model::DebugArtifactKind::None {
+        stored_metadata.insert("debug_artifact.kind".to_string(), input.analysis.debug_artifact.kind.to_string());
+        stored_metadata.insert("debug_artifact.source".to_string(), input.analysis.debug_artifact.source.to_string());
+        if let Some(path) = input.analysis.debug_artifact.path.as_deref() {
+            stored_metadata.insert("debug_artifact.path".to_string(), path.to_string());
+        }
+        if let Some(build_id) = input.analysis.debug_artifact.build_id.as_deref() {
+            stored_metadata.insert("debug_artifact.build_id".to_string(), build_id.to_string());
+        }
+    }
     let metadata_json =
-        serde_json::to_string(&input.metadata).map_err(|err| format!("failed to serialize history metadata: {err}"))?;
+        serde_json::to_string(&stored_metadata).map_err(|err| format!("failed to serialize history metadata: {err}"))?;
     let warning_count = input.analysis.warnings.len() as i64;
     let error_count = input
         .analysis
@@ -834,8 +845,8 @@ fn now_unix() -> i64 {
 mod tests {
     use super::{list_builds, record_build, show_build, trend_metric, HistoryRecordInput, TrendFormat};
     use crate::model::{
-        AnalysisResult, BinaryInfo, DebugInfoSummary, MemorySummary, SectionCategory, SectionTotal, SymbolInfo,
-        ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket, WarningItem, WarningLevel,
+        AnalysisResult, BinaryInfo, DebugArtifactInfo, DebugInfoSummary, MemorySummary, SectionCategory, SectionTotal,
+        SymbolInfo, ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket, WarningItem, WarningLevel,
         WarningSource,
     };
     use std::collections::BTreeMap;
@@ -930,6 +941,7 @@ mod tests {
                 line_zero_ranges: 0,
                 generated_ranges: 0,
             },
+            debug_artifact: DebugArtifactInfo::default(),
             sections: Vec::new(),
             symbols: vec![SymbolInfo {
                 name: "main".to_string(),

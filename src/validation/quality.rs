@@ -38,7 +38,7 @@ pub fn evaluate_quality_checks(current: &AnalysisResult) -> Vec<WarningItem> {
         warnings.push(WarningItem {
             level: WarningLevel::Info,
             code: "SPLIT_DWARF_DETECTED".to_string(),
-            message: "Split DWARF markers were detected but external debug objects are not loaded yet".to_string(),
+            message: "Split DWARF markers were detected but no usable split debug artifact was resolved".to_string(),
             source: WarningSource::Analyze,
             related: current.debug_info.split_dwarf_kind.clone(),
         });

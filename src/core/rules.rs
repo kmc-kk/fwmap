@@ -733,6 +733,7 @@ mod tests {
                 parser_warnings_count: 0,
             },
             debug_info: DebugInfoSummary::default(),
+            debug_artifact: crate::model::DebugArtifactInfo::default(),
             sections: Vec::new(),
             symbols: vec![SymbolInfo {
                 name: "blob".to_string(),

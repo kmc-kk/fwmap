@@ -47,7 +47,7 @@
 - demangle の高度化
 - linker script の完全構文対応
 - 外部ルール設定の高度化
-- split DWARF (`.dwo` / `.dwp`) の外部 debug object 読み込み
+- debuginfod の実ネットワーク取得
 
 ## 3. ビルドとテスト
 
@@ -160,11 +160,35 @@ fwmap analyze \
   --report-json build/fwmap_sources.json
 ```
 
+### separate debug / split DWARF を使って source line を読む
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --dwarf=on \
+  --source-lines lines \
+  --debug-file-dir build/debug \
+  --debug-trace
+```
+
+このときの debug artifact 解決順は次のとおりです。
+
+1. main ELF に内蔵された debug section
+2. `--debug-file-dir` で指定したディレクトリ
+3. `.gnu_debuglink`
+4. build-id による `.build-id/xx/yyyy.debug`
+5. split DWARF sidecar (`.dwo` / `.dwp`)
+6. `debuginfod`
+
 補足:
 
 - 同じ ELF を同一 process 内で繰り返し解析した場合、DWARF parse 結果は in-memory cache を再利用します
 - `line = 0` や compiler-generated range は `unknown source` に寄せて表示します
-- split DWARF の marker だけがある場合、`--dwarf=auto` は info warning 付きで fallback し、`--dwarf=on` は明確にエラーを返します
+- split DWARF sidecar が解決できれば、その `.dwo` / `.dwp` を使って attribution を継続します
+- split DWARF marker があるのに使える sidecar が見つからない場合、`--dwarf=auto` は warning 付きで継続し、`--dwarf=on` は明確にエラーを返します
+- `--debug-trace` を付けると、どの debug artifact をどの順番で探したかを標準出力で確認できます
+- `--debuginfod=auto|on|off`、`--debuginfod-url`、`--debuginfod-cache-dir` は最後段の fallback 制御です。現行版では provenance 記録と graceful fallback までを扱い、実ネットワーク取得自体は未実装です
 
 ### DWARF から source file / function / hotspot を出す
 
@@ -1228,7 +1252,8 @@ fwmap history trend --db history.db --metric rom --last 20
 - DWARF attribution は line table と ELF symbol range の組み合わせで集計している
 - 最適化ビルドでは line attribution は近似的であり、source order と一致しない場合がある
 - line 0 や compiler-generated range は `unknown source` に寄せて表示する
-- split DWARF (`.dwo` / `.dwp`) は検出のみ対応で、外部 debug object の読込は未対応
+- separate debug は `--debug-file-dir`、`.gnu_debuglink`、build-id、基本的な split DWARF sidecar 解決に対応している
+- `debuginfod` は fallback metadata と trace までは扱うが、現行版では実ネットワーク取得は未実装
 
 ## 14. 今後の予定
 

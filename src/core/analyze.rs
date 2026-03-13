@@ -1,14 +1,15 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::debug::{resolve_debug_artifact, DebugArtifactResolver};
 use crate::demangle::apply_demangling;
 use crate::ingest::{dwarf, elf, lds, map};
 use crate::model::{
-    AnalysisResult, ArchiveContribution, CustomRule, DemangleMode, DiffResult, DwarfMode, FunctionAttribution,
-    LineAttribution, LineRangeAttribution, LinkerFamily, MapFormat, MapFormatSelection, MemoryRegion, MemorySummary,
-    ObjectContribution, ObjectSourceKind, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement,
-    SectionTotal, SourceFile, SourceLinesMode, SourceSpan, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind,
-    ToolchainSelection, WarningItem,
+    AnalysisResult, ArchiveContribution, CustomRule, DebuginfodMode, DemangleMode, DiffResult,
+    DwarfMode, FunctionAttribution, LineAttribution, LineRangeAttribution, LinkerFamily, MapFormat,
+    MapFormatSelection, MemoryRegion, MemorySummary, ObjectContribution, ObjectSourceKind, RegionSectionUsage,
+    RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SourceFile, SourceLinesMode,
+    SourceSpan, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection, WarningItem,
 };
 use crate::rules::{evaluate_default_rules, RuleContext};
 use crate::validation::quality::evaluate_quality_checks;
@@ -21,6 +22,11 @@ pub struct AnalyzeOptions {
     pub toolchain: ToolchainSelection,
     pub map_format: MapFormatSelection,
     pub dwarf_mode: DwarfMode,
+    pub debug_file_dirs: Vec<std::path::PathBuf>,
+    pub debug_trace: bool,
+    pub debuginfod: DebuginfodMode,
+    pub debuginfod_urls: Vec<String>,
+    pub debuginfod_cache_dir: Option<std::path::PathBuf>,
     pub source_lines: SourceLinesMode,
     pub source_root: Option<std::path::PathBuf>,
     pub path_remaps: Vec<(String, String)>,
@@ -36,6 +42,11 @@ impl Default for AnalyzeOptions {
             toolchain: ToolchainSelection::Auto,
             map_format: MapFormatSelection::Auto,
             dwarf_mode: DwarfMode::Auto,
+            debug_file_dirs: Vec::new(),
+            debug_trace: false,
+            debuginfod: DebuginfodMode::Off,
+            debuginfod_urls: Vec::new(),
+            debuginfod_cache_dir: None,
             source_lines: SourceLinesMode::Off,
             source_root: None,
             path_remaps: Vec::new(),
@@ -71,7 +82,17 @@ pub fn analyze_paths(
     let memory = build_memory_summary(&elf.sections, region_input, placements);
     let mut symbols = elf.symbols;
     apply_demangling(&mut symbols, options.demangle);
-    let dwarf_data = dwarf::parse_dwarf(elf_path, &elf.sections, options)?;
+    let resolved_debug = resolve_debug_artifact(
+        elf_path,
+        &DebugArtifactResolver {
+            debug_file_dirs: options.debug_file_dirs.clone(),
+            debuginfod: options.debuginfod,
+            debuginfod_urls: options.debuginfod_urls.clone(),
+            debuginfod_cache_dir: options.debuginfod_cache_dir.clone(),
+            trace: options.debug_trace,
+        },
+    )?;
+    let dwarf_data = dwarf::parse_dwarf(elf_path, &resolved_debug, &elf.sections, options)?;
     // Rebuild source aggregates after demangling so reports and diffs share one normalized view.
     let function_attributions = match options.source_lines {
         SourceLinesMode::Functions | SourceLinesMode::Lines | SourceLinesMode::All => {
@@ -111,6 +132,7 @@ pub fn analyze_paths(
             parser_warnings_count: map_data.as_ref().map(|item| item.parser_warnings_count()).unwrap_or(0),
         },
         debug_info: dwarf_data.debug_info,
+        debug_artifact: dwarf_data.debug_artifact,
         sections: elf.sections,
         symbols: sorted_symbols(symbols),
         object_contributions: aggregate_objects(map_data.as_ref().map(|item| item.object_contributions.as_slice()).unwrap_or(&[])),
@@ -443,10 +465,10 @@ mod tests {
     use super::{build_memory_summary, evaluate_warnings, sorted_symbols, AnalyzeOptions};
     use crate::diff::diff_results;
     use crate::model::{
-        AnalysisResult, BinaryInfo, DebugInfoSummary, DiffChangeKind, DiffResult, DiffSummary, DwarfMode,
-        FunctionAttribution, LineAttribution, LinkerFamily, LinkerScriptInfo, MapFormat, MemoryRegion, MemorySummary,
-        SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SourceLocation, SourceSpan, SymbolInfo,
-        ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket,
+        AnalysisResult, BinaryInfo, DebugArtifactInfo, DebugInfoSummary, DiffChangeKind, DiffResult, DiffSummary,
+        DwarfMode, FunctionAttribution, LineAttribution, LinkerFamily, LinkerScriptInfo, MapFormat, MemoryRegion,
+        MemorySummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SourceLocation, SourceSpan,
+        SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket,
     };
 
     #[test]
@@ -775,6 +797,7 @@ mod tests {
                 parser_warnings_count: 0,
             },
             debug_info: DebugInfoSummary::default(),
+            debug_artifact: DebugArtifactInfo::default(),
             sections: Vec::new(),
             symbols: symbols
                 .iter()

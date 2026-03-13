@@ -8,8 +8,8 @@ use crate::history::{
     HistoryRecordInput,
 };
 use crate::model::{
-    CiFormat, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode, ThresholdConfig, ToolchainSelection,
-    WarningLevel,
+    CiFormat, DebuginfodMode, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode, ThresholdConfig,
+    ToolchainSelection, WarningLevel,
 };
 use crate::rule_config::{apply_threshold_overrides, load_rule_config};
 use crate::render::{print_ci_summary, print_cli_summary, write_ci_summary, write_html_report, write_json_report};
@@ -39,6 +39,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             toolchain,
             map_format,
             dwarf_mode,
+            debug_file_dirs,
+            debug_trace,
+            debuginfod,
+            debuginfod_urls,
+            debuginfod_cache_dir,
             source_lines,
             source_root,
             path_remaps,
@@ -52,6 +57,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 toolchain,
                 map_format,
                 dwarf_mode,
+                debug_file_dirs,
+                debug_trace,
+                debuginfod,
+                debuginfod_urls,
+                debuginfod_cache_dir,
                 source_lines,
                 source_root,
                 path_remaps,
@@ -63,6 +73,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 options.custom_rules = config.rules;
             }
             let analysis = analyze_paths(&elf, map.as_deref(), lds.as_deref(), &options)?;
+            print_debug_trace(&analysis);
             let id = record_build(&db, HistoryRecordInput { analysis, metadata })?;
             println!("Recorded build #{id} into {}", db.display());
             Ok(0)
@@ -108,6 +119,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             toolchain,
             map_format,
             dwarf_mode,
+            debug_file_dirs,
+            debug_trace,
+            debuginfod,
+            debuginfod_urls,
+            debuginfod_cache_dir,
             source_lines,
             source_root,
             path_remaps,
@@ -121,6 +137,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 toolchain,
                 map_format,
                 dwarf_mode,
+                debug_file_dirs,
+                debug_trace,
+                debuginfod,
+                debuginfod_urls,
+                debuginfod_cache_dir,
                 source_lines,
                 source_root,
                 path_remaps,
@@ -133,6 +154,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             }
 
             let mut current = analyze_paths(&elf, map.as_deref(), lds.as_deref(), &options)?;
+            print_debug_trace(&current);
             let diff = if let Some(prev_elf) = prev_elf.as_deref() {
                 let previous = analyze_paths(prev_elf, prev_map.as_deref(), lds.as_deref(), &options)?;
                 let diff = diff_results(&current, &previous);
@@ -219,6 +241,11 @@ enum Command {
         toolchain: ToolchainSelection,
         map_format: MapFormatSelection,
         dwarf_mode: DwarfMode,
+        debug_file_dirs: Vec<PathBuf>,
+        debug_trace: bool,
+        debuginfod: DebuginfodMode,
+        debuginfod_urls: Vec<String>,
+        debuginfod_cache_dir: Option<PathBuf>,
         source_lines: SourceLinesMode,
         source_root: Option<PathBuf>,
         path_remaps: Vec<(String, String)>,
@@ -259,6 +286,11 @@ enum Command {
         toolchain: ToolchainSelection,
         map_format: MapFormatSelection,
         dwarf_mode: DwarfMode,
+        debug_file_dirs: Vec<PathBuf>,
+        debug_trace: bool,
+        debuginfod: DebuginfodMode,
+        debuginfod_urls: Vec<String>,
+        debuginfod_cache_dir: Option<PathBuf>,
         source_lines: SourceLinesMode,
         source_root: Option<PathBuf>,
         path_remaps: Vec<(String, String)>,
@@ -302,6 +334,11 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut toolchain = ToolchainSelection::Auto;
     let mut map_format = MapFormatSelection::Auto;
     let mut dwarf_mode = DwarfMode::Auto;
+    let mut debug_file_dirs = Vec::new();
+    let mut debug_trace = false;
+    let mut debuginfod = DebuginfodMode::Off;
+    let mut debuginfod_urls = Vec::new();
+    let mut debuginfod_cache_dir = None;
     let mut source_lines = SourceLinesMode::Off;
     let mut source_root = None;
     let mut path_remaps = Vec::new();
@@ -344,6 +381,11 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
             }
             "--fail-on-missing-dwarf" => {
                 fail_on_missing_dwarf = true;
+                index += 1;
+                continue;
+            }
+            "--debug-trace" => {
+                debug_trace = true;
                 index += 1;
                 continue;
             }
@@ -396,6 +438,21 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                 index += 1;
                 continue;
             }
+            "--debuginfod=auto" => {
+                debuginfod = DebuginfodMode::Auto;
+                index += 1;
+                continue;
+            }
+            "--debuginfod=on" => {
+                debuginfod = DebuginfodMode::On;
+                index += 1;
+                continue;
+            }
+            "--debuginfod=off" => {
+                debuginfod = DebuginfodMode::Off;
+                index += 1;
+                continue;
+            }
             "--toolchain" => {
                 let value = args.get(index + 1).ok_or_else(|| "missing value for --toolchain".to_string())?;
                 toolchain = parse_toolchain(value)?;
@@ -420,7 +477,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                 index += 2;
                 continue;
             }
-            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--rules" | "--ci-out" | "--source-root" => {
+            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--rules" | "--ci-out" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--elf" => elf = Some(PathBuf::from(value)),
@@ -433,6 +490,9 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                     "--rules" => rules = Some(PathBuf::from(value)),
                     "--ci-out" => ci_out = Some(PathBuf::from(value)),
                     "--source-root" => source_root = Some(PathBuf::from(value)),
+                    "--debug-file-dir" => debug_file_dirs.push(PathBuf::from(value)),
+                    "--debuginfod-url" => debuginfod_urls.push(value.to_string()),
+                    "--debuginfod-cache-dir" => debuginfod_cache_dir = Some(PathBuf::from(value)),
                     _ => {}
                 }
                 index += 2;
@@ -482,6 +542,11 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         toolchain,
         map_format,
         dwarf_mode,
+        debug_file_dirs,
+        debug_trace,
+        debuginfod,
+        debuginfod_urls,
+        debuginfod_cache_dir,
         source_lines,
         source_root,
         path_remaps,
@@ -505,12 +570,22 @@ fn print_help() {
     println!("{}", help_text());
 }
 
+fn print_debug_trace(result: &crate::model::AnalysisResult) {
+    if result.debug_artifact.resolution_steps.is_empty() {
+        return;
+    }
+    println!("Debug artifact trace:");
+    for step in &result.debug_artifact.resolution_steps {
+        println!("  {step}");
+    }
+}
+
 fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--verbose]
-fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
+fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--verbose]
+fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
 fwmap history list --db <path>
 fwmap history show --db <path> --build <id>
 fwmap history trend --db <path> --metric <rom|ram|warnings|unknown_source|region:NAME|section:NAME|source:PATH|function:KEY|directory:PATH> [--last <n>]
@@ -528,6 +603,11 @@ Options:
   --toolchain auto|gnu|lld|iar|armcc|keil Select or detect the map parser family
   --map-format auto|gnu|lld-native Select or detect the map text format
   --dwarf=auto|on|off Control DWARF line-table usage
+  --debug-file-dir Search this directory for separate debug files (repeatable)
+  --debug-trace Print debug artifact resolution steps
+  --debuginfod=auto|on|off Control debuginfod fallback behavior
+  --debuginfod-url Add a debuginfod base URL (repeatable)
+  --debuginfod-cache-dir Directory used for debuginfod cache metadata
   --source-lines off|files|functions|lines|all Control source-level aggregation
   --source-root Apply a root prefix to relative DWARF source paths
   --path-remap from=to Remap DWARF source path prefixes (repeatable)
@@ -577,6 +657,11 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
     let mut toolchain = ToolchainSelection::Auto;
     let mut map_format = MapFormatSelection::Auto;
     let mut dwarf_mode = DwarfMode::Auto;
+    let mut debug_file_dirs = Vec::new();
+    let mut debug_trace = false;
+    let mut debuginfod = DebuginfodMode::Off;
+    let mut debuginfod_urls = Vec::new();
+    let mut debuginfod_cache_dir = None;
     let mut source_lines = SourceLinesMode::Off;
     let mut source_root = None;
     let mut path_remaps = Vec::new();
@@ -624,6 +709,22 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
                 dwarf_mode = DwarfMode::Off;
                 index += 1;
             }
+            "--debug-trace" => {
+                debug_trace = true;
+                index += 1;
+            }
+            "--debuginfod=auto" => {
+                debuginfod = DebuginfodMode::Auto;
+                index += 1;
+            }
+            "--debuginfod=on" => {
+                debuginfod = DebuginfodMode::On;
+                index += 1;
+            }
+            "--debuginfod=off" => {
+                debuginfod = DebuginfodMode::Off;
+                index += 1;
+            }
             "--toolchain" => {
                 let value = args.get(index + 1).ok_or_else(|| "missing value for --toolchain".to_string())?;
                 toolchain = parse_toolchain(value)?;
@@ -656,7 +757,7 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
                 metadata.insert(k.to_string(), v.to_string());
                 index += 2;
             }
-            "--db" | "--elf" | "--map" | "--lds" | "--rules" | "--source-root" => {
+            "--db" | "--elf" | "--map" | "--lds" | "--rules" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--db" => db = Some(PathBuf::from(value)),
@@ -665,6 +766,9 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
                     "--lds" => lds = Some(PathBuf::from(value)),
                     "--rules" => rules = Some(PathBuf::from(value)),
                     "--source-root" => source_root = Some(PathBuf::from(value)),
+                    "--debug-file-dir" => debug_file_dirs.push(PathBuf::from(value)),
+                    "--debuginfod-url" => debuginfod_urls.push(value.to_string()),
+                    "--debuginfod-cache-dir" => debuginfod_cache_dir = Some(PathBuf::from(value)),
                     _ => {}
                 }
                 index += 2;
@@ -695,6 +799,11 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
         toolchain,
         map_format,
         dwarf_mode,
+        debug_file_dirs,
+        debug_trace,
+        debuginfod,
+        debuginfod_urls,
+        debuginfod_cache_dir,
         source_lines,
         source_root,
         path_remaps,

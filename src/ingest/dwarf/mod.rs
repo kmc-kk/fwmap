@@ -9,15 +9,17 @@ use gimli::{Dwarf, DwarfSections, EndianSlice, LittleEndian, SectionId};
 use object::{Object, ObjectSection};
 
 use crate::analyze::AnalyzeOptions;
+use crate::debug::ResolvedDebugArtifact;
 use crate::model::{
-    AddressRange, CompilationUnit, DebugInfoSummary, DwarfMode, FunctionAttribution, LineAttribution, SectionInfo,
-    SourceFile, SourceLinesMode, SourceLocation, SourceSpan, UnknownSourceBucket, WarningItem, WarningLevel,
-    WarningSource,
+    AddressRange, CompilationUnit, DebugArtifactInfo, DebugArtifactKind, DebugInfoSummary, DwarfMode, FunctionAttribution,
+    LineAttribution, SectionInfo, SourceFile, SourceLinesMode, SourceLocation, SourceSpan, UnknownSourceBucket,
+    WarningItem, WarningLevel, WarningSource,
 };
 
 #[derive(Debug, Clone)]
 pub struct DwarfIngestResult {
     pub debug_info: DebugInfoSummary,
+    pub debug_artifact: DebugArtifactInfo,
     pub compilation_units: Vec<CompilationUnit>,
     pub source_files: Vec<SourceFile>,
     pub line_attributions: Vec<LineAttribution>,
@@ -38,28 +40,41 @@ struct DwarfCacheKey {
 
 static DWARF_CACHE: OnceLock<Mutex<HashMap<DwarfCacheKey, DwarfIngestResult>>> = OnceLock::new();
 
-pub fn parse_dwarf(path: &Path, sections: &[SectionInfo], options: &AnalyzeOptions) -> Result<DwarfIngestResult, String> {
+pub fn parse_dwarf(
+    path: &Path,
+    artifact: &ResolvedDebugArtifact,
+    sections: &[SectionInfo],
+    options: &AnalyzeOptions,
+) -> Result<DwarfIngestResult, String> {
     match options.dwarf_mode {
         DwarfMode::Off => Ok(empty_result(options)),
-        DwarfMode::Auto | DwarfMode::On => parse_dwarf_enabled(path, sections, options),
+        DwarfMode::Auto | DwarfMode::On => parse_dwarf_enabled(path, artifact, sections, options),
     }
 }
 
-fn parse_dwarf_enabled(path: &Path, sections: &[SectionInfo], options: &AnalyzeOptions) -> Result<DwarfIngestResult, String> {
-    if let Some(cache_key) = dwarf_cache_key(path, options) {
+fn parse_dwarf_enabled(
+    path: &Path,
+    artifact: &ResolvedDebugArtifact,
+    sections: &[SectionInfo],
+    options: &AnalyzeOptions,
+) -> Result<DwarfIngestResult, String> {
+    let artifact_path = artifact.info.path.as_deref().unwrap_or_else(|| path.to_str().unwrap_or_default());
+    let artifact_path = Path::new(artifact_path);
+    if let Some(cache_key) = dwarf_cache_key(artifact_path, options) {
         if let Some(cached) = lookup_cache(&cache_key)? {
             return Ok(cached);
         }
     }
 
-    let bytes = fs::read(path).map_err(|err| format!("failed to read ELF for DWARF '{}': {err}", path.display()))?;
+    let bytes = artifact.bytes.clone();
     let file = object::File::parse(&*bytes).map_err(|err| format!("failed to parse object for DWARF '{}': {err}", path.display()))?;
     let split_dwarf = detect_split_dwarf(&file);
     let has_debug_line = file.section_by_name(".debug_line").is_some();
+    let resolved_external_debug = artifact.info.kind != DebugArtifactKind::None;
     if let Some(kind) = split_dwarf.as_deref() {
         if !has_debug_line {
             let message = format!(
-                "split DWARF ({kind}) was detected in '{}' but external debug objects are not supported yet",
+                "split DWARF ({kind}) was detected in '{}' but no usable line information was available in the resolved debug artifact",
                 path.display()
             );
             if options.dwarf_mode == DwarfMode::On || options.fail_on_missing_dwarf {
@@ -68,6 +83,7 @@ fn parse_dwarf_enabled(path: &Path, sections: &[SectionInfo], options: &AnalyzeO
             let mut result = empty_result(options);
             result.debug_info.split_dwarf_detected = true;
             result.debug_info.split_dwarf_kind = Some(kind.to_string());
+            result.debug_artifact = artifact.info.clone();
             result.warnings.push(WarningItem {
                 level: WarningLevel::Info,
                 code: "SPLIT_DWARF_UNSUPPORTED".to_string(),
@@ -85,7 +101,18 @@ fn parse_dwarf_enabled(path: &Path, sections: &[SectionInfo], options: &AnalyzeO
                 path.display()
             ));
         }
-        return Ok(empty_result(options));
+        let mut result = empty_result(options);
+        result.debug_artifact = artifact.info.clone();
+        if !resolved_external_debug {
+            result.warnings.push(WarningItem {
+                level: WarningLevel::Info,
+                code: "DEBUG_ARTIFACT_NOT_FOUND".to_string(),
+                message: format!("No usable debug artifact was found for '{}'", path.display()),
+                source: WarningSource::Elf,
+                related: Some(path.display().to_string()),
+            });
+        }
+        return Ok(result);
     }
 
     let dwarf_sections =
@@ -93,15 +120,22 @@ fn parse_dwarf_enabled(path: &Path, sections: &[SectionInfo], options: &AnalyzeO
     let dwarf = dwarf_sections.borrow(|section| EndianSlice::new(section.as_ref(), LittleEndian));
 
     let mut result = empty_result(options);
+    result.debug_artifact = artifact.info.clone();
     result.debug_info.dwarf_used = true;
-    result.debug_info.split_dwarf_detected = split_dwarf.is_some();
-    result.debug_info.split_dwarf_kind = split_dwarf.clone();
+    result.debug_info.split_dwarf_detected = artifact.info.split_dwarf || split_dwarf.is_some();
+    result.debug_info.split_dwarf_kind = split_dwarf
+        .clone()
+        .or_else(|| match artifact.info.kind {
+            DebugArtifactKind::SplitDwo => Some("dwo".to_string()),
+            DebugArtifactKind::SplitDwp => Some("dwp".to_string()),
+            _ => None,
+        });
     if let Some(kind) = split_dwarf {
         result.warnings.push(WarningItem {
             level: WarningLevel::Info,
             code: "SPLIT_DWARF_PARTIAL".to_string(),
             message: format!(
-                "split DWARF marker ({kind}) was detected; attribution uses only embedded DWARF sections that are currently available"
+                "split DWARF marker ({kind}) was detected; attribution uses the resolved debug artifact sections that are currently available"
             ),
             source: WarningSource::Elf,
             related: Some(path.display().to_string()),
@@ -206,7 +240,7 @@ fn parse_dwarf_enabled(path: &Path, sections: &[SectionInfo], options: &AnalyzeO
             related: Some(path.display().to_string()),
         });
     }
-    if let Some(cache_key) = dwarf_cache_key(path, options) {
+    if let Some(cache_key) = dwarf_cache_key(artifact_path, options) {
         store_cache(cache_key, &result)?;
     }
     Ok(result)
@@ -219,6 +253,7 @@ fn empty_result(options: &AnalyzeOptions) -> DwarfIngestResult {
             source_lines: options.source_lines,
             ..DebugInfoSummary::default()
         },
+        debug_artifact: DebugArtifactInfo::default(),
         compilation_units: Vec::new(),
         source_files: Vec::new(),
         line_attributions: Vec::new(),
