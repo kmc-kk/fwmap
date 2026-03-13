@@ -1,82 +1,5 @@
-<!doctype html>
-<html lang="ja">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>fwmap マニュアル</title>
-  <style>
-:root {
-  color-scheme: light;
-  --bg: #f7f4ed;
-  --paper: #fffdf8;
-  --ink: #1f1d1a;
-  --muted: #5c554a;
-  --line: #d7cfc0;
-  --accent: #8b5e34;
-  --code-bg: #f1eadf;
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  font-family: "BIZ UDPGothic", "Yu Gothic UI", "Hiragino Sans", sans-serif;
-  color: var(--ink);
-  background: linear-gradient(180deg, #efe7d7 0%, var(--bg) 18%, #f6f1e8 100%);
-  line-height: 1.7;
-}
-main {
-  max-width: 980px;
-  margin: 32px auto 64px;
-  padding: 40px 56px;
-  background: var(--paper);
-  border: 1px solid rgba(139, 94, 52, 0.18);
-  box-shadow: 0 18px 48px rgba(70, 52, 31, 0.10);
-}
-h1, h2, h3, h4 { line-height: 1.25; color: #2d241c; }
-h1 { font-size: 2.2rem; margin: 0 0 1.2rem; }
-h2 { font-size: 1.5rem; margin-top: 2.4rem; padding-bottom: 0.35rem; border-bottom: 2px solid var(--line); }
-h3 { font-size: 1.15rem; margin-top: 1.6rem; }
-p, li { font-size: 0.98rem; }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-code {
-  font-family: "Cascadia Code", "Consolas", monospace;
-  background: var(--code-bg);
-  padding: 0.12rem 0.35rem;
-  border-radius: 4px;
-}
-pre {
-  background: #2c241d;
-  color: #f8f2e8;
-  padding: 16px 18px;
-  border-radius: 10px;
-  overflow-x: auto;
-  border: 1px solid rgba(0,0,0,0.08);
-}
-pre code { background: transparent; padding: 0; color: inherit; }
-table { width: 100%; border-collapse: collapse; margin: 1rem 0 1.5rem; }
-th, td { border: 1px solid var(--line); padding: 0.55rem 0.7rem; text-align: left; vertical-align: top; }
-th { background: #efe6d8; }
-blockquote {
-  margin: 1rem 0;
-  padding: 0.8rem 1rem;
-  border-left: 4px solid var(--accent);
-  background: #f5eee4;
-  color: var(--muted);
-}
-hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
-@media print {
-  body { background: white; }
-  main { margin: 0; max-width: none; box-shadow: none; border: 0; padding: 0; }
-  a { color: inherit; text-decoration: none; }
-  pre, blockquote { break-inside: avoid; }
-}
-@page { size: A4; margin: 14mm 12mm 16mm; }
-</style>
-</head>
-<body>
-  <main>
-  <h1 id="fwmap">fwmap マニュアル</h1>
-<h2 id="1">1. 概要</h2>
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>fwmap manual</title><style>body{font-family:Segoe UI,Meiryo,sans-serif;max-width:960px;margin:40px auto;padding:0 24px;line-height:1.7;color:#222}code,pre{font-family:Consolas,Menlo,monospace}pre{background:#f6f8fa;padding:12px;overflow:auto}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}h1,h2,h3{line-height:1.3}a{color:#0366d6}</style></head><body><h1>fwmap マニュアル</h1>
+<h2>1. 概要</h2>
 <p><code>fwmap</code> は、組込みファームウェアの <code>ELF</code> と GNU ld / LLVM lld 系 <code>map</code> を解析し、ROM/RAM 使用量、主要シンボル、object 寄与、前回ビルドとの差分を可視化するローカル CLI ツールです。</p>
 <p>現行版は、単純なサイズ表示だけでなく、差分原因の追跡、memory region の可視化、JSON 出力、CI 向け要約、ルールベースの warning 判定、外部ルール設定、C++ symbol の demangle を主機能として扱います。</p>
 <p>さらに現行版では、<code>gimli</code> を用いた DWARF line table 読み込みにより、source file / function / line-range 単位の attribution を扱えます。</p>
@@ -90,7 +13,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
 <li>linker script 上の region と section 配置がどうなっているか</li>
 <li>CI で機械判定できる JSON と短い要約を得る</li>
 </ul>
-<h2 id="2">2. 対応範囲</h2>
+<h2>2. 対応範囲</h2>
 <ul>
 <li>ELF32 / ELF64</li>
 <li>little-endian ELF を主対象</li>
@@ -123,7 +46,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
 <li>外部ルール設定の高度化</li>
 <li>debuginfod の実ネットワーク取得</li>
 </ul>
-<h2 id="3">3. ビルドとテスト</h2>
+<h2>3. ビルドとテスト</h2>
 <p>前提:</p>
 <ul>
 <li>Rust toolchain</li>
@@ -135,18 +58,18 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
 <p>テスト:</p>
 <pre><code class="language-bash">cargo test
 </code></pre>
-<h2 id="4">4. 基本的な使い方</h2>
-<h3 id="elf">ELF のみ解析</h3>
+<h2>4. 基本的な使い方</h2>
+<h3>ELF のみ解析</h3>
 <pre><code class="language-bash">fwmap analyze --elf build/app.elf
 </code></pre>
-<h3 id="elf-map">ELF と map を解析</h3>
+<h3>ELF と map を解析</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
   --toolchain auto \
   --out report.html
 </code></pre>
-<h3 id="_1">前回ビルドとの差分を解析</h3>
+<h3>前回ビルドとの差分を解析</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
@@ -154,27 +77,27 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
   --prev-map prev/app.map \
   --out report.html
 </code></pre>
-<h3 id="elf-map-linker-script">ELF / map / linker script を合わせて解析</h3>
+<h3>ELF / map / linker script を合わせて解析</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
   --lds linker/app.ld \
   --out report.html
 </code></pre>
-<h3 id="_2">バージョン表示</h3>
+<h3>バージョン表示</h3>
 <pre><code class="language-bash">fwmap --version
 </code></pre>
-<h3 id="warning">詳細 warning を表示</h3>
+<h3>詳細 warning を表示</h3>
 <pre><code class="language-bash">fwmap analyze --elf build/app.elf --verbose
 </code></pre>
 <p><code>--out</code> を省略した場合は <code>fwmap_report.html</code> が出力されます。</p>
-<h3 id="json">JSON レポートを出力</h3>
+<h3>JSON レポートを出力</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
   --report-json build/fwmap_report.json
 </code></pre>
-<h3 id="sarif">SARIF レポートを出力</h3>
+<h3>SARIF レポートを出力</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
@@ -182,7 +105,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
   --sarif-base-uri file:///workspace/ \
   --sarif-min-level warn
 </code></pre>
-<h3 id="_3">なぜリンクされたかを確認する</h3>
+<h3>なぜリンクされたかを確認する</h3>
 <pre><code class="language-bash">fwmap explain \
   --elf build/app.elf \
   --map build/app.map \
@@ -195,19 +118,19 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
   --map build/app.map \
   --object libapp.a(startup.o)
 </code></pre>
-<h3 id="_4">外部ルール設定を読み込む</h3>
+<h3>外部ルール設定を読み込む</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
   --rules tests/fixtures/sample_rules.toml
 </code></pre>
-<h3 id="c-symbol-demangle">C++ symbol を demangle して表示する</h3>
+<h3>C++ symbol を demangle して表示する</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
   --demangle=on
 </code></pre>
-<h3 id="dwarf-source-line">DWARF から source line を読む</h3>
+<h3>DWARF から source line を読む</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --dwarf=auto \
@@ -216,7 +139,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
   --path-remap build=src \
   --report-json build/fwmap_sources.json
 </code></pre>
-<h3 id="separate-debug-split-dwarf-source-line">separate debug / split DWARF を使って source line を読む</h3>
+<h3>separate debug / split DWARF を使って source line を読む</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
@@ -243,7 +166,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
 <li><code>--debug-trace</code> を付けると、どの debug artifact をどの順番で探したかを標準出力で確認できます</li>
 <li><code>--debuginfod=auto|on|off</code>、<code>--debuginfod-url</code>、<code>--debuginfod-cache-dir</code> は最後段の fallback 制御です。現行版では provenance 記録と graceful fallback までを扱い、実ネットワーク取得自体は未実装です</li>
 </ul>
-<h3 id="dwarf-source-file-function-hotspot">DWARF から source file / function / hotspot を出す</h3>
+<h3>DWARF から source file / function / hotspot を出す</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
@@ -252,13 +175,13 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
   --source-lines all \
   --out build/fwmap_sources.html
 </code></pre>
-<h3 id="map-parser-family">map parser family を明示する</h3>
+<h3>map parser family を明示する</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
   --toolchain lld
 </code></pre>
-<h3 id="ci">CI 向けに短い要約だけを出す</h3>
+<h3>CI 向けに短い要約だけを出す</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
@@ -270,13 +193,13 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
   --min-line-diff-bytes 64 \
   --ci-out build/fwmap_ci.md
 </code></pre>
-<h3 id="warning_1">warning が出たら失敗にする</h3>
+<h3>warning が出たら失敗にする</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
   --fail-on-warning
 </code></pre>
-<h3 id="_5">履歴を保存する</h3>
+<h3>履歴を保存する</h3>
 <pre><code class="language-bash">fwmap history record \
   --db history.db \
   --elf build/app.elf \
@@ -284,22 +207,22 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
   --meta commit=abc123 \
   --meta branch=main
 </code></pre>
-<h3 id="_6">履歴一覧を表示する</h3>
+<h3>履歴一覧を表示する</h3>
 <pre><code class="language-bash">fwmap history list --db history.db
 </code></pre>
-<h3 id="_7">特定ビルドの履歴詳細を表示する</h3>
+<h3>特定ビルドの履歴詳細を表示する</h3>
 <pre><code class="language-bash">fwmap history show --db history.db --build 1
 </code></pre>
-<h3 id="_8">トレンドを表示する</h3>
+<h3>トレンドを表示する</h3>
 <pre><code class="language-bash">fwmap history trend --db history.db --metric rom --last 20
 fwmap history trend --db history.db --metric source:src/main.cpp --last 20
 fwmap history trend --db history.db --metric function:src/main.cpp::_ZN3app4mainEv --last 20
 fwmap history trend --db history.db --metric directory:src/app --last 20
 fwmap history trend --db history.db --metric unknown_source --last 20
 </code></pre>
-<h2 id="5">5. 実際の使用手順</h2>
+<h2>5. 実際の使用手順</h2>
 <p>この章では、日常的な使い方を具体的な流れで説明します。</p>
-<h3 id="51">5.1 事前準備</h3>
+<h3>5.1 事前準備</h3>
 <p>最低限そろえるファイル:</p>
 <ul>
 <li>現在のビルド成果物 <code>app.elf</code></li>
@@ -318,7 +241,7 @@ fwmap history trend --db history.db --metric unknown_source --last 20
     app.elf
     app.map
 </code></pre>
-<h3 id="511-ci">5.1.1 CI で使う場合に追加で考えること</h3>
+<h3>5.1.1 CI で使う場合に追加で考えること</h3>
 <p>CI で使う場合は以下も決めておくと運用しやすくなります。</p>
 <ul>
 <li>HTML だけ保存するか</li>
@@ -326,7 +249,7 @@ fwmap history trend --db history.db --metric unknown_source --last 20
 <li>warning を失敗扱いにするか</li>
 <li>しきい値をどこまで厳しくするか</li>
 </ul>
-<h3 id="52-elf">5.2 まず ELF だけで確認する</h3>
+<h3>5.2 まず ELF だけで確認する</h3>
 <p>最初に <code>ELF</code> だけで全体像を見ます。</p>
 <pre><code class="language-bash">fwmap analyze --elf build/app.elf
 </code></pre>
@@ -343,7 +266,7 @@ fwmap history trend --db history.db --metric unknown_source --last 20
 <li>map が未生成のビルド環境</li>
 <li>とりあえず HTML を出したいとき</li>
 </ul>
-<h3 id="53-map-object">5.3 map を付けて object 寄与を確認する</h3>
+<h3>5.3 map を付けて object 寄与を確認する</h3>
 <p>object ごとの寄与を確認したい場合は <code>--map</code> を付けます。</p>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
@@ -363,7 +286,7 @@ fwmap history trend --db history.db --metric unknown_source --last 20
 <li>その結果 <code>.bss</code> が増えている</li>
 </ul>
 <p>この場合は、ネットワークバッファやキュー定義を疑うのが自然です。</p>
-<h3 id="531-toolchain">5.3.1 toolchain を自動判定する</h3>
+<h3>5.3.1 toolchain を自動判定する</h3>
 <p><code>map</code> が GNU ld 由来か LLVM lld 由来か分からない場合は <code>--toolchain auto</code> を付けます。</p>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
@@ -379,7 +302,7 @@ fwmap history trend --db history.db --metric unknown_source --last 20
 </ol>
 <p>GNU ld と LLVM lld は同じ内部モデルに正規化されるため、以後の <code>Top Object Contributions</code> や <code>Diff</code> の見方は同じです。</p>
 <p><code>ld.lld</code> の native text map を明示したい場合は <code>--map-format lld-native</code> を使います。既定は <code>auto</code> で、<code>VMA / LMA / Size / Out / In</code> ヘッダを見て自動判定します。</p>
-<h3 id="54-linker-script-region">5.4 linker script を付けて region 配置を確認する</h3>
+<h3>5.4 linker script を付けて region 配置を確認する</h3>
 <p>memory region を確認したい場合は <code>--lds</code> を付けます。</p>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
@@ -401,7 +324,7 @@ fwmap history trend --db history.db --metric unknown_source --last 20
 <li><code>.data</code> が <code>RAM</code> に載る想定だが、section address が region 範囲外</li>
 </ul>
 <p>この場合は、linker script の割当、section 属性、または section address 解釈を優先的に確認します。</p>
-<h3 id="55">5.5 前回ビルドとの差分を確認する</h3>
+<h3>5.5 前回ビルドとの差分を確認する</h3>
 <p>サイズ回帰を追う場合は、前回成果物を与えます。</p>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
@@ -427,7 +350,7 @@ Report: build/fwmap_diff_report.html
 <li>さらに <code>Top growth object</code> を見る</li>
 <li>HTML の <code>Diff</code> セクションで <code>Added</code> / <code>Removed</code> / <code>Increased</code> を確認する</li>
 </ol>
-<h3 id="56-json-ci">5.6 JSON を出力して CI やスクリプトで使う</h3>
+<h3>5.6 JSON を出力して CI やスクリプトで使う</h3>
 <p>JSON を出すと、人が HTML を見るだけでなく、機械的な判定や後処理がしやすくなります。</p>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
@@ -459,7 +382,7 @@ Report: build/fwmap_diff_report.html
 <li>warning 件数を別ツールで通知する</li>
 <li><code>diff_summary</code> を使って増減件数だけダッシュボード化する</li>
 </ul>
-<h3 id="57-ci">5.7 CI 向けの短い要約を出す</h3>
+<h3>5.7 CI 向けの短い要約を出す</h3>
 <p>ログや PR コメント向けに短い要約を出したい場合は <code>--ci-format</code> を使います。<code>--ci-summary</code> は text 形式の簡易指定としてそのまま使えます。</p>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
@@ -505,7 +428,7 @@ Triggered rules: forbid-g-rx-ring(error), REGION_THRESHOLD(warn)
   --min-line-diff-bytes 64 \
   --ci-out build/fwmap_ci.md
 </code></pre>
-<h3 id="58-warning-job">5.8 warning が出たら job を失敗にする</h3>
+<h3>5.8 warning が出たら job を失敗にする</h3>
 <p>warning を見逃したくない場合は <code>--fail-on-warning</code> を付けます。</p>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
@@ -523,7 +446,7 @@ Triggered rules: forbid-g-rx-ring(error), REGION_THRESHOLD(warn)
 <li>サイズ劣化を CI で即座に止めたいとき</li>
 <li>Release build だけ厳しく判定したいとき</li>
 </ul>
-<h3 id="59">5.9 しきい値を調整する</h3>
+<h3>5.9 しきい値を調整する</h3>
 <p>しきい値は CLI から変更できます。</p>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
@@ -541,7 +464,7 @@ Triggered rules: forbid-g-rx-ring(error), REGION_THRESHOLD(warn)
 <li>symbol growth は 8192 bytes 以上で warning</li>
 </ul>
 <p>CI では、開発初期は緩く、リリース前は厳しくすると運用しやすいです。</p>
-<h3 id="591">5.9.1 外部ルールファイルを使う</h3>
+<h3>5.9.1 外部ルールファイルを使う</h3>
 <p><code>--rules &lt;path&gt;</code> で TOML 形式のルール設定ファイルを読み込めます。</p>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
@@ -592,7 +515,7 @@ message = &quot;.data increased by more than 2KB&quot;
 <li><code>unknown_source_ratio</code></li>
 </ul>
 <p>ルールファイルが壊れている場合や必須項目が足りない場合は、解析前に明確なエラーで停止します。</p>
-<h3 id="592-demangle">5.9.2 demangle の使い分け</h3>
+<h3>5.9.2 demangle の使い分け</h3>
 <p><code>--demangle=auto|on|off</code> を使えます。</p>
 <ul>
 <li><code>auto</code>: Itanium ABI らしい名前だけ demangle を試す</li>
@@ -605,7 +528,7 @@ fwmap analyze --elf build/app.elf --map build/app.map --demangle=on
 fwmap analyze --elf build/app.elf --map build/app.map --demangle=off
 </code></pre>
 <p><code>diff</code> や内部比較は raw symbol 名を使い、表示だけ demangled 名を優先します。そのため、前回比較のキーが崩れることはありません。</p>
-<h3 id="510-warning">5.10 warning を詳しく見たい場合</h3>
+<h3>5.10 warning を詳しく見たい場合</h3>
 <p>標準出力に warning を詳細表示したい場合:</p>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
@@ -627,7 +550,7 @@ fwmap analyze --elf build/app.elf --map build/app.map --demangle=off
 <li><code>message</code>: 具体的な理由</li>
 <li><code>related</code>: どの region / section / symbol に紐づくか</li>
 </ul>
-<h3 id="511-html">5.11 HTML の保存先を分ける</h3>
+<h3>5.11 HTML の保存先を分ける</h3>
 <p>複数条件でレポートを比較したい場合は、出力先を分けます。</p>
 <pre><code class="language-bash">fwmap analyze --elf build/app.elf --out reports/elf_only.html
 fwmap analyze --elf build/app.elf --map build/app.map --out reports/with_map.html
@@ -642,7 +565,7 @@ fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --
 <li>diff 付き</li>
 </ul>
 <p>を横並びで比較できます。</p>
-<h3 id="512">5.12 履歴を保存して継続監視する</h3>
+<h3>5.12 履歴を保存して継続監視する</h3>
 <p>サイズ推移を継続監視したい場合は <code>history</code> サブコマンドを使います。</p>
 <pre><code class="language-bash">fwmap history record \
   --db history.db \
@@ -667,6 +590,8 @@ fwmap history trend --db history.db --metric region:FLASH --last 20
 fwmap history trend --db history.db --metric section:.bss --last 20
 fwmap history trend --db history.db --metric source:src/main.cpp --last 20
 fwmap history trend --db history.db --metric function:src/main.cpp::_ZN3app4mainEv --last 20
+fwmap history trend --db history.db --metric object:build/main.o --last 20
+fwmap history trend --db history.db --metric archive-member:libapp.a(startup.o) --last 20
 fwmap history trend --db history.db --metric directory:src/app --last 20
 </code></pre>
 <p>使いどころ:</p>
@@ -685,8 +610,9 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 <li>unknown source ratio</li>
 <li>上位 source files</li>
 <li>上位 functions</li>
+<li>上位 object の why linked 要約</li>
 </ul>
-<h2 id="6-cli">6. CLI オプション</h2>
+<h2>6. CLI オプション</h2>
 <table>
 <thead>
 <tr>
@@ -925,7 +851,7 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 </tr>
 </tbody>
 </table>
-<h2 id="7">7. 出力内容</h2>
+<h2>7. 出力内容</h2>
 <p><code>fwmap</code> は次の 3 種類を出力できます。</p>
 <ul>
 <li>標準出力: 実行サマリ</li>
@@ -934,7 +860,7 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 <li>CI summary: text / markdown / JSON の短い要約</li>
 <li>History: SQLite に保存した履歴の一覧・詳細・推移</li>
 </ul>
-<h3 id="_9">標準出力の例</h3>
+<h3>標準出力の例</h3>
 <p>通常時:</p>
 <pre><code class="language-text">ELF: build/app.elf
 ROM: 32768 bytes (32.00 KiB) | RAM: 8192 bytes (8.00 KiB) | Sections: 24 | Symbols: 180 | Warnings: 1
@@ -967,7 +893,7 @@ Top symbol growth: g_rx_ring (+4096)
 | Warnings | 2 |
 | Errors | 1 |
 </code></pre>
-<h3 id="json_1">JSON の主な構造</h3>
+<h3>JSON の主な構造</h3>
 <p>JSON は固定 schema で出力されます。</p>
 <p>主な top-level key:</p>
 <ul>
@@ -994,7 +920,7 @@ Top symbol growth: g_rx_ring (+4096)
 </ul>
 <p><code>top_symbols</code> の各要素は、raw 名の <code>name</code> と表示用の <code>demangled_name</code> を両方持ちます。</p>
 <p><code>toolchain</code> には、ユーザ指定、検出結果、実際に使った parser family が入ります。</p>
-<h2 id="8-html">8. HTML レポートの見方</h2>
+<h2>8. HTML レポートの見方</h2>
 <p>HTML は以下の順で構成されます。</p>
 <ol>
 <li>Header</li>
@@ -1010,10 +936,12 @@ Top symbol growth: g_rx_ring (+4096)
 <li>Section Breakdown</li>
 <li>Top Symbols</li>
 <li>Top Object Contributions</li>
+<li>Object Details</li>
+<li>Archive Details</li>
 <li>Diff</li>
 <li>Footer</li>
 </ol>
-<h3 id="81-overview">8.1 Overview</h3>
+<h3>8.1 Overview</h3>
 <p>表示内容:</p>
 <ul>
 <li>対象 ELF パス</li>
@@ -1026,7 +954,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>warning 件数</li>
 <li>diff がある場合は ROM/RAM 差分</li>
 </ul>
-<h3 id="82-warnings">8.2 Warnings</h3>
+<h3>8.2 Warnings</h3>
 <p>warning は source と関連対象付きで表示されます。</p>
 <p>warning 判定はルール単位で分離され、さらに外部 TOML ルールを読み込めるため、同じ <code>code</code> を軸に CLI、HTML、JSON を横断して追跡しやすくなっています。</p>
 <p>主な warning 例:</p>
@@ -1042,7 +970,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>symbol table 欠損</li>
 <li>map の一部読み飛ばし</li>
 </ul>
-<h3 id="83-source-summary-source-files-top-functions-line-hotspots">8.3 Source Summary / Source Files / Top Functions / Line Hotspots</h3>
+<h3>8.3 Source Summary / Source Files / Top Functions / Line Hotspots</h3>
 <p>DWARF が使われた場合は、source 系のセクションが追加されます。</p>
 <p>確認できる内容:</p>
 <ul>
@@ -1056,6 +984,7 @@ Top symbol growth: g_rx_ring (+4096)
 <ul>
 <li>Source Files / Top Functions / Line Hotspots の検索</li>
 <li>region / section / source path の絞り込み</li>
+<li>object / archive の検索</li>
 <li>長い path の短縮表示と hover での完全表示</li>
 <li>行範囲 row への anchor</li>
 </ul>
@@ -1071,7 +1000,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>次に <code>Top Functions</code> で関数へ絞る</li>
 <li>最後に <code>Line Hotspots</code> で line-range を確認する</li>
 </ol>
-<h3 id="84-memory-summary">8.4 Memory Summary</h3>
+<h3>8.4 Memory Summary</h3>
 <p>section をサイズ順に表示し、次のいずれかに分類します。</p>
 <ul>
 <li><code>ROM</code></li>
@@ -1083,7 +1012,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>ROM: <code>.text</code>, <code>.rodata</code>, read-only / executable な <code>ALLOC</code> section</li>
 <li>RAM: <code>.data</code>, <code>.bss</code>, writable な <code>ALLOC</code> section</li>
 </ul>
-<h3 id="85-memory-regions-overview">8.5 Memory Regions Overview</h3>
+<h3>8.5 Memory Regions Overview</h3>
 <p>linker script がある場合に表示されます。</p>
 <p>表示内容:</p>
 <ul>
@@ -1098,14 +1027,14 @@ Top symbol growth: g_rx_ring (+4096)
 <li><code>FLASH</code> や <code>RAM</code> の逼迫状況を一目で確認する</li>
 <li>どの region から先に危険になるかを把握する</li>
 </ul>
-<h3 id="86-region-sections">8.6 Region Sections</h3>
+<h3>8.6 Region Sections</h3>
 <p>region ごとの section 一覧を表示します。</p>
 <p>用途:</p>
 <ul>
 <li>どの section が <code>FLASH</code> / <code>RAM</code> / その他 region に載っているか確認する</li>
 <li>想定外の配置を見つける</li>
 </ul>
-<h3 id="87-section-breakdown">8.7 Section Breakdown</h3>
+<h3>8.7 Section Breakdown</h3>
 <p>section ごとの詳細:</p>
 <ul>
 <li>名前</li>
@@ -1114,7 +1043,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>flags</li>
 </ul>
 <p>メモリ配置の概況を目視確認する用途です。</p>
-<h3 id="88-top-symbols">8.8 Top Symbols</h3>
+<h3>8.8 Top Symbols</h3>
 <p>ELF symbol table からサイズ上位を表示します。</p>
 <p>表示項目:</p>
 <ul>
@@ -1130,10 +1059,24 @@ Top symbol growth: g_rx_ring (+4096)
 <li>その場合でも section summary と HTML 生成は継続します</li>
 <li>demangle が有効な場合は読みやすい名前を優先表示し、生の名前も保持します</li>
 </ul>
-<h3 id="89-top-object-contributions">8.9 Top Object Contributions</h3>
+<h3>8.9 Top Object Contributions</h3>
 <p>map がある場合に object ごとの寄与サイズ上位を表示します。</p>
 <p>これにより、どの object が増加に効いているかを追えます。</p>
-<h3 id="810-diff">8.10 Diff</h3>
+<h3>8.10 Object Details / Archive Details</h3>
+<p><code>Top Object Contributions</code> の次に、object / archive を why linked と合わせて見るための詳細表が表示されます。</p>
+<p>確認できる内容:</p>
+<ul>
+<li><code>Object Details</code>: object ごとの合計サイズ、section 数、why linked 要約、confidence、trend コマンド</li>
+<li><code>Archive Details</code>: archive ごとの member 数、合計サイズ、archive pull 件数、whole-archive 推定の有無、trend コマンド</li>
+</ul>
+<p>使い方の目安:</p>
+<ol>
+<li><code>Top Object Contributions</code> で増えている object を見つける</li>
+<li><code>Object Details</code> で why linked 要約と confidence を確認する</li>
+<li>archive member 由来なら <code>Archive Details</code> で whole-archive の影響や pull evidence を確認する</li>
+<li>表示されている <code>history trend</code> コマンドをそのまま実行して推移を見る</li>
+</ol>
+<h3>8.11 Diff</h3>
 <p>差分確認で最も重要なセクションです。</p>
 <p>表示内容:</p>
 <ul>
@@ -1163,7 +1106,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li><code>Moved</code></li>
 </ul>
 <p>現行版では <code>Moved</code> は将来拡張用の土台で、通常は主に Added / Removed / Increased / Decreased / Unchanged を使います。</p>
-<h2 id="9-graceful-degradation">9. graceful degradation</h2>
+<h2>9. graceful degradation</h2>
 <p>このツールは、解析できない箇所が一部あっても可能な範囲で処理を継続する設計です。</p>
 <p>例:</p>
 <ul>
@@ -1178,7 +1121,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>section table が存在しない</li>
 <li>HTML 出力先に書き込めない</li>
 </ul>
-<h2 id="10">10. エラーメッセージ</h2>
+<h2>10. エラーメッセージ</h2>
 <p>主なエラー:</p>
 <ul>
 <li>ELF file does not exist</li>
@@ -1189,8 +1132,8 @@ Top symbol growth: g_rx_ring (+4096)
 <li>HTML report の書き込み失敗</li>
 </ul>
 <p>CLI は panic を直接見せない方針です。原因候補が分かるように、可能な限り説明付きで返します。</p>
-<h2 id="11">11. 典型的な使い方</h2>
-<h3 id="111-elf">11.1 まず ELF だけ見る</h3>
+<h2>11. 典型的な使い方</h2>
+<h3>11.1 まず ELF だけ見る</h3>
 <pre><code class="language-bash">fwmap analyze --elf build/app.elf
 </code></pre>
 <p>用途:</p>
@@ -1198,7 +1141,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>ビルド直後の基本サイズ確認</li>
 <li>map がまだ無い場合の簡易確認</li>
 </ul>
-<h3 id="112-object">11.2 object 寄与を見る</h3>
+<h3>11.2 object 寄与を見る</h3>
 <pre><code class="language-bash">fwmap analyze --elf build/app.elf --map build/app.map
 </code></pre>
 <p>用途:</p>
@@ -1206,7 +1149,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>object 単位で増加要因を探す</li>
 <li>archive / member 由来のサイズ増加を見る</li>
 </ul>
-<h3 id="113-region">11.3 region 配置を見る</h3>
+<h3>11.3 region 配置を見る</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
@@ -1218,7 +1161,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>section と region の対応を確認する</li>
 <li>overflow に近い領域を早めに見つける</li>
 </ul>
-<h3 id="114">11.4 回帰調査をする</h3>
+<h3>11.4 回帰調査をする</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf current/app.elf \
   --map current/app.map \
@@ -1232,7 +1175,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>ライブラリアップデート後の影響確認</li>
 <li>CI 導入前の手動差分調査</li>
 </ul>
-<h3 id="115-symbol">11.5 外部ルールで特定 symbol を禁止する</h3>
+<h3>11.5 外部ルールで特定 symbol を禁止する</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
@@ -1244,7 +1187,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>特定 section 増加量にローカル運用ルールを足す</li>
 <li>チーム固有の region 制約を追加する</li>
 </ul>
-<h3 id="116-c">11.6 C++ プロジェクトで見やすくする</h3>
+<h3>11.6 C++ プロジェクトで見やすくする</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
@@ -1256,7 +1199,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>diff 上位 symbol の意味を把握しやすくする</li>
 <li>HTML / JSON / CLI の表示名を揃える</li>
 </ul>
-<h3 id="117">11.7 長期トレンドを確認する</h3>
+<h3>11.7 長期トレンドを確認する</h3>
 <pre><code class="language-bash">fwmap history trend --db history.db --metric rom --last 20
 </code></pre>
 <p>用途:</p>
@@ -1265,7 +1208,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>Release 前に長期的な増加傾向を確認する</li>
 <li>warning 件数や特定 section の増加を追う</li>
 </ul>
-<h2 id="12">12. 内部構成</h2>
+<h2>12. 内部構成</h2>
 <p>現行の主要モジュール:</p>
 <ul>
 <li><code>cli</code>: 引数処理と実行制御</li>
@@ -1293,7 +1236,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>render: <a href="/e:/work/git/fwmap/src/report/render.rs">src/report/render.rs</a></li>
 <li>quality checks: <a href="/e:/work/git/fwmap/src/validation/quality.rs">src/validation/quality.rs</a></li>
 </ul>
-<h2 id="13">13. 既知の制約</h2>
+<h2>13. 既知の制約</h2>
 <ul>
 <li>ELF は現在 <code>SHT_SYMTAB</code> を中心に参照</li>
 <li>map は GNU ld と LLVM lld を正式対応</li>
@@ -1314,7 +1257,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>separate debug は <code>--debug-file-dir</code>、<code>.gnu_debuglink</code>、build-id、基本的な split DWARF sidecar 解決に対応している</li>
 <li><code>debuginfod</code> は fallback metadata と trace までは扱うが、現行版では実ネットワーク取得は未実装</li>
 </ul>
-<h2 id="14">14. 今後の予定</h2>
+<h2>14. 今後の予定</h2>
 <p>今後の主な候補:</p>
 <ul>
 <li>CI 出力強化</li>
@@ -1322,7 +1265,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>履歴トレンド</li>
 <li>対応 toolchain の追加</li>
 </ul>
-<h2 id="15">15. テスト資産</h2>
+<h2>15. テスト資産</h2>
 <p><code>tests/fixtures/</code> には parser 回帰確認用の小さなサンプルがあります。</p>
 <p>例:</p>
 <ul>
@@ -1341,7 +1284,4 @@ Top symbol growth: g_rx_ring (+4096)
 <li><code>sample.ld</code></li>
 <li><code>sample_lld.map</code></li>
 </ul>
-<p>ELF の一部フィクスチャはテスト内で合成生成しています。</p>
-  </main>
-</body>
-</html>
+<p>ELF の一部フィクスチャはテスト内で合成生成しています。</p></body></html>

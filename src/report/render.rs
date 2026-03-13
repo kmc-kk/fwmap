@@ -4,7 +4,7 @@ use std::path::Path;
 use crate::analyze::format_bytes;
 use crate::demangle::display_name;
 use crate::diff::{names_for_kind, top_increases};
-use crate::linkage::{explain_top_growth, WhyLinkedCollection};
+use crate::linkage::{explain_object, explain_top_growth, WhyLinkedCollection};
 use crate::model::{
     AnalysisResult, CiFormat, DiffChangeKind, DiffEntry, DiffResult, ObjectSourceKind, ThresholdConfig, WarningItem,
     WarningLevel,
@@ -189,6 +189,8 @@ fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>, source_option
             section_breakdown(current),
             top_symbols(current),
             top_objects(current),
+            object_details(current),
+            archive_details(current),
             diff_section(current, diff, source_options),
             why_linked_section(why_linked.as_ref()),
             trend_links_section(current),
@@ -872,6 +874,98 @@ fn top_objects(current: &AnalysisResult) -> String {
     )
 }
 
+fn object_details(current: &AnalysisResult) -> String {
+    if current.object_contributions.is_empty() {
+        return String::new();
+    }
+    let mut totals = std::collections::BTreeMap::<String, (ObjectSourceKind, u64, usize)>::new();
+    for item in &current.object_contributions {
+        let entry = totals
+            .entry(item.object_path.clone())
+            .or_insert((item.source_kind, 0, 0));
+        entry.1 += item.size;
+        entry.2 += 1;
+    }
+    let mut rows = totals.into_iter().collect::<Vec<_>>();
+    rows.sort_by(|a, b| b.1 .1.cmp(&a.1 .1).then_with(|| a.0.cmp(&b.0)));
+    let body = rows
+        .into_iter()
+        .take(25)
+        .map(|(target, (kind, total_size, sections))| {
+            let explain = explain_object(current, &target);
+            let (confidence, summary) = explain
+                .map(|item| (item.confidence.to_string(), item.summary))
+                .unwrap_or_else(|| ("-".to_string(), "No why-linked evidence".to_string()));
+            format!(
+                "<tr data-search=\"{} {}\" data-kind=\"{}\"><td title=\"{}\">{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><span class=\"mono\">fwmap history trend --db history.db --metric \"object:{}\" --last 20</span></td></tr>",
+                escape(&target),
+                escape(&summary),
+                escape(object_source_kind_label(kind)),
+                escape(&target),
+                escape(&short_path(&target)),
+                escape(object_source_kind_label(kind)),
+                sections,
+                format_bytes(total_size),
+                escape(&format!("[{}] {}", confidence, summary)),
+                escape(&target)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!("<section id=\"object-details\"><h2>Object Details</h2><div class=\"toolbar\"><input type=\"search\" placeholder=\"Search objects\" data-filter-target=\"object-details-table\" data-filter-key=\"search\"><input type=\"search\" placeholder=\"Filter kind\" data-filter-target=\"object-details-table\" data-filter-key=\"kind\"></div><table id=\"object-details-table\"><thead><tr><th>Object</th><th>Kind</th><th>Sections</th><th>Size</th><th>Why Linked</th><th>Trend</th></tr></thead><tbody>{body}</tbody></table></section>")
+}
+
+fn archive_details(current: &AnalysisResult) -> String {
+    if current.archive_contributions.is_empty() {
+        return String::new();
+    }
+    let mut totals = std::collections::BTreeMap::<String, (u64, std::collections::BTreeSet<String>)>::new();
+    for item in &current.archive_contributions {
+        let entry = totals
+            .entry(item.archive_path.clone())
+            .or_insert_with(|| (0, std::collections::BTreeSet::new()));
+        entry.0 += item.size;
+        if let Some(member) = item.member_path.as_ref() {
+            entry.1.insert(member.clone());
+        }
+    }
+    let body = totals
+        .into_iter()
+        .map(|(archive, (size, members))| {
+            let whole_archive = current
+                .whole_archive_candidates
+                .iter()
+                .find(|item| item.archive_path == archive)
+                .map(|item| format!("whole-archive? {} members", item.member_count))
+                .unwrap_or_else(|| "-".to_string());
+            let pulls = current
+                .archive_pulls
+                .iter()
+                .filter(|item| item.archive_member.starts_with(&archive))
+                .count();
+            let sample_member = members
+                .iter()
+                .next()
+                .map(|member| format!("{archive}({member})"))
+                .unwrap_or_else(|| archive.clone());
+            format!(
+                "<tr data-search=\"{} {}\" data-archive=\"{}\"><td title=\"{}\">{}</td><td>{}</td><td>{}</td><td>{}</td><td><span class=\"mono\">fwmap history trend --db history.db --metric \"archive-member:{}\" --last 20</span></td></tr>",
+                escape(&archive),
+                escape(&whole_archive),
+                escape(&archive),
+                escape(&archive),
+                escape(&short_path(&archive)),
+                members.len(),
+                format_bytes(size),
+                escape(&format!("pull-evidence: {} | {}", pulls, whole_archive)),
+                escape(&sample_member)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!("<section id=\"archive-details\"><h2>Archive Details</h2><div class=\"toolbar\"><input type=\"search\" placeholder=\"Search archives\" data-filter-target=\"archive-details-table\" data-filter-key=\"search\"><input type=\"search\" placeholder=\"Filter archive\" data-filter-target=\"archive-details-table\" data-filter-key=\"archive\"></div><table id=\"archive-details-table\"><thead><tr><th>Archive</th><th>Members</th><th>Total Size</th><th>Signals</th><th>Trend</th></tr></thead><tbody>{body}</tbody></table></section>")
+}
+
 fn object_source_kind_label(kind: ObjectSourceKind) -> &'static str {
     match kind {
         ObjectSourceKind::Object => "object",
@@ -1056,6 +1150,14 @@ fn trend_links_section(current: &AnalysisResult) -> String {
             escape(&key)
         ));
     }
+    for object in current.object_contributions.iter().take(5) {
+        blocks.push(format!(
+            "<div id=\"{}\"><h3>Object Trend: {}</h3><p class=\"mono\">fwmap history trend --db history.db --metric \"object:{}\" --last 20</p></div>",
+            trend_anchor_id("object", &object.object_path),
+            escape(&short_path(&object.object_path)),
+            escape(&object.object_path)
+        ));
+    }
     format!("<section id=\"trend-links\"><h2>Trend Links</h2>{}</section>", blocks.join(""))
 }
 
@@ -1109,9 +1211,9 @@ mod tests {
     use super::{build_ci_summary, write_html_report, write_json_report, SourceRenderOptions};
     use crate::model::{
         AnalysisResult, BinaryInfo, CiFormat, DebugArtifactInfo, DebugInfoSummary, DiffChangeKind, DiffEntry,
-        DiffResult, DiffSummary, MemoryRegion, MemorySummary, RegionSectionUsage, RegionUsageSummary, SectionCategory,
-        SectionInfo, SectionTotal, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection,
-        UnknownSourceBucket, WarningItem, WarningLevel, WarningSource,
+        DiffResult, DiffSummary, MemoryRegion, MemorySummary, ObjectSourceKind, RegionSectionUsage, RegionUsageSummary,
+        SectionCategory, SectionInfo, SectionTotal, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind,
+        ToolchainSelection, UnknownSourceBucket, WarningItem, WarningLevel, WarningSource,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1130,6 +1232,8 @@ mod tests {
         assert!(html.contains("Source Files"));
         assert!(html.contains("Top Functions"));
         assert!(html.contains("Line Hotspots"));
+        assert!(html.contains("Object Details"));
+        assert!(html.contains("Archive Details"));
         assert!(html.contains("Search files"));
         assert!(html.contains("Trend Links"));
         assert!(html.contains("main"));
@@ -1412,10 +1516,24 @@ mod tests {
                 addr: 0x8000,
                 size: 64,
             }],
-            object_contributions: Vec::new(),
-            archive_contributions: Vec::new(),
+            object_contributions: vec![crate::model::ObjectContribution {
+                object_path: "main.o".to_string(),
+                source_kind: ObjectSourceKind::Object,
+                section_name: Some(".text".to_string()),
+                size: 64,
+            }],
+            archive_contributions: vec![crate::model::ArchiveContribution {
+                archive_path: "libutil.a".to_string(),
+                member_path: Some("util.o".to_string()),
+                section_name: Some(".text".to_string()),
+                size: 32,
+            }],
             archive_pulls: Vec::new(),
-            whole_archive_candidates: Vec::new(),
+            whole_archive_candidates: vec![crate::model::WholeArchiveCandidate {
+                archive_path: "libutil.a".to_string(),
+                member_count: 1,
+                reason: "sample".to_string(),
+            }],
             relocation_references: Vec::new(),
             cross_references: Vec::new(),
             linker_script: None,

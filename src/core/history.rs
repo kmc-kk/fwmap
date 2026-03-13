@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::linkage::explain_object;
 use crate::model::{AnalysisResult, WarningLevel};
 
 #[derive(Debug, Clone)]
@@ -35,7 +36,17 @@ pub struct BuildDetail {
     pub regions: Vec<(String, u64, u64, f64)>,
     pub top_source_files: Vec<(String, u64, usize, usize)>,
     pub top_functions: Vec<(String, String, u64)>,
+    pub why_linked: Vec<WhyLinkedRecord>,
     pub warnings: Vec<(String, String, Option<String>)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WhyLinkedRecord {
+    pub target: String,
+    pub kind: String,
+    pub confidence: String,
+    pub summary: String,
+    pub current_size: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +56,7 @@ pub struct TrendPoint {
     pub label: String,
     pub value: i64,
     pub format: TrendFormat,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -211,6 +223,28 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
                     function.size as i64
                 ])
                 .map_err(|err| format!("failed to insert function metric: {err}"))?;
+        }
+    }
+
+    {
+        let mut why_stmt = tx
+            .prepare(
+                "INSERT INTO why_linked_metrics (
+                    build_id, target, kind, confidence, summary, current_size
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .map_err(|err| format!("failed to prepare why-linked insert: {err}"))?;
+        for record in collect_why_linked_records(&input.analysis, 20) {
+            why_stmt
+                .execute(params![
+                    build_id,
+                    record.target,
+                    record.kind,
+                    record.confidence,
+                    record.summary,
+                    record.current_size as i64
+                ])
+                .map_err(|err| format!("failed to insert why-linked metric: {err}"))?;
         }
     }
 
@@ -398,6 +432,28 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|err| format!("failed to collect rule detail: {err}"))?
     };
+    let why_linked = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT target, kind, confidence, summary, current_size
+                 FROM why_linked_metrics WHERE build_id = ?1
+                 ORDER BY current_size DESC, target ASC LIMIT 20",
+            )
+            .map_err(|err| format!("failed to prepare why-linked detail query: {err}"))?;
+        let rows = stmt
+            .query_map(params![build_id], |row| {
+                Ok(WhyLinkedRecord {
+                    target: row.get(0)?,
+                    kind: row.get(1)?,
+                    confidence: row.get(2)?,
+                    summary: row.get(3)?,
+                    current_size: row.get::<_, i64>(4)? as u64,
+                })
+            })
+            .map_err(|err| format!("failed to query why-linked detail: {err}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("failed to collect why-linked detail: {err}"))?
+    };
 
     Ok(Some(BuildDetail {
         build,
@@ -406,6 +462,7 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
         regions,
         top_source_files,
         top_functions,
+        why_linked,
         warnings,
     }))
 }
@@ -473,11 +530,17 @@ pub fn trend_metric(db_path: &Path, metric: &str, last: usize) -> Result<Vec<Tre
             NamedMetricMode::ByName,
         );
     }
+    if let Some(path) = metric.strip_prefix("object:") {
+        return query_why_linked_trend(&conn, path, "object", last);
+    }
+    if let Some(path) = metric.strip_prefix("archive-member:") {
+        return query_why_linked_trend(&conn, path, "object", last);
+    }
     if let Some(directory) = metric.strip_prefix("directory:") {
         return query_directory_trend(&conn, directory, last);
     }
     Err(format!(
-        "unsupported trend metric '{metric}', expected rom|ram|warnings|unknown_source|region:<name>|section:<name>|source:<path>|function:<key>|directory:<path>"
+        "unsupported trend metric '{metric}', expected rom|ram|warnings|unknown_source|region:<name>|section:<name>|source:<path>|function:<key>|object:<path>|archive-member:<archive(member)>|directory:<path>"
     ))
 }
 
@@ -502,6 +565,7 @@ fn query_simple_trend(
                 label: label.to_string(),
                 value: row.get::<_, i64>(2)?,
                 format,
+                note: None,
             })
         })
         .map_err(|err| format!("failed to query trend metric: {err}"))?;
@@ -541,6 +605,7 @@ fn query_named_metric(
                     label: name.to_string(),
                     value: row.get::<_, i64>(2)?,
                     format,
+                    note: None,
                 })
             })
             .map_err(|err| format!("failed to query named trend metric: {err}"))?
@@ -569,6 +634,7 @@ fn query_directory_trend(conn: &Connection, directory: &str, last: usize) -> Res
                 label: directory.to_string(),
                 value: row.get::<_, i64>(2)?,
                 format: TrendFormat::Bytes,
+                note: None,
             })
         })
         .map_err(|err| format!("failed to query directory trend metric: {err}"))?;
@@ -596,6 +662,7 @@ fn query_unknown_source_trend(conn: &Connection, last: usize) -> Result<Vec<Tren
                 label: "unknown_source".to_string(),
                 value: row.get::<_, i64>(2)?,
                 format: TrendFormat::Percent,
+                note: None,
             })
         })
         .map_err(|err| format!("failed to query unknown-source trend metric: {err}"))?;
@@ -681,6 +748,15 @@ pub fn print_build_detail(detail: &BuildDetail) {
             println!("  {} {} {}", name, path, size);
         }
     }
+    if !detail.why_linked.is_empty() {
+        println!("Why linked:");
+        for item in &detail.why_linked {
+            println!(
+                "  {} [{} {}] {} ({})",
+                item.target, item.kind, item.confidence, item.summary, item.current_size
+            );
+        }
+    }
     if !detail.warnings.is_empty() {
         println!("Warnings:");
         for (code, level, related) in &detail.warnings {
@@ -696,14 +772,29 @@ pub fn print_trend(points: &[TrendPoint]) {
     }
     for point in points {
         match point.format {
-            TrendFormat::Bytes => println!("#{} {} {}={}", point.build_id, point.created_at, point.label, point.value),
-            TrendFormat::Count => println!("#{} {} {}={}", point.build_id, point.created_at, point.label, point.value),
-            TrendFormat::Percent => println!(
-                "#{} {} {}={:.1}%",
+            TrendFormat::Bytes => println!(
+                "#{} {} {}={}{}",
                 point.build_id,
                 point.created_at,
                 point.label,
-                point.value as f64 / 10.0
+                point.value,
+                point.note.as_deref().map(|item| format!(" | {}", item)).unwrap_or_default()
+            ),
+            TrendFormat::Count => println!(
+                "#{} {} {}={}{}",
+                point.build_id,
+                point.created_at,
+                point.label,
+                point.value,
+                point.note.as_deref().map(|item| format!(" | {}", item)).unwrap_or_default()
+            ),
+            TrendFormat::Percent => println!(
+                "#{} {} {}={:.1}%{}",
+                point.build_id,
+                point.created_at,
+                point.label,
+                point.value as f64 / 10.0,
+                point.note.as_deref().map(|item| format!(" | {}", item)).unwrap_or_default()
             ),
         }
     }
@@ -796,11 +887,20 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             path TEXT,
             size_bytes INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS why_linked_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            build_id INTEGER NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+            target TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            confidence TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            current_size INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS schema_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-        INSERT INTO schema_meta(key, value) VALUES ('history_schema_version', '2')
+        INSERT INTO schema_meta(key, value) VALUES ('history_schema_version', '3')
         ON CONFLICT(key) DO UPDATE SET value = excluded.value;
         ",
     )
@@ -834,6 +934,59 @@ fn parse_metadata(raw: String) -> BTreeMap<String, String> {
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
+fn collect_why_linked_records(analysis: &AnalysisResult, limit: usize) -> Vec<WhyLinkedRecord> {
+    let mut totals = BTreeMap::<String, u64>::new();
+    for item in &analysis.object_contributions {
+        *totals.entry(item.object_path.clone()).or_default() += item.size;
+    }
+    let mut entries = totals.into_iter().collect::<Vec<_>>();
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    entries
+        .into_iter()
+        .take(limit)
+        .filter_map(|(target, current_size)| {
+            explain_object(analysis, &target).map(|item| WhyLinkedRecord {
+                target,
+                kind: "object".to_string(),
+                confidence: item.confidence.to_string(),
+                summary: item.summary,
+                current_size,
+            })
+        })
+        .collect()
+}
+
+fn query_why_linked_trend(conn: &Connection, target: &str, kind: &str, last: usize) -> Result<Vec<TrendPoint>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT b.id, b.created_at, w.current_size, w.confidence, w.summary
+             FROM builds b
+             JOIN why_linked_metrics w ON w.build_id = b.id
+             WHERE w.target = ?1 AND w.kind = ?2
+             ORDER BY b.id DESC LIMIT ?3",
+        )
+        .map_err(|err| format!("failed to prepare why-linked trend query: {err}"))?;
+    let rows = stmt
+        .query_map(params![target, kind, last as i64], |row| {
+            let confidence: String = row.get(3)?;
+            let summary: String = row.get(4)?;
+            Ok(TrendPoint {
+                build_id: row.get(0)?,
+                created_at: row.get(1)?,
+                label: target.to_string(),
+                value: row.get::<_, i64>(2)?,
+                format: TrendFormat::Bytes,
+                note: Some(format!("[{}] {}", confidence, summary)),
+            })
+        })
+        .map_err(|err| format!("failed to query why-linked trend metric: {err}"))?;
+    let mut points = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("failed to collect why-linked trend metric: {err}"))?;
+    points.reverse();
+    Ok(points)
+}
+
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -845,9 +998,9 @@ fn now_unix() -> i64 {
 mod tests {
     use super::{list_builds, record_build, show_build, trend_metric, HistoryRecordInput, TrendFormat};
     use crate::model::{
-        AnalysisResult, BinaryInfo, DebugArtifactInfo, DebugInfoSummary, MemorySummary, SectionCategory, SectionTotal,
-        SymbolInfo, ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket, WarningItem, WarningLevel,
-        WarningSource,
+        AnalysisResult, BinaryInfo, DebugArtifactInfo, DebugInfoSummary, MemorySummary, ObjectContribution,
+        ObjectSourceKind, SectionCategory, SectionTotal, SymbolInfo, ToolchainInfo, ToolchainKind, ToolchainSelection,
+        UnknownSourceBucket, WarningItem, WarningLevel, WarningSource,
     };
     use std::collections::BTreeMap;
     use std::fs;
@@ -874,6 +1027,7 @@ mod tests {
         assert_eq!(detail.debug_info.source_file_count, 1);
         assert_eq!(detail.top_source_files.len(), 1);
         assert_eq!(detail.top_functions.len(), 1);
+        assert_eq!(detail.why_linked.len(), 0);
         let _ = fs::remove_file(db);
     }
 
@@ -905,6 +1059,32 @@ mod tests {
         assert_eq!(source[1].value, 120);
         let unknown = trend_metric(&db, "unknown_source", 10).unwrap();
         assert_eq!(unknown[1].format, TrendFormat::Percent);
+        let _ = fs::remove_file(db);
+    }
+
+    #[test]
+    fn stores_why_linked_records_and_exposes_object_trend_notes() {
+        let db = temp_db();
+        let mut analysis = sample_analysis(100, 10, 0);
+        analysis.object_contributions = vec![ObjectContribution {
+            object_path: "build/main.o".to_string(),
+            source_kind: ObjectSourceKind::Object,
+            section_name: Some(".text".to_string()),
+            size: 100,
+        }];
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis,
+                metadata: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+        let detail = show_build(&db, 1).unwrap().unwrap();
+        assert_eq!(detail.why_linked.len(), 1);
+        let trend = trend_metric(&db, "object:build/main.o", 10).unwrap();
+        assert_eq!(trend[0].value, 100);
+        assert!(trend[0].note.as_deref().unwrap_or_default().contains("linked"));
         let _ = fs::remove_file(db);
     }
 

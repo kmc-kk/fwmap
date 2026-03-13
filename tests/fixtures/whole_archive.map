@@ -8,5 +8,5 @@ FLASH            0x00000000         0x00000100         xr
 Linker script and memory map
 
 .text            0x00000000         0x20
-                0x00000000         0x10 libalways.a(alpha.o)
-                0x00000010         0x10 libalways.a(beta.o)
+ .text           0x00000000         0x10 libalways.a(alpha.o)
+ .text           0x00000010         0x10 libalways.a(beta.o)

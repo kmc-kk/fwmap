@@ -87,6 +87,8 @@ cargo run -- history show --db history.db --build 1
 cargo run -- history trend --db history.db --metric rom --last 20
 cargo run -- history trend --db history.db --metric source:src/main.cpp --last 20
 cargo run -- history trend --db history.db --metric function:src/main.cpp::_ZN3app4mainEv --last 20
+cargo run -- history trend --db history.db --metric object:build/main.o --last 20
+cargo run -- history trend --db history.db --metric archive-member:libapp.a(startup.o) --last 20
 cargo run -- history trend --db history.db --metric directory:src/app --last 20
 cargo run -- history trend --db history.db --metric unknown_source --last 20
 ```
@@ -193,6 +195,8 @@ Top growth object: drivers/net.o (+8192)
 - Section Breakdown: per-section address, flags, and size
 - Top Symbols: largest symbols from the ELF symbol table
 - Top Object Contributions: object sizes from the map file
+- Object Details: object-level why-linked summaries, confidence, and trend commands
+- Archive Details: archive/member totals, whole-archive signals, and trend commands
 - Diff: summary cards plus top section/symbol/object growth and added/removed lists
 - Why Linked: top diff growth items with evidence-backed link explanations
 - Source Diff: top growing source files, functions, line ranges, and unknown-source delta
@@ -399,7 +403,7 @@ Use `cargo run -- explain` to inspect why a symbol, object, archive member, or s
 - `--section <name>` explains linker-script placement and `KEEP` influence
 - `--why-linked-top <n>` adds top diff explanations to HTML / JSON / CI output
 
-Current evidence sources are map contributions, archive membership, ELF symbol placement, linker-script section placement, and entry-symbol heuristics. When the exact undefined-reference chain is unavailable, `fwmap` marks the result as low or medium confidence instead of overstating certainty.
+Current evidence sources are map contributions, GNU cross-reference tables, archive-pull tables, archive membership, ELF relocations, linker-script section placement, whole-archive heuristics, and entry-symbol heuristics. When the exact undefined-reference chain is unavailable, `fwmap` marks the result as low or medium confidence instead of overstating certainty.
 
 ## History
 
@@ -424,11 +428,13 @@ Trend metrics:
 - `section:<name>`
 - `source:<path>`
 - `function:<path>::<raw_symbol>`
+- `object:<path>`
+- `archive-member:<archive(member)>`
 - `directory:<path>`
 
-History details now also include DWARF availability, unknown-source ratio, top source files, and top functions for each recorded build.
+History details now also include DWARF availability, unknown-source ratio, top source files, top functions, and stored why-linked summaries for top objects in each recorded build.
 
-The HTML report now includes lightweight client-side search and filtering for source files, functions, line hotspots, memory regions, and region sections. Long paths are shortened in tables while preserving the full path in hover tooltips, and each source row links to a ready-made history trend command block.
+The HTML report now includes lightweight client-side search and filtering for source files, functions, line hotspots, memory regions, region sections, objects, and archives. Long paths are shortened in tables while preserving the full path in hover tooltips, and each source/object/archive row links to a ready-made history trend command block.
 
 ## Development
 
