@@ -10,6 +10,7 @@ pub use core::analyze;
 pub use core::demangle;
 pub use core::diff;
 pub use core::history;
+pub use core::linkage;
 pub use core::model;
 pub use core::rule_config;
 pub use core::rules;

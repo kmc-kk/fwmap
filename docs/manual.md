@@ -30,6 +30,7 @@
 - section と region の対応表示
 - JSON 出力
 - SARIF 出力
+- Why linked 説明
 - CI 向け要約出力
 - warning ベースの終了コード制御
 - しきい値カスタマイズ
@@ -140,6 +141,25 @@ fwmap analyze \
   --sarif build/fwmap_report.sarif \
   --sarif-base-uri file:///workspace/ \
   --sarif-min-level warn
+```
+
+### なぜリンクされたかを確認する
+
+```bash
+fwmap explain \
+  --elf build/app.elf \
+  --map build/app.map \
+  --lds linker/app.ld \
+  --symbol main
+```
+
+archive member の採用理由を見る例:
+
+```bash
+fwmap explain \
+  --elf build/app.elf \
+  --map build/app.map \
+  --object libapp.a(startup.o)
 ```
 
 ### 外部ルール設定を読み込む
@@ -776,6 +796,7 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 | `--prev-map <path>` | 任意 | 比較用の前回 map |
 | `--out <path>` | 任意 | HTML 出力先 |
 | `--report-json <path>` | 任意 | JSON 出力先 |
+| `--why-linked-top <n>` | 任意 | diff 上位項目へ why linked 説明を追加する件数 |
 | `--sarif <path>` | 任意 | SARIF 2.1.0 出力先 |
 | `--sarif-base-uri <uri>` | 任意 | SARIF の repo relative path 用 base URI |
 | `--sarif-min-level <info|warn|error>` | 任意 | SARIF に含める最小 warning level |
@@ -786,6 +807,9 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 | `--toolchain <auto|gnu|lld|iar|armcc|keil>` | 任意 | map parser family の自動判定または強制指定 |
 | `--map-format <auto|gnu|lld-native>` | 任意 | map text format の自動判定または強制指定 |
 | `--dwarf=auto|on|off` | 任意 | DWARF line table の使用有無 |
+| `--symbol <name>` | 任意 | `explain` で symbol の why linked を表示 |
+| `--object <name>` | 任意 | `explain` で object / archive member の why linked を表示 |
+| `--section <name>` | 任意 | `explain` で section placement の理由を表示 |
 | `--source-lines <off|files|functions|lines|all>` | 任意 | source attribution の粒度 |
 | `--source-root <path>` | 任意 | 相対 source path に付けるルート |
 | `--path-remap <from=to>` | 任意 | DWARF source path の prefix remap。複数指定可 |

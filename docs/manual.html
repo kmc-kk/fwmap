@@ -102,6 +102,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
 <li>section と region の対応表示</li>
 <li>JSON 出力</li>
 <li>SARIF 出力</li>
+<li>Why linked 説明</li>
 <li>CI 向け要約出力</li>
 <li>warning ベースの終了コード制御</li>
 <li>しきい値カスタマイズ</li>
@@ -181,7 +182,20 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
   --sarif-base-uri file:///workspace/ \
   --sarif-min-level warn
 </code></pre>
-<h3 id="_3">外部ルール設定を読み込む</h3>
+<h3 id="_3">なぜリンクされたかを確認する</h3>
+<pre><code class="language-bash">fwmap explain \
+  --elf build/app.elf \
+  --map build/app.map \
+  --lds linker/app.ld \
+  --symbol main
+</code></pre>
+<p>archive member の採用理由を見る例:</p>
+<pre><code class="language-bash">fwmap explain \
+  --elf build/app.elf \
+  --map build/app.map \
+  --object libapp.a(startup.o)
+</code></pre>
+<h3 id="_4">外部ルール設定を読み込む</h3>
 <pre><code class="language-bash">fwmap analyze \
   --elf build/app.elf \
   --map build/app.map \
@@ -262,7 +276,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
   --map build/app.map \
   --fail-on-warning
 </code></pre>
-<h3 id="_4">履歴を保存する</h3>
+<h3 id="_5">履歴を保存する</h3>
 <pre><code class="language-bash">fwmap history record \
   --db history.db \
   --elf build/app.elf \
@@ -270,13 +284,13 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
   --meta commit=abc123 \
   --meta branch=main
 </code></pre>
-<h3 id="_5">履歴一覧を表示する</h3>
+<h3 id="_6">履歴一覧を表示する</h3>
 <pre><code class="language-bash">fwmap history list --db history.db
 </code></pre>
-<h3 id="_6">特定ビルドの履歴詳細を表示する</h3>
+<h3 id="_7">特定ビルドの履歴詳細を表示する</h3>
 <pre><code class="language-bash">fwmap history show --db history.db --build 1
 </code></pre>
-<h3 id="_7">トレンドを表示する</h3>
+<h3 id="_8">トレンドを表示する</h3>
 <pre><code class="language-bash">fwmap history trend --db history.db --metric rom --last 20
 fwmap history trend --db history.db --metric source:src/main.cpp --last 20
 fwmap history trend --db history.db --metric function:src/main.cpp::_ZN3app4mainEv --last 20
@@ -718,6 +732,11 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 <td>JSON 出力先</td>
 </tr>
 <tr>
+<td><code>--why-linked-top &lt;n&gt;</code></td>
+<td>任意</td>
+<td>diff 上位項目へ why linked 説明を追加する件数</td>
+</tr>
+<tr>
 <td><code>--sarif &lt;path&gt;</code></td>
 <td>任意</td>
 <td>SARIF 2.1.0 出力先</td>
@@ -766,6 +785,21 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 <td><code>--dwarf=auto|on|off</code></td>
 <td>任意</td>
 <td>DWARF line table の使用有無</td>
+</tr>
+<tr>
+<td><code>--symbol &lt;name&gt;</code></td>
+<td>任意</td>
+<td><code>explain</code> で symbol の why linked を表示</td>
+</tr>
+<tr>
+<td><code>--object &lt;name&gt;</code></td>
+<td>任意</td>
+<td><code>explain</code> で object / archive member の why linked を表示</td>
+</tr>
+<tr>
+<td><code>--section &lt;name&gt;</code></td>
+<td>任意</td>
+<td><code>explain</code> で section placement の理由を表示</td>
 </tr>
 <tr>
 <td><code>--source-lines &lt;off|files|functions|lines|all&gt;</code></td>
@@ -900,7 +934,7 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 <li>CI summary: text / markdown / JSON の短い要約</li>
 <li>History: SQLite に保存した履歴の一覧・詳細・推移</li>
 </ul>
-<h3 id="_8">標準出力の例</h3>
+<h3 id="_9">標準出力の例</h3>
 <p>通常時:</p>
 <pre><code class="language-text">ELF: build/app.elf
 ROM: 32768 bytes (32.00 KiB) | RAM: 8192 bytes (8.00 KiB) | Sections: 24 | Symbols: 180 | Warnings: 1

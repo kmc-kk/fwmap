@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::analyze::format_bytes;
 use crate::demangle::display_name;
 use crate::diff::{names_for_kind, top_increases};
+use crate::linkage::{explain_top_growth, WhyLinkedCollection};
 use crate::model::{
     AnalysisResult, CiFormat, DiffChangeKind, DiffEntry, DiffResult, ObjectSourceKind, ThresholdConfig, WarningItem,
     WarningLevel,
@@ -114,8 +115,9 @@ pub fn write_html_report(
     current: &AnalysisResult,
     diff: Option<&DiffResult>,
     source_options: SourceRenderOptions,
+    why_linked_top: usize,
 ) -> Result<(), String> {
-    let html = build_html(current, diff, source_options);
+    let html = build_html(current, diff, source_options, why_linked_top);
     fs::write(path, html).map_err(|err| format!("failed to write HTML report '{}': {err}", path.display()))
 }
 
@@ -125,8 +127,9 @@ pub fn write_json_report(
     diff: Option<&DiffResult>,
     thresholds: &ThresholdConfig,
     source_options: SourceRenderOptions,
+    why_linked_top: usize,
 ) -> Result<(), String> {
-    let json = build_json(current, diff, thresholds, source_options)?;
+    let json = build_json(current, diff, thresholds, source_options, why_linked_top)?;
     fs::write(path, json).map_err(|err| format!("failed to write JSON report '{}': {err}", path.display()))
 }
 
@@ -164,7 +167,10 @@ pub fn build_ci_summary(
     }
 }
 
-fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>, source_options: SourceRenderOptions) -> String {
+fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>, source_options: SourceRenderOptions, why_linked_top: usize) -> String {
+    let why_linked = diff
+        .filter(|_| why_linked_top > 0)
+        .map(|item| explain_top_growth(current, item, why_linked_top));
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>fwmap report</title><style>{}</style><script>{}</script></head><body>{}</body></html>",
         style_block(),
@@ -184,6 +190,7 @@ fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>, source_option
             top_symbols(current),
             top_objects(current),
             diff_section(current, diff, source_options),
+            why_linked_section(why_linked.as_ref()),
             trend_links_section(current),
             footer(),
         ]
@@ -196,7 +203,11 @@ fn build_json(
     diff: Option<&DiffResult>,
     thresholds: &ThresholdConfig,
     source_options: SourceRenderOptions,
+    why_linked_top: usize,
 ) -> Result<String, String> {
+    let why_linked = diff
+        .filter(|_| why_linked_top > 0)
+        .map(|item| explain_top_growth(current, item, why_linked_top));
     let payload = serde_json::json!({
         "schema_version": 1,
         "binary": &current.binary,
@@ -222,6 +233,7 @@ fn build_json(
         "diff_summary": diff.map(|item| &item.summary),
         "diff": diff,
         "source_diff": diff.map(|item| source_diff_payload(item, source_options)),
+        "why_linked": why_linked,
     });
     serde_json::to_string_pretty(&payload).map_err(|err| format!("failed to serialize JSON report: {err}"))
 }
@@ -260,6 +272,14 @@ fn build_ci_text(current: &AnalysisResult, diff: Option<&DiffResult>, source_opt
     if let Some(entry) = diff.and_then(|item| top_increases(&item.object_diffs, 1).first().cloned()) {
         lines.push(format!("Top object growth: {} ({:+})", entry.name, entry.delta));
     }
+    if let Some(diff) = diff {
+        let why = explain_top_growth(current, diff, 1);
+        if let Some(item) = why.top_objects.first() {
+            lines.push(format!("Why linked object: {}", item.summary));
+        } else if let Some(item) = why.top_symbols.first() {
+            lines.push(format!("Why linked symbol: {}", item.summary));
+        }
+    }
     if let Some(entry) = diff.and_then(|item| top_increases(&item.symbol_diffs, 1).first().cloned()) {
         let display = current
             .symbols
@@ -297,6 +317,32 @@ fn build_ci_text(current: &AnalysisResult, diff: Option<&DiffResult>, source_opt
         lines.push(format!("Triggered rules: {triggered}"));
     }
     lines.join("\n")
+}
+
+fn why_linked_section(items: Option<&WhyLinkedCollection>) -> String {
+    let Some(items) = items else {
+        return String::new();
+    };
+    if items.top_symbols.is_empty() && items.top_objects.is_empty() {
+        return String::new();
+    }
+    let symbol_rows = items
+        .top_symbols
+        .iter()
+        .map(|item| format!("<tr><td>{}</td><td>{}</td><td>{}</td></tr>", escape(&item.target), item.confidence.to_string(), escape(&item.summary)))
+        .collect::<Vec<_>>()
+        .join("");
+    let object_rows = items
+        .top_objects
+        .iter()
+        .map(|item| format!("<tr><td>{}</td><td>{}</td><td>{}</td></tr>", escape(&item.target), item.confidence.to_string(), escape(&item.summary)))
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<section id=\"why-linked\"><h2>Why Linked</h2><div class=\"grid\"><div><h3>Top Symbols</h3><table><thead><tr><th>Target</th><th>Confidence</th><th>Summary</th></tr></thead><tbody>{}</tbody></table></div><div><h3>Top Objects</h3><table><thead><tr><th>Target</th><th>Confidence</th><th>Summary</th></tr></thead><tbody>{}</tbody></table></div></div></section>",
+        symbol_rows,
+        object_rows
+    )
 }
 
 fn build_ci_markdown(current: &AnalysisResult, diff: Option<&DiffResult>, source_options: SourceRenderOptions) -> String {
@@ -351,6 +397,22 @@ fn build_ci_markdown(current: &AnalysisResult, diff: Option<&DiffResult>, source
         out.push("## Growth".to_string());
         out.extend(growths);
         out.push(String::new());
+    }
+
+    if let Some(diff) = diff {
+        let why = explain_top_growth(current, diff, 1);
+        let mut explain = Vec::new();
+        if let Some(item) = why.top_symbols.first() {
+            explain.push(format!("- Symbol: {} ({})", item.summary, item.confidence));
+        }
+        if let Some(item) = why.top_objects.first() {
+            explain.push(format!("- Object: {} ({})", item.summary, item.confidence));
+        }
+        if !explain.is_empty() {
+            out.push("## Why Linked".to_string());
+            out.extend(explain);
+            out.push(String::new());
+        }
     }
 
     if source_options.enabled {
@@ -419,6 +481,7 @@ fn build_ci_json(
         "top_section_growth": diff.and_then(|item| top_increases(&item.section_diffs, 1).first().cloned()),
         "top_object_growth": diff.and_then(|item| top_increases(&item.object_diffs, 1).first().cloned()),
         "top_symbol_growth": diff.and_then(|item| top_increases(&item.symbol_diffs, 1).first().cloned()),
+        "why_linked": diff.map(|item| explain_top_growth(current, item, 1)),
         "top_source_file_growth": diff.and_then(|item| top_increases(&item.source_file_diffs, 1).first().cloned()),
         "top_function_growth": diff.and_then(|item| top_increases(&item.function_diffs, 1).first().cloned()),
         "top_line_growth": diff.and_then(|item| filtered_line_diffs(item, source_options).into_iter().next()),
@@ -1057,7 +1120,7 @@ mod tests {
             SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
         ));
         let analysis = sample_analysis_with_sources();
-        write_html_report(&path, &analysis, None, SourceRenderOptions::default()).unwrap();
+        write_html_report(&path, &analysis, None, SourceRenderOptions::default(), 3).unwrap();
         let html = fs::read_to_string(&path).unwrap();
         assert!(html.contains("Overview"));
         assert!(html.contains("Top Symbols"));
@@ -1079,7 +1142,7 @@ mod tests {
         let mut analysis = sample_analysis();
         analysis.symbols[0].name = "_ZN3foo3barEv".to_string();
         analysis.symbols[0].demangled_name = Some("foo::bar()".to_string());
-        write_html_report(&path, &analysis, None, SourceRenderOptions::default()).unwrap();
+        write_html_report(&path, &analysis, None, SourceRenderOptions::default(), 3).unwrap();
         let html = fs::read_to_string(&path).unwrap();
         assert!(html.contains("foo::bar()"));
         assert!(html.contains("_ZN3foo3barEv"));
@@ -1176,6 +1239,7 @@ mod tests {
                 enabled: true,
                 ..SourceRenderOptions::default()
             },
+            3,
         )
         .unwrap();
         let html = fs::read_to_string(&path).unwrap();
@@ -1199,7 +1263,7 @@ mod tests {
         ));
         let analysis = sample_analysis();
         let thresholds = ThresholdConfig::default();
-        write_json_report(&path, &analysis, None, &thresholds, SourceRenderOptions::default()).unwrap();
+        write_json_report(&path, &analysis, None, &thresholds, SourceRenderOptions::default(), 3).unwrap();
         let json = fs::read_to_string(&path).unwrap();
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"thresholds\""));

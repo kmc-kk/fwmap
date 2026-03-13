@@ -7,6 +7,7 @@ use crate::history::{
     list_builds, print_build_detail, print_build_list, print_trend, record_build, show_build, trend_metric,
     HistoryRecordInput,
 };
+use crate::linkage::{explain_object, explain_section, explain_symbol, ExplainResult};
 use crate::model::{
     CiFormat, DebuginfodMode, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode, ThresholdConfig,
     ToolchainSelection, WarningLevel,
@@ -98,6 +99,60 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             print_trend(&points);
             Ok(0)
         }
+        Command::Explain {
+            elf,
+            map,
+            lds,
+            demangle,
+            toolchain,
+            map_format,
+            dwarf_mode,
+            debug_file_dirs,
+            debug_trace,
+            debuginfod,
+            debuginfod_urls,
+            debuginfod_cache_dir,
+            source_lines,
+            source_root,
+            path_remaps,
+            fail_on_missing_dwarf,
+            symbol,
+            object,
+            section,
+        } => {
+            let options = AnalyzeOptions {
+                thresholds: ThresholdConfig::default(),
+                demangle,
+                custom_rules: Vec::new(),
+                toolchain,
+                map_format,
+                dwarf_mode,
+                debug_file_dirs,
+                debug_trace,
+                debuginfod,
+                debuginfod_urls,
+                debuginfod_cache_dir,
+                source_lines,
+                source_root,
+                path_remaps,
+                fail_on_missing_dwarf,
+            };
+            let analysis = analyze_paths(&elf, map.as_deref(), lds.as_deref(), &options)?;
+            print_debug_trace(&analysis);
+            let explain = match (symbol.as_deref(), object.as_deref(), section.as_deref()) {
+                (Some(value), None, None) => explain_symbol(&analysis, value),
+                (None, Some(value), None) => explain_object(&analysis, value),
+                (None, None, Some(value)) => explain_section(&analysis, value),
+                _ => None,
+            };
+            match explain {
+                Some(result) => {
+                    print_explain_result(&result);
+                    Ok(0)
+                }
+                None => Err("no explanation target was found in the current analysis".to_string()),
+            }
+        }
         Command::Analyze {
             elf,
             map,
@@ -106,6 +161,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             prev_map,
             out,
             report_json,
+            why_linked_top,
             sarif,
             sarif_base_uri,
             sarif_min_level,
@@ -203,6 +259,15 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                     if let Some(object) = top_increases(&diff.object_diffs, 1).first() {
                         println!("Top growth object: {} ({:+})", object.name, object.delta);
                     }
+                    if why_linked_top > 0 {
+                        let why = crate::linkage::explain_top_growth(&current, diff, 1);
+                        if let Some(item) = why.top_symbols.first() {
+                            println!("Why linked symbol: {}", item.summary);
+                        }
+                        if let Some(item) = why.top_objects.first() {
+                            println!("Why linked object: {}", item.summary);
+                        }
+                    }
                 }
             }
             let source_options = crate::render::SourceRenderOptions {
@@ -211,9 +276,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 min_line_diff_bytes,
                 hide_unknown_source,
             };
-            write_html_report(&out, &current, diff.as_ref(), source_options)?;
+            write_html_report(&out, &current, diff.as_ref(), source_options, why_linked_top)?;
             if let Some(path) = report_json.as_deref() {
-                write_json_report(path, &current, diff.as_ref(), &options.thresholds, source_options)?;
+                write_json_report(path, &current, diff.as_ref(), &options.thresholds, source_options, why_linked_top)?;
                 if !ci_summary {
                     println!("JSON: {}", path.display());
                 }
@@ -285,6 +350,27 @@ enum Command {
         metric: String,
         last: usize,
     },
+    Explain {
+        elf: PathBuf,
+        map: Option<PathBuf>,
+        lds: Option<PathBuf>,
+        demangle: DemangleMode,
+        toolchain: ToolchainSelection,
+        map_format: MapFormatSelection,
+        dwarf_mode: DwarfMode,
+        debug_file_dirs: Vec<PathBuf>,
+        debug_trace: bool,
+        debuginfod: DebuginfodMode,
+        debuginfod_urls: Vec<String>,
+        debuginfod_cache_dir: Option<PathBuf>,
+        source_lines: SourceLinesMode,
+        source_root: Option<PathBuf>,
+        path_remaps: Vec<(String, String)>,
+        fail_on_missing_dwarf: bool,
+        symbol: Option<String>,
+        object: Option<String>,
+        section: Option<String>,
+    },
     Analyze {
         elf: PathBuf,
         map: Option<PathBuf>,
@@ -293,6 +379,7 @@ enum Command {
         prev_map: Option<PathBuf>,
         out: PathBuf,
         report_json: Option<PathBuf>,
+        why_linked_top: usize,
         sarif: Option<PathBuf>,
         sarif_base_uri: Option<String>,
         sarif_min_level: WarningLevel,
@@ -335,6 +422,9 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     if args[1] == "history" {
         return parse_history_args(args);
     }
+    if args[1] == "explain" {
+        return parse_explain_args(args);
+    }
     if args[1] != "analyze" {
         return Err(format!("unknown command '{}'\n\n{}", args[1], help_text()));
     }
@@ -346,6 +436,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut prev_map = None;
     let mut out = PathBuf::from(DEFAULT_OUT);
     let mut report_json = None;
+    let mut why_linked_top = 5usize;
     let mut sarif = None;
     let mut sarif_base_uri = None;
     let mut sarif_min_level = WarningLevel::Warn;
@@ -422,7 +513,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
             }
             "--help" | "-h" => return Ok(Command::Help),
             "--version" | "-V" => return Ok(Command::Version),
-            "--threshold-rom" | "--threshold-ram" | "--threshold-symbol-growth" | "--threshold-region" | "--max-source-diff-items" | "--min-line-diff-bytes" | "--sarif-min-level" | "--sarif-include-pass" | "--sarif-tool-name" => {
+            "--threshold-rom" | "--threshold-ram" | "--threshold-symbol-growth" | "--threshold-region" | "--max-source-diff-items" | "--min-line-diff-bytes" | "--sarif-min-level" | "--sarif-include-pass" | "--sarif-tool-name" | "--why-linked-top" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--threshold-rom" => thresholds.rom_percent = parse_percent(value, key)?,
@@ -437,6 +528,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                     "--sarif-min-level" => sarif_min_level = parse_warning_level(value, key)?,
                     "--sarif-include-pass" => sarif_include_pass = parse_bool(value, key)?,
                     "--sarif-tool-name" => sarif_tool_name = value.to_string(),
+                    "--why-linked-top" => why_linked_top = parse_usize(value, key)?,
                     _ => {}
                 }
                 index += 2;
@@ -564,6 +656,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         prev_map,
         out,
         report_json,
+        why_linked_top,
         sarif,
         sarif_base_uri,
         sarif_min_level,
@@ -621,11 +714,24 @@ fn print_debug_trace(result: &crate::model::AnalysisResult) {
     }
 }
 
+fn print_explain_result(result: &ExplainResult) {
+    println!("Target: {}", result.target);
+    println!("Confidence: {:?}", result.confidence);
+    println!("{}", result.summary);
+    if !result.evidence.is_empty() {
+        println!("Evidence:");
+        for item in &result.evidence {
+            println!("  [{:?}:{}] {}", item.kind, item.source, item.detail);
+        }
+    }
+}
+
 fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--verbose]
+fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--why-linked-top <n>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--verbose]
+fwmap explain --elf <path> [--map <path>] [--lds <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] (--symbol <name> | --object <name> | --section <name>)
 fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
 fwmap history list --db <path>
 fwmap history show --db <path> --build <id>
@@ -639,6 +745,7 @@ Options:
   --prev-map  Previous map file for diff
   --out       Output HTML path (default: fwmap_report.html)
   --report-json Write JSON report to the given path
+  --why-linked-top Number of why-linked explanations shown in report output
   --sarif     Write SARIF 2.1.0 report to the given path
   --sarif-base-uri Base URI used for repo-relative SARIF locations
   --sarif-min-level info|warn|error Minimum warning level included in SARIF output
@@ -654,6 +761,9 @@ Options:
   --debuginfod=auto|on|off Control debuginfod fallback behavior
   --debuginfod-url Add a debuginfod base URL (repeatable)
   --debuginfod-cache-dir Directory used for debuginfod cache metadata
+  --symbol    Explain why a symbol is linked
+  --object    Explain why an object or archive member is linked
+  --section   Explain why a section is linked or placed
   --source-lines off|files|functions|lines|all Control source-level aggregation
   --source-root Apply a root prefix to relative DWARF source paths
   --path-remap from=to Remap DWARF source path prefixes (repeatable)
@@ -690,6 +800,126 @@ fn parse_history_args(args: Vec<String>) -> Result<Command, String> {
         "trend" => parse_history_trend_args(args),
         _ => Err(format!("unknown history subcommand '{}'\n\n{}", sub, help_text())),
     }
+}
+
+fn parse_explain_args(args: Vec<String>) -> Result<Command, String> {
+    let mut elf = None;
+    let mut map = None;
+    let mut lds = None;
+    let mut demangle = DemangleMode::Auto;
+    let mut toolchain = ToolchainSelection::Auto;
+    let mut map_format = MapFormatSelection::Auto;
+    let mut dwarf_mode = DwarfMode::Auto;
+    let mut debug_file_dirs = Vec::new();
+    let mut debug_trace = false;
+    let mut debuginfod = DebuginfodMode::Off;
+    let mut debuginfod_urls = Vec::new();
+    let mut debuginfod_cache_dir = None;
+    let mut source_lines = SourceLinesMode::Off;
+    let mut source_root = None;
+    let mut path_remaps = Vec::new();
+    let mut fail_on_missing_dwarf = false;
+    let mut symbol = None;
+    let mut object = None;
+    let mut section = None;
+    let mut index = 2usize;
+    while index < args.len() {
+        let key = &args[index];
+        match key.as_str() {
+            "--demangle=auto" => demangle = DemangleMode::Auto,
+            "--demangle=on" => demangle = DemangleMode::On,
+            "--demangle=off" => demangle = DemangleMode::Off,
+            "--dwarf=auto" => dwarf_mode = DwarfMode::Auto,
+            "--dwarf=on" => dwarf_mode = DwarfMode::On,
+            "--dwarf=off" => dwarf_mode = DwarfMode::Off,
+            "--debug-trace" => debug_trace = true,
+            "--debuginfod=auto" => debuginfod = DebuginfodMode::Auto,
+            "--debuginfod=on" => debuginfod = DebuginfodMode::On,
+            "--debuginfod=off" => debuginfod = DebuginfodMode::Off,
+            "--fail-on-missing-dwarf" => fail_on_missing_dwarf = true,
+            "--toolchain" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --toolchain".to_string())?;
+                toolchain = parse_toolchain(value)?;
+                index += 2;
+                continue;
+            }
+            "--map-format" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --map-format".to_string())?;
+                map_format = parse_map_format(value)?;
+                index += 2;
+                continue;
+            }
+            "--source-lines" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --source-lines".to_string())?;
+                source_lines = parse_source_lines_mode(value)?;
+                index += 2;
+                continue;
+            }
+            "--path-remap" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --path-remap".to_string())?;
+                path_remaps.push(parse_path_remap(value)?);
+                index += 2;
+                continue;
+            }
+            "--elf" | "--map" | "--lds" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" | "--symbol" | "--object" | "--section" => {
+                let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
+                match key.as_str() {
+                    "--elf" => elf = Some(PathBuf::from(value)),
+                    "--map" => map = Some(PathBuf::from(value)),
+                    "--lds" => lds = Some(PathBuf::from(value)),
+                    "--source-root" => source_root = Some(PathBuf::from(value)),
+                    "--debug-file-dir" => debug_file_dirs.push(PathBuf::from(value)),
+                    "--debuginfod-url" => debuginfod_urls.push(value.to_string()),
+                    "--debuginfod-cache-dir" => debuginfod_cache_dir = Some(PathBuf::from(value)),
+                    "--symbol" => symbol = Some(value.to_string()),
+                    "--object" => object = Some(value.to_string()),
+                    "--section" => section = Some(value.to_string()),
+                    _ => {}
+                }
+                index += 2;
+                continue;
+            }
+            "--help" | "-h" => return Ok(Command::Help),
+            _ => return Err(format!("unknown option '{key}'")),
+        }
+        index += 1;
+    }
+
+    let target_count = usize::from(symbol.is_some()) + usize::from(object.is_some()) + usize::from(section.is_some());
+    if target_count != 1 {
+        return Err("explain requires exactly one of --symbol, --object, or --section".to_string());
+    }
+
+    let elf = elf.ok_or_else(|| "--elf is required".to_string())?;
+    ensure_exists(&elf, "ELF")?;
+    if let Some(path) = map.as_deref() {
+        ensure_exists(path, "map")?;
+    }
+    if let Some(path) = lds.as_deref() {
+        ensure_exists(path, "linker script")?;
+    }
+
+    Ok(Command::Explain {
+        elf,
+        map,
+        lds,
+        demangle,
+        toolchain,
+        map_format,
+        dwarf_mode,
+        debug_file_dirs,
+        debug_trace,
+        debuginfod,
+        debuginfod_urls,
+        debuginfod_cache_dir,
+        source_lines,
+        source_root,
+        path_remaps,
+        fail_on_missing_dwarf,
+        symbol,
+        object,
+        section,
+    })
 }
 
 fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
@@ -1063,6 +1293,8 @@ mod tests {
             "true".to_string(),
             "--sarif-tool-name".to_string(),
             "fwmap-ci".to_string(),
+            "--why-linked-top".to_string(),
+            "7".to_string(),
             "--ci-format".to_string(),
             "markdown".to_string(),
             "--ci-out".to_string(),
@@ -1091,6 +1323,7 @@ mod tests {
         match cmd {
             Command::Analyze {
                 report_json,
+                why_linked_top,
                 sarif,
                 sarif_base_uri,
                 sarif_min_level,
@@ -1116,6 +1349,7 @@ mod tests {
                 assert_eq!(sarif_min_level, WarningLevel::Info);
                 assert!(sarif_include_pass);
                 assert_eq!(sarif_tool_name, "fwmap-ci");
+                assert_eq!(why_linked_top, 7);
                 assert!(matches!(ci_format, Some(CiFormat::Markdown)));
                 assert_eq!(ci_out.unwrap(), PathBuf::from("ci.md"));
                 assert_eq!(rules.unwrap(), PathBuf::from("Cargo.toml"));
@@ -1225,6 +1459,27 @@ mod tests {
                 assert!(fail_on_missing_dwarf);
             }
             _ => panic!("expected analyze command"),
+        }
+    }
+
+    #[test]
+    fn parses_explain_command() {
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "explain".to_string(),
+            "--elf".to_string(),
+            "Cargo.toml".to_string(),
+            "--symbol".to_string(),
+            "main".to_string(),
+        ])
+        .unwrap();
+        match cmd {
+            Command::Explain { symbol, object, section, .. } => {
+                assert_eq!(symbol.as_deref(), Some("main"));
+                assert!(object.is_none());
+                assert!(section.is_none());
+            }
+            _ => panic!("expected explain command"),
         }
     }
 }

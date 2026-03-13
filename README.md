@@ -22,6 +22,7 @@
 - Separate debug, build-id, and split DWARF sidecar resolution
 - JSON report output
 - SARIF 2.1.0 report output
+- Why-linked explanation for symbols, objects, archive members, and sections
 - CI summary in text / markdown / JSON formats
 - warning-based exit control
 - SQLite-backed history recording and trend inspection
@@ -63,6 +64,16 @@ cargo run -- analyze \
   --prev-elf prev/app.elf \
   --prev-map prev/app.map \
   --out report.html
+```
+
+Explain why a symbol or object was linked:
+
+```bash
+cargo run -- explain \
+  --elf build/app.elf \
+  --map build/app.map \
+  --lds linker/app.ld \
+  --symbol main
 ```
 
 Default output path is `fwmap_report.html`.
@@ -183,6 +194,7 @@ Top growth object: drivers/net.o (+8192)
 - Top Symbols: largest symbols from the ELF symbol table
 - Top Object Contributions: object sizes from the map file
 - Diff: summary cards plus top section/symbol/object growth and added/removed lists
+- Why Linked: top diff growth items with evidence-backed link explanations
 - Source Diff: top growing source files, functions, line ranges, and unknown-source delta
 - Source Files: top file-level attribution with function counts
 - Top Functions: symbol-linked function attribution with raw/demangled names
@@ -216,7 +228,8 @@ The JSON report uses a fixed top-level shape:
   "unknown_source": { "...": "..." },
   "regions": [],
   "diff_summary": { "...": "..." },
-  "diff": { "...": "..." }
+  "diff": { "...": "..." },
+  "why_linked": { "...": "..." }
 }
 ```
 
@@ -376,6 +389,17 @@ Use `--sarif <path>` to emit SARIF 2.1.0 for GitHub code scanning and similar co
 - `--sarif-tool-name <name>` overrides `tool.driver.name`
 
 `fwmap` maps line-level findings to SARIF regions when DWARF attribution is available. File-level findings fall back to artifact-only locations, and symbol-oriented findings retain extra identity in `properties` plus a stable `partialFingerprints["fwmap/v1"]` value.
+
+## Why Linked
+
+Use `cargo run -- explain` to inspect why a symbol, object, archive member, or section ended up in the final image.
+
+- `--symbol <name>` explains a symbol from the final ELF
+- `--object <path|archive.a(member.o)>` explains a direct object or archive member
+- `--section <name>` explains linker-script placement and `KEEP` influence
+- `--why-linked-top <n>` adds top diff explanations to HTML / JSON / CI output
+
+Current evidence sources are map contributions, archive membership, ELF symbol placement, linker-script section placement, and entry-symbol heuristics. When the exact undefined-reference chain is unavailable, `fwmap` marks the result as low or medium confidence instead of overstating certainty.
 
 ## History
 
