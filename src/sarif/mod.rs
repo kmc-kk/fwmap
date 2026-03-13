@@ -224,6 +224,22 @@ fn warning_to_result(current: &AnalysisResult, item: &WarningItem, options: &Sar
             properties.insert("symbol".to_string(), serde_json::json!(related));
         }
     }
+    if let Some(policy) = current.policy.as_ref() {
+        if let Some(violation) = policy
+            .violations
+            .iter()
+            .find(|violation| violation.rule_id == item.code && item.related.as_deref() == Some(violation.target.as_str()))
+        {
+            properties.insert("policyProfile".to_string(), serde_json::json!(policy.profile));
+            properties.insert("policyTargetKind".to_string(), serde_json::json!(violation.target_kind));
+            if let Some(owner) = violation.owner.as_deref() {
+                properties.insert("owner".to_string(), serde_json::json!(owner));
+            }
+            if let Some(source) = violation.owner_source {
+                properties.insert("ownerSource".to_string(), serde_json::json!(source));
+            }
+        }
+    }
     properties.insert("includePass".to_string(), serde_json::json!(options.include_pass));
 
     SarifResult {
@@ -557,6 +573,7 @@ mod tests {
             },
             debug_info: DebugInfoSummary::default(),
             debug_artifact: DebugArtifactInfo::default(),
+            policy: None,
             sections: vec![SectionInfo {
                 name: ".text".to_string(),
                 addr: 0x1000,

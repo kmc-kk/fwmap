@@ -1,0 +1,39 @@
+version = 2
+default_profile = "release"
+
+[profiles.release.budgets.regions.FLASH]
+max_bytes = 524288
+warn_bytes = 500000
+
+[profiles.release.budgets.regions.RAM]
+max_bytes = 131072
+warn_bytes = 120000
+
+[profiles.release.budgets.paths."src/net/**"]
+max_delta_bytes = 4096
+
+[profiles.release.budgets.libraries."libcrypto.a"]
+max_delta_bytes = 8192
+
+[profiles.release.budgets.cpp_classes."net::Socket"]
+warn_delta_bytes = 1024
+
+[profiles.release.budgets.cpp_template_families."etl::vector<...>"]
+warn_delta_bytes = 1024
+
+[[owners]]
+owner = "network-team"
+[owners.match]
+paths = ["src/net/**"]
+
+[[owners]]
+owner = "security-team"
+[owners.match]
+libraries = ["libcrypto.a"]
+
+[[waivers]]
+rule = "budget.path.delta"
+expires = "2026-12-31"
+reason = "legacy migration in progress"
+[waivers.match]
+paths = ["src/legacy/**"]

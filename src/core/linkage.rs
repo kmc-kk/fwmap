@@ -893,6 +893,7 @@ mod tests {
             },
             debug_info: DebugInfoSummary::default(),
             debug_artifact: DebugArtifactInfo::default(),
+            policy: None,
             sections: vec![
                 SectionInfo {
                     name: ".text".to_string(),

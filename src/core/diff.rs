@@ -395,6 +395,7 @@ mod tests {
             },
             debug_info: DebugInfoSummary::default(),
             debug_artifact: DebugArtifactInfo::default(),
+            policy: None,
             sections: Vec::new(),
             symbols: symbols
                 .iter()

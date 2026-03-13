@@ -1122,6 +1122,7 @@ mod tests {
                 generated_ranges: 0,
             },
             debug_artifact: DebugArtifactInfo::default(),
+            policy: None,
             sections: Vec::new(),
             symbols: vec![SymbolInfo {
                 name: "main".to_string(),

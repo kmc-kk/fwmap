@@ -137,6 +137,7 @@ pub fn analyze_paths(
         },
         debug_info: dwarf_data.debug_info,
         debug_artifact: dwarf_data.debug_artifact,
+        policy: None,
         sections: elf.sections,
         symbols: sorted_symbols,
         object_contributions: aggregate_objects(map_data.as_ref().map(|item| item.object_contributions.as_slice()).unwrap_or(&[])),
@@ -818,6 +819,7 @@ mod tests {
             },
             debug_info: DebugInfoSummary::default(),
             debug_artifact: DebugArtifactInfo::default(),
+            policy: None,
             sections: Vec::new(),
             symbols: symbols
                 .iter()

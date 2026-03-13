@@ -697,7 +697,65 @@ message = ".data increased by more than 2KB"
 
 ルールファイルが壊れている場合や必須項目が足りない場合は、解析前に明確なエラーで停止します。
 
-### 5.9.2 demangle の使い分け
+### 5.9.2 policy as code を使う
+
+`--policy <path>` で TOML 形式の policy v2 を読み込めます。policy は外部 rule より広い範囲を扱い、profile ごとの budget、owner、waiver をまとめて管理します。
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --prev-elf build/app-prev.elf \
+  --prev-map build/app-prev.map \
+  --policy tests/fixtures/sample_policy_v2.toml \
+  --profile release \
+  --policy-dump-effective \
+  --report-json fwmap_policy.json \
+  --sarif fwmap_policy.sarif
+```
+
+この設定でできること:
+
+- region ごとの absolute budget を判定する
+- source path / library ごとの delta budget を判定する
+- C++ class / template family ごとの budget を判定する
+- path / object / library / C++ 集約単位へ owner を付与する
+- 期限付き waiver と期限切れ waiver を管理する
+
+最小例:
+
+```toml
+version = 2
+default_profile = "release"
+
+[profiles.release.budgets.regions.FLASH]
+max_bytes = 524288
+warn_bytes = 500000
+
+[profiles.release.budgets.paths."src/net/**"]
+max_delta_bytes = 4096
+
+[[owners]]
+owner = "network-team"
+[owners.match]
+paths = ["src/net/**"]
+
+[[waivers]]
+rule = "budget.path.delta"
+expires = "2026-12-31"
+reason = "legacy migration in progress"
+[waivers.match]
+paths = ["src/legacy/**"]
+```
+
+補足:
+
+- profile を省略した場合は `default_profile`、なければ `default`、それもなければ先頭 profile を使います
+- active waiver は `policy.waived` に残り、通常の violation には出しません
+- expired waiver は violation を止めず、追加で `POLICY_WAIVER_EXPIRED` を出します
+- HTML / JSON / SARIF に policy 情報が反映されます
+
+### 5.9.3 demangle の使い分け
 
 `--demangle=auto|on|off` を使えます。
 
@@ -843,6 +901,9 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 | `--sarif-include-pass <true|false>` | 任意 | SARIF properties に pass metadata を含めるか |
 | `--sarif-tool-name <name>` | 任意 | SARIF `tool.driver.name` の上書き |
 | `--rules <path>` | 任意 | 外部 TOML ルール設定 |
+| `--policy <path>` | 任意 | policy v2 TOML 設定 |
+| `--profile <name>` | 任意 | 使用する policy profile 名 |
+| `--policy-dump-effective` | 任意 | 選択された effective policy summary を表示 |
 | `--demangle=auto|on|off` | 任意 | C++ symbol demangle 制御 |
 | `--toolchain <auto|gnu|lld|iar|armcc|keil>` | 任意 | map parser family の自動判定または強制指定 |
 | `--map-format <auto|gnu|lld-native>` | 任意 | map text format の自動判定または強制指定 |

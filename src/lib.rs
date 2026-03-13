@@ -13,6 +13,7 @@ pub use core::diff;
 pub use core::history;
 pub use core::linkage;
 pub use core::model;
+pub use core::policy;
 pub use core::rule_config;
 pub use core::rules;
 pub use report::render;

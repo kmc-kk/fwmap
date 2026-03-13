@@ -12,6 +12,7 @@ use crate::model::{
     CiFormat, CppGroupBy, DebuginfodMode, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode,
     ThresholdConfig, ToolchainSelection, WarningLevel,
 };
+use crate::policy::{dump_effective_policy, evaluate_policy, load_policy_config, policy_warnings};
 use crate::rule_config::{apply_threshold_overrides, load_rule_config};
 use crate::render::{
     print_ci_summary, print_cli_summary, print_cpp_cli_summary, write_ci_summary, write_html_report, write_json_report,
@@ -39,6 +40,8 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             lds,
             thresholds,
             rules,
+            policy,
+            profile,
             demangle,
             toolchain,
             map_format,
@@ -52,6 +55,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             source_root,
             path_remaps,
             fail_on_missing_dwarf,
+            policy_dump_effective,
             metadata,
         } => {
             let mut options = AnalyzeOptions {
@@ -76,7 +80,16 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 apply_threshold_overrides(&mut options.thresholds, &config.thresholds);
                 options.custom_rules = config.rules;
             }
-            let analysis = analyze_paths(&elf, map.as_deref(), lds.as_deref(), &options)?;
+            let mut analysis = analyze_paths(&elf, map.as_deref(), lds.as_deref(), &options)?;
+            if let Some(policy_path) = policy.as_deref() {
+                let config = load_policy_config(policy_path)?;
+                let evaluation = evaluate_policy(&analysis, None, &config, profile.as_deref())?;
+                if policy_dump_effective {
+                    println!("{}", dump_effective_policy(&evaluation));
+                }
+                analysis.warnings.extend(policy_warnings(&evaluation));
+                analysis.policy = Some(evaluation);
+            }
             print_debug_trace(&analysis);
             let id = record_build(&db, HistoryRecordInput { analysis, metadata })?;
             println!("Recorded build #{id} into {}", db.display());
@@ -179,6 +192,8 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             hide_unknown_source,
             thresholds,
             rules,
+            policy,
+            profile,
             demangle,
             toolchain,
             map_format,
@@ -192,6 +207,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             source_root,
             path_remaps,
             fail_on_missing_dwarf,
+            policy_dump_effective,
             verbose,
             cpp_view,
             group_by,
@@ -218,6 +234,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 apply_threshold_overrides(&mut options.thresholds, &config.thresholds);
                 options.custom_rules = config.rules;
             }
+            let policy_config = if let Some(policy_path) = policy.as_deref() {
+                Some(load_policy_config(policy_path)?)
+            } else {
+                None
+            };
 
             let mut current = analyze_paths(&elf, map.as_deref(), lds.as_deref(), &options)?;
             print_debug_trace(&current);
@@ -236,6 +257,14 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             } else {
                 None
             };
+            if let Some(config) = policy_config.as_ref() {
+                let evaluation = evaluate_policy(&current, diff.as_ref(), config, profile.as_deref())?;
+                if policy_dump_effective {
+                    println!("{}", dump_effective_policy(&evaluation));
+                }
+                current.warnings.extend(policy_warnings(&evaluation));
+                current.policy = Some(evaluation);
+            }
             let ci_format = ci_format.or(if ci_summary { Some(CiFormat::Text) } else { None });
             if let Some(format) = ci_format {
                 let source_options = crate::render::SourceRenderOptions {
@@ -331,6 +360,8 @@ enum Command {
         lds: Option<PathBuf>,
         thresholds: ThresholdConfig,
         rules: Option<PathBuf>,
+        policy: Option<PathBuf>,
+        profile: Option<String>,
         demangle: DemangleMode,
         toolchain: ToolchainSelection,
         map_format: MapFormatSelection,
@@ -344,6 +375,7 @@ enum Command {
         source_root: Option<PathBuf>,
         path_remaps: Vec<(String, String)>,
         fail_on_missing_dwarf: bool,
+        policy_dump_effective: bool,
         metadata: std::collections::BTreeMap<String, String>,
     },
     HistoryList {
@@ -403,6 +435,8 @@ enum Command {
         hide_unknown_source: bool,
         thresholds: ThresholdConfig,
         rules: Option<PathBuf>,
+        policy: Option<PathBuf>,
+        profile: Option<String>,
         demangle: DemangleMode,
         toolchain: ToolchainSelection,
         map_format: MapFormatSelection,
@@ -416,6 +450,7 @@ enum Command {
         source_root: Option<PathBuf>,
         path_remaps: Vec<(String, String)>,
         fail_on_missing_dwarf: bool,
+        policy_dump_effective: bool,
         verbose: bool,
         cpp_view: bool,
         group_by: CppGroupBy,
@@ -462,6 +497,8 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut hide_unknown_source = false;
     let mut thresholds = ThresholdConfig::default();
     let mut rules = None;
+    let mut policy = None;
+    let mut profile = None;
     let mut demangle = DemangleMode::Auto;
     let mut toolchain = ToolchainSelection::Auto;
     let mut map_format = MapFormatSelection::Auto;
@@ -475,6 +512,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut source_root = None;
     let mut path_remaps = Vec::new();
     let mut fail_on_missing_dwarf = false;
+    let mut policy_dump_effective = false;
     let mut verbose = false;
     let mut cpp_view = false;
     let mut group_by = CppGroupBy::Symbol;
@@ -531,6 +569,11 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
             }
             "--debug-trace" => {
                 debug_trace = true;
+                index += 1;
+                continue;
+            }
+            "--policy-dump-effective" => {
+                policy_dump_effective = true;
                 index += 1;
                 continue;
             }
@@ -626,7 +669,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                 index += 2;
                 continue;
             }
-            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--sarif" | "--sarif-base-uri" | "--rules" | "--ci-out" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" => {
+            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--sarif" | "--sarif-base-uri" | "--rules" | "--policy" | "--profile" | "--ci-out" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--elf" => elf = Some(PathBuf::from(value)),
@@ -639,6 +682,8 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                     "--sarif" => sarif = Some(PathBuf::from(value)),
                     "--sarif-base-uri" => sarif_base_uri = Some(value.to_string()),
                     "--rules" => rules = Some(PathBuf::from(value)),
+                    "--policy" => policy = Some(PathBuf::from(value)),
+                    "--profile" => profile = Some(value.to_string()),
                     "--ci-out" => ci_out = Some(PathBuf::from(value)),
                     "--source-root" => source_root = Some(PathBuf::from(value)),
                     "--debug-file-dir" => debug_file_dirs.push(PathBuf::from(value)),
@@ -670,6 +715,9 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     if let Some(path) = rules.as_deref() {
         ensure_exists(path, "rules")?;
     }
+    if let Some(path) = policy.as_deref() {
+        ensure_exists(path, "policy")?;
+    }
 
     Ok(Command::Analyze {
         elf,
@@ -695,6 +743,8 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         hide_unknown_source,
         thresholds,
         rules,
+        policy,
+        profile,
         demangle,
         toolchain,
         map_format,
@@ -708,6 +758,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         source_root,
         path_remaps,
         fail_on_missing_dwarf,
+        policy_dump_effective,
         verbose,
         cpp_view,
         group_by,
@@ -755,9 +806,9 @@ fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--why-linked-top <n>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--cpp-view] [--group-by <mode>] [--verbose]
+fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--why-linked-top <n>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--policy <path>] [--profile <name>] [--policy-dump-effective] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--cpp-view] [--group-by <mode>] [--verbose]
 fwmap explain --elf <path> [--map <path>] [--lds <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] (--symbol <name> | --object <name> | --section <name>)
-fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
+fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--policy <path>] [--profile <name>] [--policy-dump-effective] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
 fwmap history list --db <path>
 fwmap history show --db <path> --build <id>
 fwmap history trend --db <path> --metric <rom|ram|warnings|unknown_source|region:NAME|section:NAME|source:PATH|function:KEY|object:PATH|archive-member:ARCHIVE(MEMBER)|directory:PATH> [--last <n>]
@@ -777,6 +828,9 @@ Options:
   --sarif-include-pass true|false Include pass metadata in SARIF properties
   --sarif-tool-name Override the SARIF driver name
   --rules     Load TOML rule configuration from the given path
+  --policy    Load TOML policy configuration version 2
+  --profile   Select a policy profile name
+  --policy-dump-effective Print the selected effective policy summary
   --demangle=auto|on|off Control C++ symbol demangling
   --toolchain auto|gnu|lld|iar|armcc|keil Select or detect the map parser family
   --map-format auto|gnu|lld-native Select or detect the map text format
@@ -956,6 +1010,8 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
     let mut lds = None;
     let mut thresholds = ThresholdConfig::default();
     let mut rules = None;
+    let mut policy = None;
+    let mut profile = None;
     let mut demangle = DemangleMode::Auto;
     let mut toolchain = ToolchainSelection::Auto;
     let mut map_format = MapFormatSelection::Auto;
@@ -969,6 +1025,7 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
     let mut source_root = None;
     let mut path_remaps = Vec::new();
     let mut fail_on_missing_dwarf = false;
+    let mut policy_dump_effective = false;
     let mut metadata = std::collections::BTreeMap::new();
     let mut index = 3usize;
     while index < args.len() {
@@ -1052,6 +1109,10 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
                 fail_on_missing_dwarf = true;
                 index += 1;
             }
+            "--policy-dump-effective" => {
+                policy_dump_effective = true;
+                index += 1;
+            }
             "--meta" => {
                 let value = args.get(index + 1).ok_or_else(|| "missing value for --meta".to_string())?;
                 let (k, v) = value
@@ -1060,7 +1121,7 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
                 metadata.insert(k.to_string(), v.to_string());
                 index += 2;
             }
-            "--db" | "--elf" | "--map" | "--lds" | "--rules" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" => {
+            "--db" | "--elf" | "--map" | "--lds" | "--rules" | "--policy" | "--profile" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--db" => db = Some(PathBuf::from(value)),
@@ -1068,6 +1129,8 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
                     "--map" => map = Some(PathBuf::from(value)),
                     "--lds" => lds = Some(PathBuf::from(value)),
                     "--rules" => rules = Some(PathBuf::from(value)),
+                    "--policy" => policy = Some(PathBuf::from(value)),
+                    "--profile" => profile = Some(value.to_string()),
                     "--source-root" => source_root = Some(PathBuf::from(value)),
                     "--debug-file-dir" => debug_file_dirs.push(PathBuf::from(value)),
                     "--debuginfod-url" => debuginfod_urls.push(value.to_string()),
@@ -1091,6 +1154,9 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
     if let Some(path) = rules.as_deref() {
         ensure_exists(path, "rules")?;
     }
+    if let Some(path) = policy.as_deref() {
+        ensure_exists(path, "policy")?;
+    }
     Ok(Command::HistoryRecord {
         db,
         elf,
@@ -1098,6 +1164,8 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
         lds,
         thresholds,
         rules,
+        policy,
+        profile,
         demangle,
         toolchain,
         map_format,
@@ -1111,6 +1179,7 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
         source_root,
         path_remaps,
         fail_on_missing_dwarf,
+        policy_dump_effective,
         metadata,
     })
 }
@@ -1396,6 +1465,11 @@ mod tests {
             "8192".to_string(),
             "--rules".to_string(),
             "Cargo.toml".to_string(),
+            "--policy".to_string(),
+            "Cargo.toml".to_string(),
+            "--profile".to_string(),
+            "release".to_string(),
+            "--policy-dump-effective".to_string(),
             "--demangle=on".to_string(),
             "--map-format".to_string(),
             "lld-native".to_string(),
@@ -1424,6 +1498,9 @@ mod tests {
                 min_line_diff_bytes,
                 hide_unknown_source,
                 thresholds,
+                policy,
+                profile,
+                policy_dump_effective,
                 ..
             } => {
                 assert_eq!(report_json.unwrap(), PathBuf::from("out.json"));
@@ -1436,6 +1513,9 @@ mod tests {
                 assert!(matches!(ci_format, Some(CiFormat::Markdown)));
                 assert_eq!(ci_out.unwrap(), PathBuf::from("ci.md"));
                 assert_eq!(rules.unwrap(), PathBuf::from("Cargo.toml"));
+                assert_eq!(policy.unwrap(), PathBuf::from("Cargo.toml"));
+                assert_eq!(profile.as_deref(), Some("release"));
+                assert!(policy_dump_effective);
                 assert!(ci_summary);
                 assert!(ci_source_summary);
                 assert!(fail_on_warning);

@@ -210,6 +210,7 @@ fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>, source_option
         [
             header(current),
             overview(current, diff),
+            policy_section(current),
             warning_section(&current.warnings),
             cpp_view_section(current),
             source_summary(current),
@@ -254,6 +255,7 @@ fn build_json(
         "linker_script": &current.linker_script,
         "section_summary": &current.memory.section_totals,
         "memory_summary": &current.memory,
+        "policy": &current.policy,
         "warnings": &current.warnings,
         "thresholds": thresholds,
         "top_symbols": current.symbols.iter().take(50).collect::<Vec<_>>(),
@@ -302,6 +304,15 @@ fn build_ci_text(current: &AnalysisResult, diff: Option<&DiffResult>, source_opt
         current.source_files.len(),
         current.debug_info.unknown_source_ratio * 100.0
     ));
+    if let Some(policy) = current.policy.as_ref() {
+        lines.push(format!(
+            "Policy: profile={} violations={} waived={} expired={}",
+            policy.profile,
+            policy.violations.len(),
+            policy.waived.len(),
+            policy.expired_waivers.len()
+        ));
+    }
 
     if let Some(region) = current.memory.region_summaries.first() {
         lines.push(format!("Top region usage: {} ({:.1}%)", region.region_name, region.usage_ratio * 100.0));
@@ -415,6 +426,9 @@ fn build_ci_markdown(current: &AnalysisResult, diff: Option<&DiffResult>, source
         if current.debug_info.dwarf_used { "used" } else { "not used" },
         current.debug_info.unknown_source_ratio * 100.0
     ));
+    if let Some(policy) = current.policy.as_ref() {
+        out.push(format!("| Policy | {} (violations: {}, waived: {}, expired: {}) |", policy.profile, policy.violations.len(), policy.waived.len(), policy.expired_waivers.len()));
+    }
     out.push(String::new());
 
     let mut growths = Vec::new();
@@ -514,6 +528,7 @@ fn build_ci_json(
             "unknown_source_ratio": current.debug_info.unknown_source_ratio,
         },
         "debug_info": &current.debug_info,
+        "policy": &current.policy,
         "source_files": &current.source_files,
         "functions": &current.function_attributions,
         "line_hotspots": current.line_hotspots.iter().take(20).collect::<Vec<_>>(),
@@ -578,6 +593,77 @@ fn overview(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
         format_bytes(current.memory.ram_bytes),
         current.warnings.len(),
         diff_html
+    )
+}
+
+fn policy_section(current: &AnalysisResult) -> String {
+    let Some(policy) = current.policy.as_ref() else {
+        return String::new();
+    };
+    let violations = if policy.violations.is_empty() {
+        "<p>No active policy violations.</p>".to_string()
+    } else {
+        let rows = policy
+            .violations
+            .iter()
+            .map(|item| {
+                format!(
+                    "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                    item.level,
+                    escape(&item.rule_id),
+                    escape(&item.target),
+                    escape(item.owner.as_deref().unwrap_or("-")),
+                    escape(&item.message)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        format!(
+            "<table><thead><tr><th>Level</th><th>Rule</th><th>Target</th><th>Owner</th><th>Message</th></tr></thead><tbody>{rows}</tbody></table>"
+        )
+    };
+    let waived = if policy.waived.is_empty() {
+        String::new()
+    } else {
+        let items = policy
+            .waived
+            .iter()
+            .map(|item| {
+                let waiver = item.waiver.as_ref().map(|waiver| format!("{} until {}", waiver.reason, waiver.expires)).unwrap_or_default();
+                format!("<li><span class=\"mono\">{}</span> on {} ({})</li>", escape(&item.rule_id), escape(&item.target), escape(&waiver))
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        format!("<h3>Waived</h3><ul>{items}</ul>")
+    };
+    let expired = if policy.expired_waivers.is_empty() {
+        String::new()
+    } else {
+        let items = policy
+            .expired_waivers
+            .iter()
+            .map(|item| {
+                format!(
+                    "<li><span class=\"mono\">{}</span> on {} expired {} ({})</li>",
+                    escape(&item.rule),
+                    escape(&item.target),
+                    escape(&item.expires),
+                    escape(&item.reason)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        format!("<h3>Expired Waivers</h3><ul>{items}</ul>")
+    };
+    format!(
+        "<section id=\"policy\"><h2>Policy</h2><p>Profile: <span class=\"mono\">{}</span> | violations={} | waived={} | expired={}</p>{}{}{}</section>",
+        escape(&policy.profile),
+        policy.violations.len(),
+        policy.waived.len(),
+        policy.expired_waivers.len(),
+        violations,
+        waived,
+        expired
     )
 }
 
@@ -1449,6 +1535,30 @@ mod tests {
             SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
         ));
         let mut analysis = sample_analysis_with_sources();
+        analysis.policy = Some(crate::model::PolicyEvaluation {
+            profile: "release".to_string(),
+            effective: crate::model::EffectivePolicySummary {
+                path_budget_count: 1,
+                ..crate::model::EffectivePolicySummary::default()
+            },
+            owners: Vec::new(),
+            violations: vec![crate::model::PolicyViolation {
+                rule_id: "budget.path.delta".to_string(),
+                level: WarningLevel::Warn,
+                message: "Path budget exceeded delta policy budget".to_string(),
+                target_kind: "path".to_string(),
+                target: "src/main.cpp".to_string(),
+                owner: Some("app-team".to_string()),
+                owner_source: Some(crate::model::PolicyOwnerSource::Policy),
+                owner_confidence: Some(crate::model::PolicyOwnerConfidence::High),
+                current_bytes: Some(64),
+                delta_bytes: Some(32),
+                budget: crate::model::PolicyBudgetSnapshot::default(),
+                waiver: None,
+            }],
+            waived: Vec::new(),
+            expired_waivers: Vec::new(),
+        });
         analysis.warnings.push(WarningItem {
             level: WarningLevel::Warn,
             code: "LARGE_SYMBOL".to_string(),
@@ -1567,6 +1677,8 @@ mod tests {
         assert!(html.contains("C++ Diff"));
         assert!(html.contains("Source Diff"));
         assert!(html.contains("Memory Regions Overview"));
+        assert!(html.contains("Policy"));
+        assert!(html.contains("budget.path.delta"));
         assert!(html.contains("Filter section"));
         assert!(html.contains("Unknown Source Ratio"));
         let _ = fs::remove_file(path);
@@ -1579,6 +1691,15 @@ mod tests {
             SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
         ));
         let analysis = sample_analysis();
+        let mut analysis = analysis;
+        analysis.policy = Some(crate::model::PolicyEvaluation {
+            profile: "release".to_string(),
+            effective: crate::model::EffectivePolicySummary::default(),
+            owners: Vec::new(),
+            violations: Vec::new(),
+            waived: Vec::new(),
+            expired_waivers: Vec::new(),
+        });
         let thresholds = ThresholdConfig::default();
         write_json_report(&path, &analysis, None, &thresholds, SourceRenderOptions::default(), 3).unwrap();
         let json = fs::read_to_string(&path).unwrap();
@@ -1591,6 +1712,7 @@ mod tests {
         assert!(json.contains("\"source_files\""));
         assert!(json.contains("\"line_hotspots\""));
         assert!(json.contains("\"cpp_view\""));
+        assert!(json.contains("\"policy\""));
         let _ = fs::remove_file(path);
     }
 
@@ -1716,6 +1838,7 @@ mod tests {
             },
             debug_info: DebugInfoSummary::default(),
             debug_artifact: DebugArtifactInfo::default(),
+            policy: None,
             sections: vec![SectionInfo {
                 name: ".text".to_string(),
                 addr: 0x8000,

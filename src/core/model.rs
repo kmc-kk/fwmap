@@ -156,6 +156,7 @@ pub struct AnalysisResult {
     pub toolchain: ToolchainInfo,
     pub debug_info: DebugInfoSummary,
     pub debug_artifact: DebugArtifactInfo,
+    pub policy: Option<PolicyEvaluation>,
     pub sections: Vec<SectionInfo>,
     pub symbols: Vec<SymbolInfo>,
     pub object_contributions: Vec<ObjectContribution>,
@@ -619,6 +620,165 @@ pub enum RuleSeverityConfig {
     Error,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PolicyConfigFile {
+    #[serde(default = "default_policy_schema_version", alias = "schema_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub default_profile: Option<String>,
+    #[serde(default)]
+    pub profiles: BTreeMap<String, PolicyProfile>,
+    #[serde(default)]
+    pub owners: Vec<PolicyOwnerRule>,
+    #[serde(default)]
+    pub waivers: Vec<PolicyWaiver>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct PolicyProfile {
+    #[serde(default)]
+    pub budgets: PolicyBudgets,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct PolicyBudgets {
+    #[serde(default)]
+    pub regions: BTreeMap<String, PolicyBudget>,
+    #[serde(default)]
+    pub paths: BTreeMap<String, PolicyBudget>,
+    #[serde(default)]
+    pub libraries: BTreeMap<String, PolicyBudget>,
+    #[serde(default)]
+    pub cpp_classes: BTreeMap<String, PolicyBudget>,
+    #[serde(default)]
+    pub cpp_template_families: BTreeMap<String, PolicyBudget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct PolicyBudget {
+    pub max_bytes: Option<u64>,
+    pub warn_bytes: Option<u64>,
+    pub max_delta_bytes: Option<i64>,
+    pub warn_delta_bytes: Option<i64>,
+    pub severity: Option<RuleSeverityConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct PolicyMatchSpec {
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub objects: Vec<String>,
+    #[serde(default)]
+    pub libraries: Vec<String>,
+    #[serde(default)]
+    pub cpp_classes: Vec<String>,
+    #[serde(default)]
+    pub cpp_template_families: Vec<String>,
+    #[serde(default)]
+    pub namespaces: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PolicyOwnerRule {
+    #[serde(rename = "match")]
+    pub match_spec: PolicyMatchSpec,
+    pub owner: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PolicyWaiver {
+    pub rule: String,
+    #[serde(rename = "match")]
+    pub match_spec: PolicyMatchSpec,
+    pub expires: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct PolicyEvaluation {
+    pub profile: String,
+    pub effective: EffectivePolicySummary,
+    pub owners: Vec<PolicyOwnerResolution>,
+    pub violations: Vec<PolicyViolation>,
+    pub waived: Vec<PolicyViolation>,
+    pub expired_waivers: Vec<ExpiredWaiver>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct EffectivePolicySummary {
+    pub region_budget_count: usize,
+    pub path_budget_count: usize,
+    pub library_budget_count: usize,
+    pub cpp_class_budget_count: usize,
+    pub cpp_template_budget_count: usize,
+    pub owner_rule_count: usize,
+    pub waiver_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PolicyOwnerResolution {
+    pub target_kind: String,
+    pub target: String,
+    pub owner: String,
+    pub owner_source: PolicyOwnerSource,
+    pub owner_confidence: PolicyOwnerConfidence,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PolicyViolation {
+    pub rule_id: String,
+    pub level: WarningLevel,
+    pub message: String,
+    pub target_kind: String,
+    pub target: String,
+    pub owner: Option<String>,
+    pub owner_source: Option<PolicyOwnerSource>,
+    pub owner_confidence: Option<PolicyOwnerConfidence>,
+    pub current_bytes: Option<u64>,
+    pub delta_bytes: Option<i64>,
+    pub budget: PolicyBudgetSnapshot,
+    pub waiver: Option<AppliedWaiver>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct PolicyBudgetSnapshot {
+    pub max_bytes: Option<u64>,
+    pub warn_bytes: Option<u64>,
+    pub max_delta_bytes: Option<i64>,
+    pub warn_delta_bytes: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AppliedWaiver {
+    pub rule: String,
+    pub reason: String,
+    pub expires: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExpiredWaiver {
+    pub rule: String,
+    pub target: String,
+    pub reason: String,
+    pub expires: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PolicyOwnerSource {
+    Policy,
+    Inferred,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PolicyOwnerConfidence {
+    High,
+    Medium,
+    Low,
+}
+
 impl Default for ThresholdConfig {
     fn default() -> Self {
         Self {
@@ -654,6 +814,10 @@ impl Default for DebugInfoSummary {
 
 fn default_rule_schema_version() -> u32 {
     1
+}
+
+fn default_policy_schema_version() -> u32 {
+    2
 }
 
 fn default_enabled() -> bool {

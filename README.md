@@ -166,6 +166,21 @@ cargo run -- analyze \
   --report-json fwmap_cpp.json
 ```
 
+Policy-as-code example:
+
+```bash
+cargo run -- analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --prev-elf build/app-prev.elf \
+  --prev-map build/app-prev.map \
+  --policy tests/fixtures/sample_policy_v2.toml \
+  --profile release \
+  --policy-dump-effective \
+  --report-json fwmap_policy.json \
+  --sarif fwmap_policy.sarif
+```
+
 C++ diff grouping example:
 
 ```bash
@@ -276,6 +291,7 @@ The JSON report uses a fixed top-level shape:
 - [tests/fixtures/sample_rules.toml](tests/fixtures/sample_rules.toml)
 - [tests/fixtures/sample.ld](tests/fixtures/sample.ld)
 - [tests/fixtures/sample_lld.map](tests/fixtures/sample_lld.map)
+- [tests/fixtures/sample_policy_v2.toml](tests/fixtures/sample_policy_v2.toml)
 
 `tests/fixtures/` now contains 10+ small regression assets for map variations and parser failure modes. ELF parser tests still generate minimal synthetic ELF fixtures in test code so the repository stays lightweight.
 
@@ -327,6 +343,63 @@ threshold_bytes = 4096
 severity = "warn"
 message = "app sources grew by more than 4 KiB"
 ```
+
+## Policy As Code
+
+Use `--policy <path>` to load a TOML policy file with `version = 2`. Policies add profile-specific budgets, owner resolution, and time-bounded waivers on top of the existing rule engine.
+
+```bash
+cargo run -- analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --prev-elf build/app-prev.elf \
+  --prev-map build/app-prev.map \
+  --policy tests/fixtures/sample_policy_v2.toml \
+  --profile release
+```
+
+Supported budget scopes:
+
+- `regions`
+- `paths`
+- `libraries`
+- `cpp_classes`
+- `cpp_template_families`
+
+Supported policy extras:
+
+- owner mapping by `paths`, `objects`, `libraries`, `cpp_classes`, `cpp_template_families`
+- active waivers with required `reason`
+- expired waiver reporting
+- `--policy-dump-effective` to print the selected profile summary
+
+Example:
+
+```toml
+version = 2
+default_profile = "release"
+
+[profiles.release.budgets.regions.FLASH]
+max_bytes = 524288
+warn_bytes = 500000
+
+[profiles.release.budgets.paths."src/net/**"]
+max_delta_bytes = 4096
+
+[[owners]]
+owner = "network-team"
+[owners.match]
+paths = ["src/net/**"]
+
+[[waivers]]
+rule = "budget.path.delta"
+expires = "2026-12-31"
+reason = "legacy migration in progress"
+[waivers.match]
+paths = ["src/legacy/**"]
+```
+
+Policy results are included in HTML, JSON, and SARIF output. JSON keeps the structured `policy` block, while SARIF carries owner and policy-profile metadata in result properties when a policy violation is emitted.
 
 ## Demangling
 
