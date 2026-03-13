@@ -79,6 +79,7 @@ pub struct Evidence {
 pub enum EvidenceKind {
     MapContribution,
     ArchivePull,
+    WholeArchive,
     RelocationReference,
     SymbolPlacement,
     ScriptPlacement,
@@ -264,6 +265,23 @@ pub fn build_linkage_graph(current: &AnalysisResult) -> LinkageGraph {
                 ));
             }
         }
+    }
+    for candidate in &current.whole_archive_candidates {
+        let archive_id = format!("archive:{}", candidate.archive_path);
+        nodes.entry(archive_id.clone()).or_insert(LinkageNode {
+            id: archive_id.clone(),
+            kind: LinkageNodeKind::Archive,
+            name: candidate.archive_path.clone(),
+        });
+        edges.insert((
+            archive_id.clone(),
+            archive_id,
+            LinkageEdgeKind::ArchivePull,
+            Some(format!(
+                "heuristic whole-archive candidate: {} members retained",
+                candidate.member_count
+            )),
+        ));
     }
 
     if let Some(lds) = current.linker_script.as_ref() {
@@ -497,6 +515,27 @@ pub fn explain_object(current: &AnalysisResult, query: &str) -> Option<ExplainRe
                 ),
                 source: "map.archive_pull".to_string(),
             });
+        }
+        for candidate in current
+            .whole_archive_candidates
+            .iter()
+            .filter(|item| archive_hits.iter().any(|hit| hit.archive_path == item.archive_path))
+        {
+            evidence.push(Evidence {
+                kind: EvidenceKind::WholeArchive,
+                detail: format!(
+                    "{} looks retained by --whole-archive behavior: {} members kept, {}",
+                    candidate.archive_path, candidate.member_count, candidate.reason
+                ),
+                source: "map.inference".to_string(),
+            });
+            if confidence < Confidence::High {
+                summary = format!(
+                    "{} may be linked because {} behaves like --whole-archive",
+                    query, candidate.archive_path
+                );
+                confidence = Confidence::Medium;
+            }
         }
         for cref in &cref_hits {
             for reference in &cref.referenced_by {
@@ -891,6 +930,7 @@ mod tests {
                 referenced_by: "build/main.o".to_string(),
                 symbol: "startup_entry".to_string(),
             }],
+            whole_archive_candidates: Vec::new(),
             relocation_references: vec![crate::model::RelocationReference {
                 from_section: Some(".text".to_string()),
                 target_symbol: "main".to_string(),

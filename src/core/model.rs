@@ -143,6 +143,13 @@ pub struct RelocationReference {
     pub kind: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WholeArchiveCandidate {
+    pub archive_path: String,
+    pub member_count: usize,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AnalysisResult {
     pub binary: BinaryInfo,
@@ -154,6 +161,7 @@ pub struct AnalysisResult {
     pub object_contributions: Vec<ObjectContribution>,
     pub archive_contributions: Vec<ArchiveContribution>,
     pub archive_pulls: Vec<ArchivePullDetail>,
+    pub whole_archive_candidates: Vec<WholeArchiveCandidate>,
     pub relocation_references: Vec<RelocationReference>,
     pub cross_references: Vec<CrossReference>,
     pub linker_script: Option<LinkerScriptInfo>,

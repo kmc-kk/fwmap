@@ -94,6 +94,32 @@ fn explain_symbol_uses_relocation_evidence() {
     let _ = fs::remove_dir(dir);
 }
 
+#[test]
+fn explain_object_marks_whole_archive_candidate_with_medium_confidence() {
+    let dir = temp_dir("phase19-explain-whole-archive");
+    fs::create_dir_all(&dir).unwrap();
+    let elf_path = dir.join("sample.elf");
+    fs::write(&elf_path, build_plain_elf32()).unwrap();
+
+    let analysis = analyze_paths(
+        &elf_path,
+        Some(&PathBuf::from("tests/fixtures/whole_archive.map")),
+        None,
+        &AnalyzeOptions {
+            dwarf_mode: DwarfMode::Off,
+            ..AnalyzeOptions::default()
+        },
+    )
+    .unwrap();
+
+    let explain = explain_object(&analysis, "libalways.a(alpha.o)").unwrap();
+    assert!(explain.summary.contains("whole-archive"));
+    assert!(explain.evidence.iter().any(|item| item.source == "map.inference"));
+
+    let _ = fs::remove_file(elf_path);
+    let _ = fs::remove_dir(dir);
+}
+
 fn temp_dir(label: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     std::env::temp_dir().join(format!("fwmap-{label}-{nanos}"))

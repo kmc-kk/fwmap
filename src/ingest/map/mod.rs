@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::model::{
     ArchiveContribution, ArchivePullDetail, CrossReference, LinkerFamily, MapFormat, MapFormatSelection, MemoryRegion,
     ObjectContribution, ObjectSourceKind, ToolchainKind, ToolchainSelection, WarningItem, WarningLevel, WarningSource,
+    WholeArchiveCandidate,
 };
 
 #[derive(Debug, Clone)]
@@ -15,6 +16,7 @@ pub struct MapIngestResult {
     pub object_contributions: Vec<ObjectContribution>,
     pub archive_contributions: Vec<ArchiveContribution>,
     pub archive_pulls: Vec<ArchivePullDetail>,
+    pub whole_archive_candidates: Vec<WholeArchiveCandidate>,
     pub cross_references: Vec<CrossReference>,
     pub memory_regions: Vec<MemoryRegion>,
     pub warnings: Vec<WarningItem>,
@@ -30,6 +32,7 @@ impl Default for MapIngestResult {
             object_contributions: Vec::new(),
             archive_contributions: Vec::new(),
             archive_pulls: Vec::new(),
+            whole_archive_candidates: Vec::new(),
             cross_references: Vec::new(),
             memory_regions: Vec::new(),
             warnings: Vec::new(),
@@ -200,6 +203,7 @@ fn parse_gnu_map_str(text: &str) -> MapIngestResult {
     let mut index = 0usize;
     let mut current_section: Option<String> = None;
     let mut in_discarded = false;
+    let mut loaded_archives = Vec::<String>::new();
 
     while index < lines.len() {
         let line = lines[index].trim_end();
@@ -222,6 +226,11 @@ fn parse_gnu_map_str(text: &str) -> MapIngestResult {
         }
         if trimmed == "Discarded input sections" {
             in_discarded = true;
+            index += 1;
+            continue;
+        }
+        if let Some(path) = parse_load_archive(trimmed) {
+            loaded_archives.push(path.to_string());
             index += 1;
             continue;
         }
@@ -251,6 +260,12 @@ fn parse_gnu_map_str(text: &str) -> MapIngestResult {
         }
         index += 1;
     }
+
+    result.whole_archive_candidates = infer_whole_archive_candidates(
+        &result.archive_contributions,
+        &result.archive_pulls,
+        &loaded_archives,
+    );
 
     result
 }
@@ -361,6 +376,56 @@ fn parse_archive_pull_row(line: &str) -> Option<ArchivePullDetail> {
         referenced_by: referenced_by.to_string(),
         symbol: symbol.to_string(),
     })
+}
+
+fn parse_load_archive(line: &str) -> Option<&str> {
+    let path = line.strip_prefix("LOAD ")?;
+    path.ends_with(".a").then_some(path.trim())
+}
+
+fn infer_whole_archive_candidates(
+    contributions: &[ArchiveContribution],
+    pulls: &[ArchivePullDetail],
+    loaded_archives: &[String],
+) -> Vec<WholeArchiveCandidate> {
+    let mut by_archive = std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    for item in contributions {
+        let Some(member) = item.member_path.as_deref() else {
+            continue;
+        };
+        by_archive
+            .entry(item.archive_path.clone())
+            .or_default()
+            .insert(member.to_string());
+    }
+    let pulled_members = pulls
+        .iter()
+        .filter_map(|item| split_archive_member(&item.archive_member).map(|(archive, member)| (archive.to_string(), member.to_string())))
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let mut candidates = Vec::new();
+    for archive in loaded_archives {
+        let Some(members) = by_archive.get(archive) else {
+            continue;
+        };
+        if members.is_empty() {
+            continue;
+        }
+        let has_explicit_pull = members
+            .iter()
+            .any(|member| pulled_members.contains(&(archive.clone(), member.clone())));
+        if has_explicit_pull {
+            continue;
+        }
+        if members.len() >= 2 {
+            candidates.push(WholeArchiveCandidate {
+                archive_path: archive.clone(),
+                member_count: members.len(),
+                reason: "archive was loaded and multiple members were retained without per-member pull evidence".to_string(),
+            });
+        }
+    }
+    candidates
 }
 
 fn find_column_break(line: &str) -> Option<usize> {
@@ -706,6 +771,16 @@ mod tests {
                 && item.referenced_by == "build/main.o"
                 && item.symbol == "startup_entry"
         }));
+    }
+
+    #[test]
+    fn infers_whole_archive_candidates_from_load_and_member_contributions() {
+        let text = include_str!("../../../tests/fixtures/whole_archive.map");
+        let result = parse_map_str(text, ToolchainSelection::Auto, MapFormatSelection::Auto).unwrap();
+        assert!(result
+            .whole_archive_candidates
+            .iter()
+            .any(|item| item.archive_path == "libalways.a" && item.member_count == 2));
     }
 
     #[test]
