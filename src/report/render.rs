@@ -377,23 +377,84 @@ fn why_linked_section(items: Option<&WhyLinkedCollection>) -> String {
     if items.top_symbols.is_empty() && items.top_objects.is_empty() {
         return String::new();
     }
-    let symbol_rows = items
-        .top_symbols
+    let symbol_cards = render_why_linked_cards("Top Symbols", &items.top_symbols);
+    let object_cards = render_why_linked_cards("Top Objects", &items.top_objects);
+    format!(
+        "<section id=\"why-linked\"><h2>Why Linked</h2><p class=\"muted\">Top growth items with compact rationale and supporting evidence.</p><div class=\"why-linked-grid\">{}{}</div></section>",
+        symbol_cards,
+        object_cards
+    )
+}
+
+fn render_why_linked_cards(title: &str, items: &[crate::linkage::ExplainResult]) -> String {
+    if items.is_empty() {
+        return format!(
+            "<div class=\"why-linked-column\"><h3>{}</h3><p class=\"muted\">No items.</p></div>",
+            title
+        );
+    }
+    let cards = items
         .iter()
-        .map(|item| format!("<tr><td>{}</td><td>{}</td><td>{}</td></tr>", escape(&item.target), item.confidence.to_string(), escape(&item.summary)))
-        .collect::<Vec<_>>()
-        .join("");
-    let object_rows = items
-        .top_objects
-        .iter()
-        .map(|item| format!("<tr><td>{}</td><td>{}</td><td>{}</td></tr>", escape(&item.target), item.confidence.to_string(), escape(&item.summary)))
+        .map(render_why_linked_card)
         .collect::<Vec<_>>()
         .join("");
     format!(
-        "<section id=\"why-linked\"><h2>Why Linked</h2><div class=\"grid\"><div><h3>Top Symbols</h3><table><thead><tr><th>Target</th><th>Confidence</th><th>Summary</th></tr></thead><tbody>{}</tbody></table></div><div><h3>Top Objects</h3><table><thead><tr><th>Target</th><th>Confidence</th><th>Summary</th></tr></thead><tbody>{}</tbody></table></div></div></section>",
-        symbol_rows,
-        object_rows
+        "<div class=\"why-linked-column\"><h3>{}</h3><div class=\"why-linked-cards\">{}</div></div>",
+        title, cards
     )
+}
+
+fn render_why_linked_card(item: &crate::linkage::ExplainResult) -> String {
+    let confidence_class = match item.confidence {
+        crate::linkage::Confidence::High => "conf-high",
+        crate::linkage::Confidence::Medium => "conf-medium",
+        crate::linkage::Confidence::Low => "conf-low",
+    };
+    let evidence = if item.evidence.is_empty() {
+        "<li class=\"muted\">No explicit evidence recorded.</li>".to_string()
+    } else {
+        item.evidence
+            .iter()
+            .take(4)
+            .map(|evidence| {
+                format!(
+                    "<li><span class=\"pill\">{}</span> <strong>{}</strong><div class=\"muted\">{}</div></li>",
+                    escape(why_evidence_kind_label(evidence.kind)),
+                    escape(&evidence.detail),
+                    escape(&evidence.source)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    let more = if item.evidence.len() > 4 {
+        format!("<div class=\"hint muted\">+{} more evidence item(s)</div>", item.evidence.len() - 4)
+    } else {
+        String::new()
+    };
+    format!(
+        "<article class=\"why-card\"><div class=\"why-card-head\"><div class=\"why-target mono\">{}</div><span class=\"pill {}\">{}</span></div><div class=\"why-summary\">{}</div><details class=\"why-evidence\"><summary>Evidence ({})</summary><ul>{}</ul>{}</details></article>",
+        escape(&item.target),
+        confidence_class,
+        escape(&item.confidence.to_string()),
+        escape(&item.summary),
+        item.evidence.len(),
+        evidence,
+        more
+    )
+}
+
+fn why_evidence_kind_label(kind: crate::linkage::EvidenceKind) -> &'static str {
+    match kind {
+        crate::linkage::EvidenceKind::MapContribution => "map",
+        crate::linkage::EvidenceKind::ArchivePull => "archive-pull",
+        crate::linkage::EvidenceKind::WholeArchive => "whole-archive",
+        crate::linkage::EvidenceKind::RelocationReference => "relocation",
+        crate::linkage::EvidenceKind::SymbolPlacement => "symbol-placement",
+        crate::linkage::EvidenceKind::ScriptPlacement => "script-placement",
+        crate::linkage::EvidenceKind::EntryRoot => "entry-root",
+        crate::linkage::EvidenceKind::CandidateReference => "candidate",
+    }
 }
 
 fn build_ci_markdown(current: &AnalysisResult, diff: Option<&DiffResult>, source_options: SourceRenderOptions) -> String {
@@ -549,7 +610,7 @@ fn build_ci_json(
 }
 
 fn style_block() -> &'static str {
-    "body{font-family:Segoe UI,Arial,sans-serif;margin:24px;background:#f4f1ea;color:#1f2933}h1,h2,h3{margin-bottom:8px}section{background:#fff;padding:16px 18px;border-radius:10px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:8px;border-bottom:1px solid #d6dde5;text-align:left;vertical-align:top}th{background:#f0f4f8}.warn{background:#fff3cd}.mono{font-family:Consolas,monospace}.pos{color:#a61b1b}.neg{color:#0a7d33}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.card{background:#f8fafc;padding:12px;border-radius:8px}.muted{color:#52606d}.toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 12px}.toolbar input{padding:8px 10px;border:1px solid #cbd2d9;border-radius:8px;min-width:180px;background:#fff}.pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#e9eff5;font-size:12px;color:#334e68}.path{display:inline-block;max-width:32rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.anchor{color:inherit;text-decoration:none}.anchor:hover{text-decoration:underline}.hidden{display:none}.hint{margin-top:8px;font-size:13px}"
+    "body{font-family:Segoe UI,Arial,sans-serif;margin:24px;background:#f4f1ea;color:#1f2933}h1,h2,h3{margin-bottom:8px}section{background:#fff;padding:16px 18px;border-radius:10px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:8px;border-bottom:1px solid #d6dde5;text-align:left;vertical-align:top}th{background:#f0f4f8}.warn{background:#fff3cd}.mono{font-family:Consolas,monospace}.pos{color:#a61b1b}.neg{color:#0a7d33}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.card{background:#f8fafc;padding:12px;border-radius:8px}.muted{color:#52606d}.toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 12px}.toolbar input{padding:8px 10px;border:1px solid #cbd2d9;border-radius:8px;min-width:180px;background:#fff}.pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#e9eff5;font-size:12px;color:#334e68}.path{display:inline-block;max-width:32rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.anchor{color:inherit;text-decoration:none}.anchor:hover{text-decoration:underline}.hidden{display:none}.hint{margin-top:8px;font-size:13px}.compact-list{margin:0;padding-left:18px}.compact-list li{margin:0 0 6px}.why-linked-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px}.why-linked-cards{display:grid;gap:12px}.why-card{border:1px solid #d9e2ec;border-radius:10px;padding:12px;background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)}.why-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px}.why-target{font-size:13px;line-height:1.4;word-break:break-word}.why-summary{font-size:14px;line-height:1.5;margin-bottom:8px}.why-evidence summary{cursor:pointer;font-weight:600;color:#334e68}.why-evidence ul{margin:8px 0 0;padding-left:18px}.why-evidence li{margin:0 0 8px}.conf-high{background:#d9f2e3;color:#17603a}.conf-medium{background:#fff1c2;color:#8a5a00}.conf-low{background:#f8d7da;color:#8a1c2b}"
 }
 
 fn script_block() -> &'static str {
@@ -1056,7 +1117,7 @@ fn object_details(current: &AnalysisResult) -> String {
                 .map(|item| (item.confidence.to_string(), item.summary))
                 .unwrap_or_else(|| ("-".to_string(), "No why-linked evidence".to_string()));
             format!(
-                "<tr data-search=\"{} {}\" data-kind=\"{}\"><td title=\"{}\">{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><span class=\"mono\">fwmap history trend --db history.db --metric \"object:{}\" --last 20</span></td></tr>",
+                "<tr data-search=\"{} {}\" data-kind=\"{}\"><td title=\"{}\">{}</td><td>{}</td><td>{}</td><td>{}</td><td><div class=\"hint muted\">{}</div>{}</td><td><span class=\"mono\">fwmap history trend --db history.db --metric \"object:{}\" --last 20</span></td></tr>",
                 escape(&target),
                 escape(&summary),
                 escape(object_source_kind_label(kind)),
@@ -1065,7 +1126,8 @@ fn object_details(current: &AnalysisResult) -> String {
                 escape(object_source_kind_label(kind)),
                 sections,
                 format_bytes(total_size),
-                escape(&format!("[{}] {}", confidence, summary)),
+                escape(&format!("confidence: {confidence}")),
+                render_reason_list(&summary),
                 escape(&target)
             )
         })
@@ -1184,6 +1246,16 @@ fn cpp_diff_table(current: &AnalysisResult, title: &str, entries: &[DiffEntry], 
         .iter()
         .map(|entry| {
             let members = group_symbols(&current.cpp_view, group_by, &entry.name);
+            let detail_search = members
+                .iter()
+                .take(3)
+                .map(|item| {
+                    explain_symbol(current, &item.raw_name)
+                        .map(|value| format!("{} {}", item.display_name, value.summary))
+                        .unwrap_or_else(|| item.display_name.clone())
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
             let detail = members
                 .iter()
                 .take(3)
@@ -1191,10 +1263,14 @@ fn cpp_diff_table(current: &AnalysisResult, title: &str, entries: &[DiffEntry], 
                     let explain = explain_symbol(current, &item.raw_name)
                         .map(|value| value.summary)
                         .unwrap_or_else(|| "No why-linked evidence".to_string());
-                    format!("{}: {}", item.display_name, explain)
+                    format!(
+                        "<li><strong>{}</strong>{}</li>",
+                        escape(&item.display_name),
+                        render_reason_list_inline(&explain)
+                    )
                 })
                 .collect::<Vec<_>>()
-                .join(" | ");
+                .join("");
             let drill_down = members
                 .iter()
                 .take(5)
@@ -1202,13 +1278,14 @@ fn cpp_diff_table(current: &AnalysisResult, title: &str, entries: &[DiffEntry], 
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td class=\"{}\">{:+}</td><td>{}</td><td>{}</td></tr>",
+                "<tr data-search=\"{}\"><td>{}</td><td>{}</td><td>{}</td><td class=\"{}\">{:+}</td><td><ul class=\"compact-list\">{}</ul></td><td>{}</td></tr>",
+                escape(&detail_search),
                 escape(&entry.name),
                 format_bytes(entry.current),
                 format_bytes(entry.previous),
                 delta_class(entry.delta),
                 entry.delta,
-                escape(&detail),
+                detail,
                 escape(&drill_down)
             )
         })
@@ -1218,6 +1295,40 @@ fn cpp_diff_table(current: &AnalysisResult, title: &str, entries: &[DiffEntry], 
         "<h3>{}</h3><table><thead><tr><th>Name</th><th>Current</th><th>Previous</th><th>Delta</th><th>Why Linked</th><th>Symbols</th></tr></thead><tbody>{rows}</tbody></table>",
         escape(title)
     )
+}
+
+fn render_reason_list(summary: &str) -> String {
+    let parts = split_reason_parts(summary);
+    if parts.len() <= 1 {
+        return format!("<div>{}</div>", escape(summary));
+    }
+    let items = parts
+        .iter()
+        .map(|part| format!("<li>{}</li>", escape(part)))
+        .collect::<Vec<_>>()
+        .join("");
+    format!("<ul class=\"compact-list\">{items}</ul>")
+}
+
+fn render_reason_list_inline(summary: &str) -> String {
+    let parts = split_reason_parts(summary);
+    if parts.len() <= 1 {
+        return format!(": {}", escape(summary));
+    }
+    let items = parts
+        .iter()
+        .map(|part| format!("<li>{}</li>", escape(part)))
+        .collect::<Vec<_>>()
+        .join("");
+    format!("<ul class=\"compact-list\">{items}</ul>")
+}
+
+fn split_reason_parts(summary: &str) -> Vec<&str> {
+    summary
+        .split(" | ")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect()
 }
 
 fn diff_summary(diff: &DiffResult) -> String {
@@ -1679,6 +1790,8 @@ mod tests {
         assert!(html.contains("Memory Regions Overview"));
         assert!(html.contains("Policy"));
         assert!(html.contains("budget.path.delta"));
+        assert!(html.contains("Evidence ("));
+        assert!(html.contains("why-card"));
         assert!(html.contains("Filter section"));
         assert!(html.contains("Unknown Source Ratio"));
         let _ = fs::remove_file(path);
