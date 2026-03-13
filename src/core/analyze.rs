@@ -69,6 +69,7 @@ pub fn analyze_paths(
     let mut symbols = elf.symbols;
     apply_demangling(&mut symbols, options.demangle);
     let dwarf_data = dwarf::parse_dwarf(elf_path, &elf.sections, options)?;
+    // Rebuild source aggregates after demangling so reports and diffs share one normalized view.
     let source_files = aggregate_source_files(&dwarf_data.line_attributions, &symbols);
     let function_attributions = aggregate_function_attributions(&dwarf_data.line_attributions, &symbols);
     let line_hotspots = aggregate_line_hotspots(&dwarf_data.line_attributions);
@@ -217,6 +218,7 @@ fn aggregate_function_attributions(lines: &[LineAttribution], symbols: &[SymbolI
             let mut ranges = Vec::<SourceSpan>::new();
             let mut path = None;
             for line in lines {
+                // Attribute bytes by address overlap so optimized code still contributes to the owning symbol.
                 let overlap_start = symbol_start.max(line.range.start);
                 let overlap_end = symbol_end.min(line.range.end);
                 if overlap_start >= overlap_end {
@@ -310,6 +312,7 @@ fn compress_source_spans(mut spans: Vec<SourceSpan>) -> Vec<SourceSpan> {
     });
     let mut compressed: Vec<SourceSpan> = Vec::new();
     for span in spans {
+        // Merge adjacent lines to keep HTML/CI output readable when DWARF emits one row per instruction group.
         if let Some(last) = compressed.last_mut() {
             if last.path == span.path && span.line_start <= last.line_end.saturating_add(1) {
                 last.line_end = last.line_end.max(span.line_end);
@@ -554,6 +557,7 @@ mod tests {
         let diff = DiffResult {
             rom_delta: 10,
             ram_delta: 8,
+            unknown_source_delta: 0,
             summary: DiffSummary::default(),
             section_diffs: vec![
                 crate::model::DiffEntry {
@@ -580,6 +584,9 @@ mod tests {
             }],
             object_diffs: Vec::new(),
             archive_diffs: Vec::new(),
+            source_file_diffs: Vec::new(),
+            function_diffs: Vec::new(),
+            line_diffs: Vec::new(),
         };
         let warnings = evaluate_warnings(&current, Some(&diff), &ThresholdConfig::default(), &[]);
         assert!(warnings.iter().any(|w| w.code == "ROM_THRESHOLD"));
@@ -597,6 +604,7 @@ mod tests {
         let diff = DiffResult {
             rom_delta: 0,
             ram_delta: 0,
+            unknown_source_delta: 0,
             summary: DiffSummary::default(),
             section_diffs: vec![crate::model::DiffEntry {
                 name: ".data".to_string(),
@@ -614,6 +622,9 @@ mod tests {
             }],
             object_diffs: Vec::new(),
             archive_diffs: Vec::new(),
+            source_file_diffs: Vec::new(),
+            function_diffs: Vec::new(),
+            line_diffs: Vec::new(),
         };
         let thresholds = ThresholdConfig {
             rom_percent: 95.0,

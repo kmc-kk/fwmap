@@ -19,6 +19,9 @@ pub fn apply_threshold_overrides(thresholds: &mut ThresholdConfig, overrides: &R
     if let Some(value) = overrides.ram_usage_warn {
         thresholds.ram_percent = normalize_ratio_or_percent(value);
     }
+    if let Some(value) = overrides.unknown_source_warn {
+        thresholds.unknown_source_ratio = normalize_ratio_or_percent(value) / 100.0;
+    }
     if let Some(value) = overrides.symbol_growth_warn_bytes {
         thresholds.symbol_growth_bytes = value;
     }
@@ -71,6 +74,17 @@ fn validate_rule(rule: &CustomRule) -> Result<(), String> {
         }
         RuleKind::ObjectMatch => {
             require_field(rule, rule.object.as_deref(), "object")?;
+        }
+        RuleKind::SourcePathGrowth => {
+            require_field(rule, rule.pattern.as_deref(), "pattern")?;
+            require_int(rule, rule.threshold_bytes.or(rule.warn_if_delta_bytes_gt), "threshold_bytes")?;
+        }
+        RuleKind::FunctionGrowth => {
+            require_field(rule, rule.pattern.as_deref(), "pattern")?;
+            require_int(rule, rule.threshold_bytes.or(rule.warn_if_delta_bytes_gt), "threshold_bytes")?;
+        }
+        RuleKind::UnknownSourceRatio => {
+            require_float(rule, rule.warn_if_greater_than, "warn_if_greater_than")?;
         }
     }
     Ok(())

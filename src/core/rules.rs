@@ -31,9 +31,10 @@ pub struct RuleResult {
 }
 
 pub fn evaluate_default_rules(context: &RuleContext<'_>) -> Vec<WarningItem> {
-    let rules: [&dyn Rule; 9] = [
+    let rules: [&dyn Rule; 10] = [
         &RomUsageHighRule,
         &RamUsageHighRule,
+        &UnknownSourceRatioRule,
         &RegionUsageHighRule,
         &RegionFreeSpaceLowRule,
         &SectionRegionMismatchRule,
@@ -80,6 +81,9 @@ fn evaluate_custom_rule(context: &RuleContext<'_>, rule: &CustomRule) -> Vec<Rul
         RuleKind::SymbolDelta => evaluate_custom_symbol_delta(context, rule),
         RuleKind::SymbolMatch => evaluate_custom_symbol_match(context, rule),
         RuleKind::ObjectMatch => evaluate_custom_object_match(context, rule),
+        RuleKind::SourcePathGrowth => evaluate_custom_source_path_growth(context, rule),
+        RuleKind::FunctionGrowth => evaluate_custom_function_growth(context, rule),
+        RuleKind::UnknownSourceRatio => evaluate_custom_unknown_source_ratio(context, rule),
     }
 }
 
@@ -171,6 +175,50 @@ fn evaluate_custom_object_match(context: &RuleContext<'_>, rule: &CustomRule) ->
         .collect()
 }
 
+fn evaluate_custom_source_path_growth(context: &RuleContext<'_>, rule: &CustomRule) -> Vec<RuleResult> {
+    let Some(diff) = context.diff else {
+        return Vec::new();
+    };
+    let Some(pattern) = rule.pattern.as_deref() else {
+        return Vec::new();
+    };
+    let threshold = rule.threshold_bytes.or(rule.warn_if_delta_bytes_gt).unwrap_or_default();
+    diff.source_file_diffs
+        .iter()
+        // Source rules operate on the normalized diff keys so one pattern works across CLI, JSON, and HTML.
+        .filter(|entry| entry.delta > threshold)
+        .filter(|entry| wildcard_match(pattern, &entry.name))
+        .map(|entry| custom_rule_result(rule, Some(entry.name.clone())))
+        .collect()
+}
+
+fn evaluate_custom_function_growth(context: &RuleContext<'_>, rule: &CustomRule) -> Vec<RuleResult> {
+    let Some(diff) = context.diff else {
+        return Vec::new();
+    };
+    let Some(pattern) = rule.pattern.as_deref() else {
+        return Vec::new();
+    };
+    let threshold = rule.threshold_bytes.or(rule.warn_if_delta_bytes_gt).unwrap_or_default();
+    diff.function_diffs
+        .iter()
+        .filter(|entry| entry.delta > threshold)
+        .filter(|entry| wildcard_match(pattern, &entry.name))
+        .map(|entry| custom_rule_result(rule, Some(entry.name.clone())))
+        .collect()
+}
+
+fn evaluate_custom_unknown_source_ratio(context: &RuleContext<'_>, rule: &CustomRule) -> Vec<RuleResult> {
+    let Some(threshold) = rule.warn_if_greater_than else {
+        return Vec::new();
+    };
+    let threshold = if threshold <= 1.0 { threshold } else { threshold / 100.0 };
+    (context.current.debug_info.unknown_source_ratio >= threshold)
+        .then(|| custom_rule_result(rule, Some("unknown_source".to_string())))
+        .into_iter()
+        .collect()
+}
+
 fn custom_rule_result(rule: &CustomRule, related: Option<String>) -> RuleResult {
     RuleResult {
         code: rule.id.clone(),
@@ -194,8 +242,23 @@ fn normalize_ratio_or_percent(value: f64) -> f64 {
     if value <= 1.0 { value * 100.0 } else { value }
 }
 
+fn wildcard_match(pattern: &str, value: &str) -> bool {
+    // A tiny matcher is enough for current rule files and avoids pulling in a glob engine just for CI thresholds.
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix("/**") {
+        return value.starts_with(prefix);
+    }
+    if let Some((prefix, suffix)) = pattern.split_once('*') {
+        return value.starts_with(prefix) && value.ends_with(suffix);
+    }
+    value == pattern
+}
+
 struct RomUsageHighRule;
 struct RamUsageHighRule;
+struct UnknownSourceRatioRule;
 struct RegionUsageHighRule;
 struct RegionFreeSpaceLowRule;
 struct SectionRegionMismatchRule;
@@ -245,6 +308,24 @@ impl Rule for RamUsageHighRule {
             }
             _ => Vec::new(),
         }
+    }
+}
+
+impl Rule for UnknownSourceRatioRule {
+    fn evaluate(&self, context: &RuleContext<'_>) -> Vec<RuleResult> {
+        (context.current.debug_info.unknown_source_ratio >= context.thresholds.unknown_source_ratio)
+            .then(|| RuleResult {
+                code: "UNKNOWN_SOURCE_RATIO".to_string(),
+                severity: RuleSeverity::Warn,
+                message: format!(
+                    "Unknown source attribution exceeded {:.0}% ({:.1}%)",
+                    context.thresholds.unknown_source_ratio * 100.0,
+                    context.current.debug_info.unknown_source_ratio * 100.0
+                ),
+                related: Some("unknown_source".to_string()),
+            })
+            .into_iter()
+            .collect()
     }
 }
 
@@ -438,6 +519,7 @@ mod tests {
         let diff = DiffResult {
             rom_delta: 10,
             ram_delta: 8,
+            unknown_source_delta: 0,
             summary: DiffSummary::default(),
             section_diffs: vec![DiffEntry {
                 name: ".data".to_string(),
@@ -455,6 +537,9 @@ mod tests {
             }],
             object_diffs: Vec::new(),
             archive_diffs: Vec::new(),
+            source_file_diffs: Vec::new(),
+            function_diffs: Vec::new(),
+            line_diffs: Vec::new(),
         };
         let context = RuleContext {
             current: &current,
@@ -483,6 +568,7 @@ mod tests {
         let diff = DiffResult {
             rom_delta: 0,
             ram_delta: 0,
+            unknown_source_delta: 0,
             summary: DiffSummary::default(),
             section_diffs: vec![DiffEntry {
                 name: ".data".to_string(),
@@ -500,6 +586,9 @@ mod tests {
             }],
             object_diffs: Vec::new(),
             archive_diffs: Vec::new(),
+            source_file_diffs: Vec::new(),
+            function_diffs: Vec::new(),
+            line_diffs: Vec::new(),
         };
         let thresholds = ThresholdConfig {
             rom_percent: 95.0,
@@ -533,7 +622,9 @@ mod tests {
             section: None,
             symbol: Some("blob".to_string()),
             object: None,
+            pattern: None,
             warn_if_greater_than: None,
+            threshold_bytes: None,
             warn_if_delta_bytes_gt: None,
             allowlist: Vec::new(),
             denylist: Vec::new(),
@@ -546,6 +637,83 @@ mod tests {
         };
         let warnings = evaluate_default_rules(&context);
         assert!(warnings.iter().any(|warning| warning.code == "blob-is-forbidden" && warning.level == WarningLevel::Error));
+    }
+
+    #[test]
+    fn source_growth_and_unknown_source_rules_work() {
+        let mut current = stub_analysis();
+        current.debug_info.unknown_source_ratio = 0.20;
+        let diff = DiffResult {
+            rom_delta: 0,
+            ram_delta: 0,
+            unknown_source_delta: 6,
+            summary: DiffSummary::default(),
+            section_diffs: Vec::new(),
+            symbol_diffs: Vec::new(),
+            object_diffs: Vec::new(),
+            archive_diffs: Vec::new(),
+            source_file_diffs: vec![DiffEntry {
+                name: "src/app/main.cpp".to_string(),
+                current: 8192,
+                previous: 1024,
+                delta: 7168,
+                change: DiffChangeKind::Increased,
+            }],
+            function_diffs: vec![DiffEntry {
+                name: "src/app/main.cpp::IRQHandler".to_string(),
+                current: 2048,
+                previous: 256,
+                delta: 1792,
+                change: DiffChangeKind::Increased,
+            }],
+            line_diffs: Vec::new(),
+        };
+        let custom_rules = vec![
+            crate::model::CustomRule {
+                id: "app_sources_growth".to_string(),
+                kind: crate::model::RuleKind::SourcePathGrowth,
+                severity: crate::model::RuleSeverityConfig::Warn,
+                message: "app sources grew".to_string(),
+                enabled: true,
+                region: None,
+                section: None,
+                symbol: None,
+                object: None,
+                pattern: Some("src/app/**".to_string()),
+                warn_if_greater_than: None,
+                threshold_bytes: Some(4096),
+                warn_if_delta_bytes_gt: None,
+                allowlist: Vec::new(),
+                denylist: Vec::new(),
+            },
+            crate::model::CustomRule {
+                id: "irq_handler_growth".to_string(),
+                kind: crate::model::RuleKind::FunctionGrowth,
+                severity: crate::model::RuleSeverityConfig::Error,
+                message: "IRQ handler grew".to_string(),
+                enabled: true,
+                region: None,
+                section: None,
+                symbol: None,
+                object: None,
+                pattern: Some("*IRQHandler".to_string()),
+                warn_if_greater_than: None,
+                threshold_bytes: Some(1024),
+                warn_if_delta_bytes_gt: None,
+                allowlist: Vec::new(),
+                denylist: Vec::new(),
+            },
+        ];
+        let context = RuleContext {
+            current: &current,
+            diff: Some(&diff),
+            thresholds: &ThresholdConfig::default(),
+            custom_rules: &custom_rules,
+        };
+        let warnings = evaluate_default_rules(&context);
+        assert!(warnings.iter().any(|warning| warning.code == "UNKNOWN_SOURCE_RATIO"));
+        assert!(warnings.iter().any(|warning| warning.code == "app_sources_growth"));
+        assert!(warnings.iter().any(|warning| warning.code == "irq_handler_growth" && warning.level == WarningLevel::Error));
     }
 
     fn stub_analysis() -> AnalysisResult {

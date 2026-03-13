@@ -94,7 +94,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             ci_summary,
             ci_format,
             ci_out,
+            ci_source_summary,
             fail_on_warning,
+            max_source_diff_items,
+            min_line_diff_bytes,
+            hide_unknown_source,
             thresholds,
             rules,
             demangle,
@@ -141,9 +145,15 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             };
             let ci_format = ci_format.or(if ci_summary { Some(CiFormat::Text) } else { None });
             if let Some(format) = ci_format {
-                print_ci_summary(&current, diff.as_ref(), format)?;
+                let source_options = crate::render::SourceRenderOptions {
+                    enabled: ci_source_summary,
+                    max_diff_items: max_source_diff_items,
+                    min_line_diff_bytes,
+                    hide_unknown_source,
+                };
+                print_ci_summary(&current, diff.as_ref(), format, source_options)?;
                 if let Some(path) = ci_out.as_deref() {
-                    write_ci_summary(path, &current, diff.as_ref(), format)?;
+                    write_ci_summary(path, &current, diff.as_ref(), format, source_options)?;
                 }
             } else {
                 print_cli_summary(&current, diff.as_ref(), verbose);
@@ -162,9 +172,15 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                     }
                 }
             }
-            write_html_report(&out, &current, diff.as_ref())?;
+            let source_options = crate::render::SourceRenderOptions {
+                enabled: ci_source_summary,
+                max_diff_items: max_source_diff_items,
+                min_line_diff_bytes,
+                hide_unknown_source,
+            };
+            write_html_report(&out, &current, diff.as_ref(), source_options)?;
             if let Some(path) = report_json.as_deref() {
-                write_json_report(path, &current, diff.as_ref(), &options.thresholds)?;
+                write_json_report(path, &current, diff.as_ref(), &options.thresholds, source_options)?;
                 if !ci_summary {
                     println!("JSON: {}", path.display());
                 }
@@ -226,7 +242,11 @@ enum Command {
         ci_summary: bool,
         ci_format: Option<CiFormat>,
         ci_out: Option<PathBuf>,
+        ci_source_summary: bool,
         fail_on_warning: bool,
+        max_source_diff_items: usize,
+        min_line_diff_bytes: u64,
+        hide_unknown_source: bool,
         thresholds: ThresholdConfig,
         rules: Option<PathBuf>,
         demangle: DemangleMode,
@@ -264,7 +284,11 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut ci_summary = false;
     let mut ci_format = None;
     let mut ci_out = None;
+    let mut ci_source_summary = false;
     let mut fail_on_warning = false;
+    let mut max_source_diff_items = 10usize;
+    let mut min_line_diff_bytes = 1u64;
+    let mut hide_unknown_source = false;
     let mut thresholds = ThresholdConfig::default();
     let mut rules = None;
     let mut demangle = DemangleMode::Auto;
@@ -289,6 +313,11 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                 index += 1;
                 continue;
             }
+            "--ci-source-summary" => {
+                ci_source_summary = true;
+                index += 1;
+                continue;
+            }
             "--ci-format" => {
                 let value = args.get(index + 1).ok_or_else(|| "missing value for --ci-format".to_string())?;
                 ci_format = Some(parse_ci_format(value)?);
@@ -300,6 +329,11 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                 index += 1;
                 continue;
             }
+            "--hide-unknown-source" => {
+                hide_unknown_source = true;
+                index += 1;
+                continue;
+            }
             "--fail-on-missing-dwarf" => {
                 fail_on_missing_dwarf = true;
                 index += 1;
@@ -307,7 +341,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
             }
             "--help" | "-h" => return Ok(Command::Help),
             "--version" | "-V" => return Ok(Command::Version),
-            "--threshold-rom" | "--threshold-ram" | "--threshold-symbol-growth" | "--threshold-region" => {
+            "--threshold-rom" | "--threshold-ram" | "--threshold-symbol-growth" | "--threshold-region" | "--max-source-diff-items" | "--min-line-diff-bytes" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--threshold-rom" => thresholds.rom_percent = parse_percent(value, key)?,
@@ -317,6 +351,8 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                         let (name, percent) = parse_region_threshold(value)?;
                         thresholds.region_percent.insert(name, percent);
                     }
+                    "--max-source-diff-items" => max_source_diff_items = parse_usize(value, key)?,
+                    "--min-line-diff-bytes" => min_line_diff_bytes = parse_u64(value, key)?,
                     _ => {}
                 }
                 index += 2;
@@ -421,7 +457,11 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         ci_summary,
         ci_format,
         ci_out,
+        ci_source_summary,
         fail_on_warning,
+        max_source_diff_items,
+        min_line_diff_bytes,
+        hide_unknown_source,
         thresholds,
         rules,
         demangle,
@@ -477,8 +517,12 @@ Options:
   --path-remap from=to Remap DWARF source path prefixes (repeatable)
   --fail-on-missing-dwarf Return an error when DWARF was requested but unavailable
   --ci-summary Print compact CI-friendly summary
+  --ci-source-summary Include top growing source files, functions, and line ranges in CI output
   --ci-format text|markdown|json Select CI summary format
   --ci-out    Write CI summary to the given path
+  --max-source-diff-items Limit source diff items shown in CI/HTML/JSON summaries
+  --min-line-diff-bytes Minimum line hotspot diff size to display
+  --hide-unknown-source Hide unknown-source diff rows from summaries
   --fail-on-warning Return non-zero if warnings are present
   --threshold-rom Percent threshold for ROM warnings
   --threshold-ram Percent threshold for RAM warnings
@@ -694,6 +738,10 @@ fn parse_u64(value: &str, key: &str) -> Result<u64, String> {
     value.parse::<u64>().map_err(|_| format!("invalid integer for {key}: {value}"))
 }
 
+fn parse_usize(value: &str, key: &str) -> Result<usize, String> {
+    value.parse::<usize>().map_err(|_| format!("invalid integer for {key}: {value}"))
+}
+
 fn parse_region_threshold(value: &str) -> Result<(String, f64), String> {
     let (name, percent) = value
         .split_once(':')
@@ -800,6 +848,12 @@ mod tests {
             "markdown".to_string(),
             "--ci-out".to_string(),
             "ci.md".to_string(),
+            "--ci-source-summary".to_string(),
+            "--max-source-diff-items".to_string(),
+            "7".to_string(),
+            "--min-line-diff-bytes".to_string(),
+            "64".to_string(),
+            "--hide-unknown-source".to_string(),
             "--threshold-rom".to_string(),
             "90".to_string(),
             "--threshold-region".to_string(),
@@ -819,9 +873,13 @@ mod tests {
                 ci_summary,
                 ci_format,
                 ci_out,
+                ci_source_summary,
                 rules,
                 demangle,
                 fail_on_warning,
+                max_source_diff_items,
+                min_line_diff_bytes,
+                hide_unknown_source,
                 thresholds,
                 ..
             } => {
@@ -830,7 +888,11 @@ mod tests {
                 assert_eq!(ci_out.unwrap(), PathBuf::from("ci.md"));
                 assert_eq!(rules.unwrap(), PathBuf::from("Cargo.toml"));
                 assert!(ci_summary);
+                assert!(ci_source_summary);
                 assert!(fail_on_warning);
+                assert_eq!(max_source_diff_items, 7);
+                assert_eq!(min_line_diff_bytes, 64);
+                assert!(hide_unknown_source);
                 assert!(matches!(demangle, DemangleMode::On));
                 assert_eq!(thresholds.rom_percent, 90.0);
                 assert_eq!(thresholds.region_percent.get("FLASH"), Some(&92.0));

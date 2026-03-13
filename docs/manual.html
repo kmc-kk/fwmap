@@ -147,6 +147,9 @@ body{font-family:'Segoe UI',sans-serif;max-width:980px;margin:40px auto;padding:
   --prev-elf prev/app.elf \
   --prev-map prev/app.map \
   --ci-format markdown \
+  --ci-source-summary \
+  --max-source-diff-items 8 \
+  --min-line-diff-bytes 64 \
   --ci-out build/fwmap_ci.md
 </code></pre>
 <h3 id="warning-1">warning が出たら失敗にする</h3>
@@ -322,6 +325,7 @@ Report: build/fwmap_diff_report.html
 <li>source files</li>
 <li>functions</li>
 <li>line hotspots</li>
+<li>source diff</li>
 <li>regions</li>
 <li>diff summary</li>
 <li>diff 本体</li>
@@ -358,6 +362,7 @@ Triggered rules: forbid-g-rx-ring(error), REGION_THRESHOLD(warn)
 <li>人がまず差分だけを素早く確認する</li>
 <li>markdown を PR / MR コメントへそのまま貼る</li>
 <li>JSON を別ジョブで機械判定する</li>
+<li>source file / function / line-range の増加要因を短く共有する</li>
 </ul>
 <p>利用できる形式:</p>
 <ul>
@@ -365,6 +370,18 @@ Triggered rules: forbid-g-rx-ring(error), REGION_THRESHOLD(warn)
 <li><code>markdown</code></li>
 <li><code>json</code></li>
 </ul>
+<p>source diff を CI に含めたい場合:</p>
+<pre><code class="language-bash">fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --prev-elf prev/app.elf \
+  --prev-map prev/app.map \
+  --ci-format markdown \
+  --ci-source-summary \
+  --max-source-diff-items 8 \
+  --min-line-diff-bytes 64 \
+  --ci-out build/fwmap_ci.md
+</code></pre>
 <h3 id="warning-job">5.8 warning が出たら job を失敗にする</h3>
 <p>warning を見逃したくない場合は <code>--fail-on-warning</code> を付けます。</p>
 <pre><code class="language-bash">fwmap analyze \
@@ -436,6 +453,9 @@ message = &quot;.data increased by more than 2KB&quot;
 <li>内蔵しきい値を TOML から上書きする</li>
 <li>特定 region の使用率に独自 rule を足す</li>
 <li>特定 section の増加量に独自 rule を足す</li>
+<li>特定 source path 配下の増加を検知する</li>
+<li>特定 function 名パターンの増加を検知する</li>
+<li>unknown source ratio を警告化する</li>
 </ul>
 <p>現行版で対応している <code>kind</code>:</p>
 <ul>
@@ -444,6 +464,9 @@ message = &quot;.data increased by more than 2KB&quot;
 <li><code>symbol_delta</code></li>
 <li><code>symbol_match</code></li>
 <li><code>object_match</code></li>
+<li><code>source_path_growth</code></li>
+<li><code>function_growth</code></li>
+<li><code>unknown_source_ratio</code></li>
 </ul>
 <p>ルールファイルが壊れている場合や必須項目が足りない場合は、解析前に明確なエラーで停止します。</p>
 <h3 id="demangle">5.9.2 demangle の使い分け</h3>
@@ -627,6 +650,26 @@ fwmap history trend --db history.db --metric section:.bss --last 20
 <td>CI 要約の出力先</td>
 </tr>
 <tr>
+<td><code>--ci-source-summary</code></td>
+<td>任意</td>
+<td>source file / function / line-range diff を CI 要約へ含める</td>
+</tr>
+<tr>
+<td><code>--max-source-diff-items &lt;n&gt;</code></td>
+<td>任意</td>
+<td>source diff の表示件数上限</td>
+</tr>
+<tr>
+<td><code>--min-line-diff-bytes &lt;n&gt;</code></td>
+<td>任意</td>
+<td>小さすぎる line diff を省略するしきい値</td>
+</tr>
+<tr>
+<td><code>--hide-unknown-source</code></td>
+<td>任意</td>
+<td>unknown source diff を要約から隠す</td>
+</tr>
+<tr>
 <td><code>--fail-on-warning</code></td>
 <td>任意</td>
 <td>warning があれば非 0 終了</td>
@@ -757,6 +800,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li><code>line_hotspots</code></li>
 <li><code>line_attributions</code></li>
 <li><code>unknown_source</code></li>
+<li><code>source_diff</code></li>
 <li><code>regions</code></li>
 <li><code>diff_summary</code></li>
 <li><code>diff</code></li>
@@ -906,6 +950,10 @@ Top symbol growth: g_rx_ring (+4096)
 <li>上位増加 section</li>
 <li>上位増加 symbol</li>
 <li>上位増加 object</li>
+<li>上位増加 source file</li>
+<li>上位増加 function</li>
+<li>上位増加 line-range</li>
+<li>unknown source delta</li>
 <li>Added Symbols</li>
 <li>Removed Symbols</li>
 <li>Removed Objects</li>

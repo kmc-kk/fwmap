@@ -79,6 +79,7 @@ impl<'a> ItaniumParser<'a> {
         };
 
         if self.consume('I') {
+            // Keep template rendering shallow but readable; this demangler is for reports, not full ABI round-tripping.
             let mut args = Vec::new();
             while !self.peek_is('E') {
                 args.push(self.parse_type()?);
@@ -176,6 +177,7 @@ impl<'a> ItaniumParser<'a> {
             self.offset += ch.len_utf8();
         }
         self.expect('_')?;
+        // Itanium substitutions are base-36 encoded and refer back to previously parsed names/types.
         let index = if seq.is_empty() {
             0
         } else {

@@ -6,6 +6,25 @@ use crate::demangle::display_name;
 use crate::diff::{names_for_kind, top_increases};
 use crate::model::{AnalysisResult, CiFormat, DiffChangeKind, DiffEntry, DiffResult, ThresholdConfig, WarningItem, WarningLevel};
 
+#[derive(Debug, Clone, Copy)]
+pub struct SourceRenderOptions {
+    pub enabled: bool,
+    pub max_diff_items: usize,
+    pub min_line_diff_bytes: u64,
+    pub hide_unknown_source: bool,
+}
+
+impl Default for SourceRenderOptions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_diff_items: 10,
+            min_line_diff_bytes: 1,
+            hide_unknown_source: false,
+        }
+    }
+}
+
 pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, verbose: bool) {
     println!("ELF: {}", result.binary.path);
     println!("Toolchain: {} (requested: {})", result.toolchain.resolved, result.toolchain.requested);
@@ -65,8 +84,13 @@ pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, ver
     }
 }
 
-pub fn write_html_report(path: &Path, current: &AnalysisResult, diff: Option<&DiffResult>) -> Result<(), String> {
-    let html = build_html(current, diff);
+pub fn write_html_report(
+    path: &Path,
+    current: &AnalysisResult,
+    diff: Option<&DiffResult>,
+    source_options: SourceRenderOptions,
+) -> Result<(), String> {
+    let html = build_html(current, diff, source_options);
     fs::write(path, html).map_err(|err| format!("failed to write HTML report '{}': {err}", path.display()))
 }
 
@@ -75,13 +99,19 @@ pub fn write_json_report(
     current: &AnalysisResult,
     diff: Option<&DiffResult>,
     thresholds: &ThresholdConfig,
+    source_options: SourceRenderOptions,
 ) -> Result<(), String> {
-    let json = build_json(current, diff, thresholds)?;
+    let json = build_json(current, diff, thresholds, source_options)?;
     fs::write(path, json).map_err(|err| format!("failed to write JSON report '{}': {err}", path.display()))
 }
 
-pub fn print_ci_summary(current: &AnalysisResult, diff: Option<&DiffResult>, format: CiFormat) -> Result<(), String> {
-    println!("{}", build_ci_summary(current, diff, format)?);
+pub fn print_ci_summary(
+    current: &AnalysisResult,
+    diff: Option<&DiffResult>,
+    format: CiFormat,
+    source_options: SourceRenderOptions,
+) -> Result<(), String> {
+    println!("{}", build_ci_summary(current, diff, format, source_options)?);
     Ok(())
 }
 
@@ -90,20 +120,26 @@ pub fn write_ci_summary(
     current: &AnalysisResult,
     diff: Option<&DiffResult>,
     format: CiFormat,
+    source_options: SourceRenderOptions,
 ) -> Result<(), String> {
-    let content = build_ci_summary(current, diff, format)?;
+    let content = build_ci_summary(current, diff, format, source_options)?;
     fs::write(path, content).map_err(|err| format!("failed to write CI summary '{}': {err}", path.display()))
 }
 
-pub fn build_ci_summary(current: &AnalysisResult, diff: Option<&DiffResult>, format: CiFormat) -> Result<String, String> {
+pub fn build_ci_summary(
+    current: &AnalysisResult,
+    diff: Option<&DiffResult>,
+    format: CiFormat,
+    source_options: SourceRenderOptions,
+) -> Result<String, String> {
     match format {
-        CiFormat::Text => Ok(build_ci_text(current, diff)),
-        CiFormat::Markdown => Ok(build_ci_markdown(current, diff)),
-        CiFormat::Json => build_ci_json(current, diff),
+        CiFormat::Text => Ok(build_ci_text(current, diff, source_options)),
+        CiFormat::Markdown => Ok(build_ci_markdown(current, diff, source_options)),
+        CiFormat::Json => build_ci_json(current, diff, source_options),
     }
 }
 
-fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
+fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>, source_options: SourceRenderOptions) -> String {
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>fwmap report</title><style>{}</style></head><body>{}</body></html>",
         style_block(),
@@ -121,14 +157,19 @@ fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
             section_breakdown(current),
             top_symbols(current),
             top_objects(current),
-            diff_section(diff),
+            diff_section(current, diff, source_options),
             footer(),
         ]
         .join("")
     )
 }
 
-fn build_json(current: &AnalysisResult, diff: Option<&DiffResult>, thresholds: &ThresholdConfig) -> Result<String, String> {
+fn build_json(
+    current: &AnalysisResult,
+    diff: Option<&DiffResult>,
+    thresholds: &ThresholdConfig,
+    source_options: SourceRenderOptions,
+) -> Result<String, String> {
     let payload = serde_json::json!({
         "schema_version": 1,
         "binary": &current.binary,
@@ -150,11 +191,12 @@ fn build_json(current: &AnalysisResult, diff: Option<&DiffResult>, thresholds: &
         "regions": &current.memory.region_summaries,
         "diff_summary": diff.map(|item| &item.summary),
         "diff": diff,
+        "source_diff": diff.map(|item| source_diff_payload(item, source_options)),
     });
     serde_json::to_string_pretty(&payload).map_err(|err| format!("failed to serialize JSON report: {err}"))
 }
 
-fn build_ci_text(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
+fn build_ci_text(current: &AnalysisResult, diff: Option<&DiffResult>, source_options: SourceRenderOptions) -> String {
     let mut lines = Vec::new();
     if let Some(diff) = diff {
         lines.push(format!("ROM: {:+} bytes", diff.rom_delta));
@@ -191,6 +233,24 @@ fn build_ci_text(current: &AnalysisResult, diff: Option<&DiffResult>) -> String 
             .unwrap_or(&entry.name);
         lines.push(format!("Top symbol growth: {} ({:+})", display, entry.delta));
     }
+    if source_options.enabled {
+        if let Some(entry) = diff.and_then(|item| top_increases(&item.source_file_diffs, 1).first().cloned()) {
+            lines.push(format!("Top source file growth: {} ({:+})", entry.name, entry.delta));
+        }
+        if let Some(entry) = diff.and_then(|item| top_increases(&item.function_diffs, 1).first().cloned()) {
+            lines.push(format!("Top function growth: {} ({:+})", entry.name, entry.delta));
+        }
+        if let Some(entry) = diff.and_then(|item| {
+            filtered_line_diffs(item, source_options)
+                .into_iter()
+                .next()
+        }) {
+            lines.push(format!("Top line growth: {} ({:+})", entry.name, entry.delta));
+        }
+        if let Some(diff) = diff.filter(|_| !source_options.hide_unknown_source) {
+            lines.push(format!("Unknown source delta: {:+} bytes", diff.unknown_source_delta));
+        }
+    }
     if !current.warnings.is_empty() {
         let triggered = current
             .warnings
@@ -203,7 +263,7 @@ fn build_ci_text(current: &AnalysisResult, diff: Option<&DiffResult>) -> String 
     lines.join("\n")
 }
 
-fn build_ci_markdown(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
+fn build_ci_markdown(current: &AnalysisResult, diff: Option<&DiffResult>, source_options: SourceRenderOptions) -> String {
     let mut out = Vec::new();
     out.push("# fwmap CI Summary".to_string());
     out.push(String::new());
@@ -251,6 +311,27 @@ fn build_ci_markdown(current: &AnalysisResult, diff: Option<&DiffResult>) -> Str
         out.push(String::new());
     }
 
+    if source_options.enabled {
+        let mut source = Vec::new();
+        if let Some(entry) = diff.and_then(|item| top_increases(&item.source_file_diffs, 1).first().cloned()) {
+            source.push(format!("- Top source file growth: `{}` ({:+})", entry.name, entry.delta));
+        }
+        if let Some(entry) = diff.and_then(|item| top_increases(&item.function_diffs, 1).first().cloned()) {
+            source.push(format!("- Top function growth: `{}` ({:+})", entry.name, entry.delta));
+        }
+        if let Some(entry) = diff.and_then(|item| filtered_line_diffs(item, source_options).into_iter().next()) {
+            source.push(format!("- Top line growth: `{}` ({:+})", entry.name, entry.delta));
+        }
+        if let Some(diff) = diff.filter(|_| !source_options.hide_unknown_source) {
+            source.push(format!("- Unknown source delta: `{:+}` bytes", diff.unknown_source_delta));
+        }
+        if !source.is_empty() {
+            out.push("## Source Diff".to_string());
+            out.extend(source);
+            out.push(String::new());
+        }
+    }
+
     out.push("## Rule Results".to_string());
     if current.warnings.is_empty() {
         out.push("- No warnings.".to_string());
@@ -267,7 +348,11 @@ fn build_ci_markdown(current: &AnalysisResult, diff: Option<&DiffResult>) -> Str
     out.join("\n")
 }
 
-fn build_ci_json(current: &AnalysisResult, diff: Option<&DiffResult>) -> Result<String, String> {
+fn build_ci_json(
+    current: &AnalysisResult,
+    diff: Option<&DiffResult>,
+    source_options: SourceRenderOptions,
+) -> Result<String, String> {
     let payload = serde_json::json!({
         "schema_version": 1,
         "summary": {
@@ -289,6 +374,12 @@ fn build_ci_json(current: &AnalysisResult, diff: Option<&DiffResult>) -> Result<
         "top_section_growth": diff.and_then(|item| top_increases(&item.section_diffs, 1).first().cloned()),
         "top_object_growth": diff.and_then(|item| top_increases(&item.object_diffs, 1).first().cloned()),
         "top_symbol_growth": diff.and_then(|item| top_increases(&item.symbol_diffs, 1).first().cloned()),
+        "top_source_file_growth": diff.and_then(|item| top_increases(&item.source_file_diffs, 1).first().cloned()),
+        "top_function_growth": diff.and_then(|item| top_increases(&item.function_diffs, 1).first().cloned()),
+        "top_line_growth": diff.and_then(|item| filtered_line_diffs(item, source_options).into_iter().next()),
+        "unknown_source_delta": diff
+            .filter(|_| !source_options.hide_unknown_source)
+            .map(|item| item.unknown_source_delta),
         "rules": &current.warnings,
     });
     serde_json::to_string_pretty(&payload).map_err(|err| format!("failed to serialize CI JSON summary: {err}"))
@@ -614,14 +705,15 @@ fn top_objects(current: &AnalysisResult) -> String {
     format!("<section><h2>Top Object Contributions</h2><table><thead><tr><th>Object</th><th>Section</th><th>Size</th></tr></thead><tbody>{rows}</tbody></table></section>")
 }
 
-fn diff_section(diff: Option<&DiffResult>) -> String {
+fn diff_section(current: &AnalysisResult, diff: Option<&DiffResult>, source_options: SourceRenderOptions) -> String {
     match diff {
         Some(diff) => format!(
-            "<section><h2>Diff</h2>{}{}{}{}{}{}{} </section>",
+            "<section><h2>Diff</h2>{}{}{}{}{}{}{}{} </section>",
             diff_summary(diff),
             diff_table("Top Section Growth", &top_increases(&diff.section_diffs, 10), 10),
             diff_table("Top Symbol Growth", &top_increases(&diff.symbol_diffs, 10), 10),
             diff_table("Top Object Growth", &top_increases(&diff.object_diffs, 10), 10),
+            source_diff_section(current, diff, source_options),
             string_list("Added Symbols", &names_for_kind(&diff.symbol_diffs, DiffChangeKind::Added, 20)),
             string_list("Removed Symbols", &names_for_kind(&diff.symbol_diffs, DiffChangeKind::Removed, 20)),
             string_list("Removed Objects", &names_for_kind(&diff.object_diffs, DiffChangeKind::Removed, 20)),
@@ -632,11 +724,13 @@ fn diff_section(diff: Option<&DiffResult>) -> String {
 
 fn diff_summary(diff: &DiffResult) -> String {
     format!(
-        "<div class=\"grid\"><div class=\"card\"><strong>ROM delta</strong><div class=\"{}\">{:+} bytes</div></div><div class=\"card\"><strong>RAM delta</strong><div class=\"{}\">{:+} bytes</div></div><div class=\"card\"><strong>Section changes</strong><div>+{} / -{} / ↑{} / ↓{}</div></div><div class=\"card\"><strong>Symbol changes</strong><div>+{} / -{} / ↑{} / ↓{}</div></div><div class=\"card\"><strong>Object changes</strong><div>+{} / -{} / ↑{} / ↓{}</div></div></div>",
+        "<div class=\"grid\"><div class=\"card\"><strong>ROM delta</strong><div class=\"{}\">{:+} bytes</div></div><div class=\"card\"><strong>RAM delta</strong><div class=\"{}\">{:+} bytes</div></div><div class=\"card\"><strong>Unknown source</strong><div class=\"{}\">{:+} bytes</div></div><div class=\"card\"><strong>Section changes</strong><div>+{} / -{} / ↑{} / ↓{}</div></div><div class=\"card\"><strong>Symbol changes</strong><div>+{} / -{} / ↑{} / ↓{}</div></div><div class=\"card\"><strong>Object changes</strong><div>+{} / -{} / ↑{} / ↓{}</div></div></div>",
         delta_class(diff.rom_delta),
         diff.rom_delta,
         delta_class(diff.ram_delta),
         diff.ram_delta,
+        delta_class(diff.unknown_source_delta),
+        diff.unknown_source_delta,
         diff.summary.section_added,
         diff.summary.section_removed,
         diff.summary.section_increased,
@@ -650,6 +744,65 @@ fn diff_summary(diff: &DiffResult) -> String {
         diff.summary.object_increased,
         diff.summary.object_decreased,
     )
+}
+
+fn source_diff_section(current: &AnalysisResult, diff: &DiffResult, source_options: SourceRenderOptions) -> String {
+    let limit = source_options.max_diff_items.max(1);
+    let file_block = diff_table("Top Source File Growth", &top_increases(&diff.source_file_diffs, limit), limit);
+    let function_entries = top_increases(&diff.function_diffs, limit)
+        .into_iter()
+        .map(|mut entry| {
+            entry.name = function_display_name(current, &entry.name);
+            entry
+        })
+        .collect::<Vec<_>>();
+    let function_block = diff_table("Top Function Growth", &function_entries, limit);
+    let line_block = diff_table("Top Line Growth", &filtered_line_diffs(diff, source_options), limit);
+    let unknown_block = if source_options.hide_unknown_source {
+        String::new()
+    } else {
+        format!("<h3>Unknown Source</h3><p>{:+} bytes</p>", diff.unknown_source_delta)
+    };
+    format!("<h3>Source Diff</h3>{file_block}{function_block}{line_block}{unknown_block}")
+}
+
+fn filtered_line_diffs(diff: &DiffResult, source_options: SourceRenderOptions) -> Vec<DiffEntry> {
+    diff.line_diffs
+        .iter()
+        .filter(|entry| entry.delta.unsigned_abs() >= source_options.min_line_diff_bytes)
+        .take(source_options.max_diff_items.max(1))
+        .cloned()
+        .collect()
+}
+
+fn source_diff_payload(diff: &DiffResult, source_options: SourceRenderOptions) -> serde_json::Value {
+    serde_json::json!({
+        "unknown_source_delta": if source_options.hide_unknown_source {
+            serde_json::Value::Null
+        } else {
+            serde_json::json!(diff.unknown_source_delta)
+        },
+        "source_files": top_increases(&diff.source_file_diffs, source_options.max_diff_items.max(1)),
+        "functions": top_increases(&diff.function_diffs, source_options.max_diff_items.max(1)),
+        "lines": filtered_line_diffs(diff, source_options),
+    })
+}
+
+fn function_display_name(current: &AnalysisResult, key: &str) -> String {
+    current
+        .function_attributions
+        .iter()
+        .find_map(|item| {
+            let item_key = match item.path.as_deref() {
+                Some(path) => format!("{path}::{}", item.raw_name),
+                None => item.raw_name.clone(),
+            };
+            (item_key == key).then(|| match item.demangled_name.as_deref() {
+                Some(demangled) => format!("{demangled} [{key}]"),
+                None => key.to_string(),
+            })
+        })
+        .unwrap_or_else(|| key.to_string())
 }
 
 fn diff_table(title: &str, entries: &[DiffEntry], limit: usize) -> String {
@@ -701,7 +854,7 @@ fn escape(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_ci_summary, write_html_report, write_json_report};
+    use super::{build_ci_summary, write_html_report, write_json_report, SourceRenderOptions};
     use crate::model::{
         AnalysisResult, BinaryInfo, CiFormat, DebugInfoSummary, DiffChangeKind, DiffEntry, DiffResult, DiffSummary,
         MemoryRegion, MemorySummary, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo,
@@ -718,7 +871,7 @@ mod tests {
             SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
         ));
         let analysis = sample_analysis_with_sources();
-        write_html_report(&path, &analysis, None).unwrap();
+        write_html_report(&path, &analysis, None, SourceRenderOptions::default()).unwrap();
         let html = fs::read_to_string(&path).unwrap();
         assert!(html.contains("Overview"));
         assert!(html.contains("Top Symbols"));
@@ -738,7 +891,7 @@ mod tests {
         let mut analysis = sample_analysis();
         analysis.symbols[0].name = "_ZN3foo3barEv".to_string();
         analysis.symbols[0].demangled_name = Some("foo::bar()".to_string());
-        write_html_report(&path, &analysis, None).unwrap();
+        write_html_report(&path, &analysis, None, SourceRenderOptions::default()).unwrap();
         let html = fs::read_to_string(&path).unwrap();
         assert!(html.contains("foo::bar()"));
         assert!(html.contains("_ZN3foo3barEv"));
@@ -762,6 +915,7 @@ mod tests {
         let diff = DiffResult {
             rom_delta: 12,
             ram_delta: -8,
+            unknown_source_delta: 4,
             summary: DiffSummary {
                 section_added: 1,
                 section_removed: 0,
@@ -775,6 +929,18 @@ mod tests {
                 object_removed: 0,
                 object_increased: 0,
                 object_decreased: 0,
+                source_file_added: 0,
+                source_file_removed: 0,
+                source_file_increased: 1,
+                source_file_decreased: 0,
+                function_added: 0,
+                function_removed: 0,
+                function_increased: 1,
+                function_decreased: 0,
+                line_added: 0,
+                line_removed: 0,
+                line_increased: 1,
+                line_decreased: 0,
             },
             section_diffs: vec![DiffEntry {
                 name: ".text".to_string(),
@@ -792,14 +958,45 @@ mod tests {
             }],
             object_diffs: Vec::new(),
             archive_diffs: Vec::new(),
+            source_file_diffs: vec![DiffEntry {
+                name: "src/main.cpp".to_string(),
+                current: 64,
+                previous: 32,
+                delta: 32,
+                change: DiffChangeKind::Increased,
+            }],
+            function_diffs: vec![DiffEntry {
+                name: "src/main.cpp::_ZN3app4mainEv".to_string(),
+                current: 64,
+                previous: 32,
+                delta: 32,
+                change: DiffChangeKind::Increased,
+            }],
+            line_diffs: vec![DiffEntry {
+                name: "src/main.cpp:10-12".to_string(),
+                current: 64,
+                previous: 32,
+                delta: 32,
+                change: DiffChangeKind::Increased,
+            }],
         };
-        write_html_report(&path, &analysis, Some(&diff)).unwrap();
+        write_html_report(
+            &path,
+            &analysis,
+            Some(&diff),
+            SourceRenderOptions {
+                enabled: true,
+                ..SourceRenderOptions::default()
+            },
+        )
+        .unwrap();
         let html = fs::read_to_string(&path).unwrap();
         assert!(html.contains("Warnings"));
         assert!(html.contains("Diff"));
         assert!(html.contains("LARGE_SYMBOL"));
         assert!(html.contains("Added Symbols"));
         assert!(html.contains("Top Symbol Growth"));
+        assert!(html.contains("Source Diff"));
         assert!(html.contains("Memory Regions Overview"));
         let _ = fs::remove_file(path);
     }
@@ -812,7 +1009,7 @@ mod tests {
         ));
         let analysis = sample_analysis();
         let thresholds = ThresholdConfig::default();
-        write_json_report(&path, &analysis, None, &thresholds).unwrap();
+        write_json_report(&path, &analysis, None, &thresholds, SourceRenderOptions::default()).unwrap();
         let json = fs::read_to_string(&path).unwrap();
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"thresholds\""));
@@ -838,6 +1035,7 @@ mod tests {
         let diff = DiffResult {
             rom_delta: 16,
             ram_delta: 4,
+            unknown_source_delta: 8,
             summary: DiffSummary::default(),
             section_diffs: vec![DiffEntry {
                 name: ".text".to_string(),
@@ -861,16 +1059,67 @@ mod tests {
                 change: DiffChangeKind::Increased,
             }],
             archive_diffs: Vec::new(),
+            source_file_diffs: vec![DiffEntry {
+                name: "src/main.cpp".to_string(),
+                current: 64,
+                previous: 48,
+                delta: 16,
+                change: DiffChangeKind::Increased,
+            }],
+            function_diffs: vec![DiffEntry {
+                name: "src/main.cpp::_ZN3app4mainEv".to_string(),
+                current: 64,
+                previous: 48,
+                delta: 16,
+                change: DiffChangeKind::Increased,
+            }],
+            line_diffs: vec![DiffEntry {
+                name: "src/main.cpp:10-12".to_string(),
+                current: 64,
+                previous: 48,
+                delta: 16,
+                change: DiffChangeKind::Increased,
+            }],
         };
-        let text = build_ci_summary(&analysis, Some(&diff), CiFormat::Text).unwrap();
+        let text = build_ci_summary(
+            &analysis,
+            Some(&diff),
+            CiFormat::Text,
+            SourceRenderOptions {
+                enabled: true,
+                ..SourceRenderOptions::default()
+            },
+        )
+        .unwrap();
         assert!(text.contains("Errors: 1"));
         assert!(text.contains("Toolchain:"));
         assert!(text.contains("DWARF:"));
-        let markdown = build_ci_summary(&analysis, Some(&diff), CiFormat::Markdown).unwrap();
+        assert!(text.contains("Top source file growth:"));
+        let markdown = build_ci_summary(
+            &analysis,
+            Some(&diff),
+            CiFormat::Markdown,
+            SourceRenderOptions {
+                enabled: true,
+                ..SourceRenderOptions::default()
+            },
+        )
+        .unwrap();
         assert!(markdown.contains("# fwmap CI Summary"));
         assert!(markdown.contains("| Toolchain |"));
-        let json = build_ci_summary(&analysis, Some(&diff), CiFormat::Json).unwrap();
+        assert!(markdown.contains("## Source Diff"));
+        let json = build_ci_summary(
+            &analysis,
+            Some(&diff),
+            CiFormat::Json,
+            SourceRenderOptions {
+                enabled: true,
+                ..SourceRenderOptions::default()
+            },
+        )
+        .unwrap();
         assert!(json.contains("\"error_count\""));
+        assert!(json.contains("\"top_source_file_growth\""));
     }
 
     fn sample_analysis() -> AnalysisResult {

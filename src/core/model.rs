@@ -146,11 +146,15 @@ pub struct DiffEntry {
 pub struct DiffResult {
     pub rom_delta: i64,
     pub ram_delta: i64,
+    pub unknown_source_delta: i64,
     pub summary: DiffSummary,
     pub section_diffs: Vec<DiffEntry>,
     pub symbol_diffs: Vec<DiffEntry>,
     pub object_diffs: Vec<DiffEntry>,
     pub archive_diffs: Vec<DiffEntry>,
+    pub source_file_diffs: Vec<DiffEntry>,
+    pub function_diffs: Vec<DiffEntry>,
+    pub line_diffs: Vec<DiffEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
@@ -167,6 +171,18 @@ pub struct DiffSummary {
     pub object_removed: usize,
     pub object_increased: usize,
     pub object_decreased: usize,
+    pub source_file_added: usize,
+    pub source_file_removed: usize,
+    pub source_file_increased: usize,
+    pub source_file_decreased: usize,
+    pub function_added: usize,
+    pub function_removed: usize,
+    pub function_increased: usize,
+    pub function_decreased: usize,
+    pub line_added: usize,
+    pub line_removed: usize,
+    pub line_increased: usize,
+    pub line_decreased: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -232,6 +248,7 @@ pub struct ThresholdConfig {
     pub ram_percent: f64,
     pub region_default_percent: f64,
     pub region_percent: BTreeMap<String, f64>,
+    pub unknown_source_ratio: f64,
     pub symbol_growth_bytes: u64,
     pub region_low_free_bytes: u64,
     pub section_growth_rate: f64,
@@ -368,6 +385,7 @@ pub struct RuleConfigFile {
 pub struct RuleThresholdOverrides {
     pub rom_usage_warn: Option<f64>,
     pub ram_usage_warn: Option<f64>,
+    pub unknown_source_warn: Option<f64>,
     pub symbol_growth_warn_bytes: Option<u64>,
     pub large_symbol_warn_bytes: Option<u64>,
     pub section_growth_warn_percent: Option<f64>,
@@ -386,7 +404,9 @@ pub struct CustomRule {
     pub section: Option<String>,
     pub symbol: Option<String>,
     pub object: Option<String>,
+    pub pattern: Option<String>,
     pub warn_if_greater_than: Option<f64>,
+    pub threshold_bytes: Option<i64>,
     pub warn_if_delta_bytes_gt: Option<i64>,
     #[serde(default)]
     pub allowlist: Vec<String>,
@@ -402,6 +422,9 @@ pub enum RuleKind {
     SymbolDelta,
     SymbolMatch,
     ObjectMatch,
+    SourcePathGrowth,
+    FunctionGrowth,
+    UnknownSourceRatio,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -419,6 +442,7 @@ impl Default for ThresholdConfig {
             ram_percent: 85.0,
             region_default_percent: 85.0,
             region_percent: BTreeMap::new(),
+            unknown_source_ratio: 0.15,
             symbol_growth_bytes: 4 * 1024,
             region_low_free_bytes: 4 * 1024,
             section_growth_rate: 5.0,

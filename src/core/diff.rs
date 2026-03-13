@@ -19,7 +19,32 @@ pub fn diff_results(current: &AnalysisResult, previous: &AnalysisResult) -> Diff
         current.archive_contributions.iter().map(|item| (archive_member_key(item), item.size)),
         previous.archive_contributions.iter().map(|item| (archive_member_key(item), item.size)),
     );
+    let source_file_diffs = diff_named(
+        current.source_files.iter().map(|item| (source_file_key(&item.path), item.size)),
+        previous.source_files.iter().map(|item| (source_file_key(&item.path), item.size)),
+    );
+    let function_diffs = diff_named(
+        current
+            .function_attributions
+            .iter()
+            .map(|item| (function_key(item.path.as_deref(), &item.raw_name), item.size)),
+        previous
+            .function_attributions
+            .iter()
+            .map(|item| (function_key(item.path.as_deref(), &item.raw_name), item.size)),
+    );
+    let line_diffs = diff_named(
+        current
+            .line_hotspots
+            .iter()
+            .map(|item| (line_key(&item.path, item.line_start, item.line_end), item.size)),
+        previous
+            .line_hotspots
+            .iter()
+            .map(|item| (line_key(&item.path, item.line_start, item.line_end), item.size)),
+    );
 
+    // Keep every diff as the same name/current/previous/delta shape so HTML/JSON/CI can reuse one renderer.
     let summary = DiffSummary {
         section_added: count_kind(&section_diffs, DiffChangeKind::Added),
         section_removed: count_kind(&section_diffs, DiffChangeKind::Removed),
@@ -33,16 +58,32 @@ pub fn diff_results(current: &AnalysisResult, previous: &AnalysisResult) -> Diff
         object_removed: count_kind(&object_diffs, DiffChangeKind::Removed),
         object_increased: count_kind(&object_diffs, DiffChangeKind::Increased),
         object_decreased: count_kind(&object_diffs, DiffChangeKind::Decreased),
+        source_file_added: count_kind(&source_file_diffs, DiffChangeKind::Added),
+        source_file_removed: count_kind(&source_file_diffs, DiffChangeKind::Removed),
+        source_file_increased: count_kind(&source_file_diffs, DiffChangeKind::Increased),
+        source_file_decreased: count_kind(&source_file_diffs, DiffChangeKind::Decreased),
+        function_added: count_kind(&function_diffs, DiffChangeKind::Added),
+        function_removed: count_kind(&function_diffs, DiffChangeKind::Removed),
+        function_increased: count_kind(&function_diffs, DiffChangeKind::Increased),
+        function_decreased: count_kind(&function_diffs, DiffChangeKind::Decreased),
+        line_added: count_kind(&line_diffs, DiffChangeKind::Added),
+        line_removed: count_kind(&line_diffs, DiffChangeKind::Removed),
+        line_increased: count_kind(&line_diffs, DiffChangeKind::Increased),
+        line_decreased: count_kind(&line_diffs, DiffChangeKind::Decreased),
     };
 
     DiffResult {
         rom_delta: current.memory.rom_bytes as i64 - previous.memory.rom_bytes as i64,
         ram_delta: current.memory.ram_bytes as i64 - previous.memory.ram_bytes as i64,
+        unknown_source_delta: current.unknown_source.size as i64 - previous.unknown_source.size as i64,
         summary,
         section_diffs,
         symbol_diffs,
         object_diffs,
         archive_diffs,
+        source_file_diffs,
+        function_diffs,
+        line_diffs,
     }
 }
 
@@ -56,6 +97,21 @@ pub fn symbol_key(name: &str) -> String {
 
 pub fn object_key(path: &str) -> String {
     path.to_string()
+}
+
+pub fn source_file_key(path: &str) -> String {
+    path.to_string()
+}
+
+pub fn function_key(path: Option<&str>, raw_name: &str) -> String {
+    match path {
+        Some(path) => format!("{path}::{raw_name}"),
+        None => raw_name.to_string(),
+    }
+}
+
+pub fn line_key(path: &str, line_start: u64, line_end: u64) -> String {
+    format!("{path}:{line_start}-{line_end}")
 }
 
 pub fn archive_member_key(item: &ArchiveContribution) -> String {
@@ -142,11 +198,14 @@ fn change_rank(kind: DiffChangeKind) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{archive_member_key, diff_results, names_for_kind, object_key, section_key, symbol_key, top_increases};
+    use super::{
+        archive_member_key, diff_results, function_key, line_key, names_for_kind, object_key, section_key,
+        source_file_key, symbol_key, top_increases,
+    };
     use crate::model::{
-        AnalysisResult, ArchiveContribution, BinaryInfo, DebugInfoSummary, DiffChangeKind, MemorySummary,
-        ObjectContribution, SectionCategory, SectionTotal, SymbolInfo, ToolchainInfo, ToolchainKind,
-        ToolchainSelection, UnknownSourceBucket,
+        AnalysisResult, ArchiveContribution, BinaryInfo, DebugInfoSummary, DiffChangeKind, FunctionAttribution,
+        LineRangeAttribution, MemorySummary, ObjectContribution, SectionCategory, SectionTotal, SourceFile, SourceSpan,
+        SymbolInfo, ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket,
     };
 
     #[test]
@@ -182,6 +241,76 @@ mod tests {
         assert_eq!(section_key(".text"), ".text");
         assert_eq!(symbol_key("foo"), "foo");
         assert_eq!(object_key("bar.o"), "bar.o");
+        assert_eq!(source_file_key("src/main.c"), "src/main.c");
+        assert_eq!(function_key(Some("src/main.c"), "main"), "src/main.c::main");
+        assert_eq!(line_key("src/main.c", 10, 12), "src/main.c:10-12");
+    }
+
+    #[test]
+    fn computes_source_level_diffs() {
+        let mut current = stub_analysis(&[], &[], &[], &[]);
+        current.source_files = vec![SourceFile {
+            path: "src/main.c".to_string(),
+            display_path: "src/main.c".to_string(),
+            directory: "src".to_string(),
+            size: 20,
+            functions: 1,
+            line_ranges: 2,
+        }];
+        current.function_attributions = vec![FunctionAttribution {
+            raw_name: "main".to_string(),
+            demangled_name: None,
+            path: Some("src/main.c".to_string()),
+            size: 20,
+            ranges: vec![SourceSpan {
+                path: "src/main.c".to_string(),
+                line_start: 10,
+                line_end: 12,
+                column: None,
+            }],
+        }];
+        current.line_hotspots = vec![LineRangeAttribution {
+            path: "src/main.c".to_string(),
+            line_start: 10,
+            line_end: 12,
+            section_name: Some(".text".to_string()),
+            size: 20,
+        }];
+        current.unknown_source.size = 4;
+        let mut previous = stub_analysis(&[], &[], &[], &[]);
+        previous.source_files = vec![SourceFile {
+            path: "src/main.c".to_string(),
+            display_path: "src/main.c".to_string(),
+            directory: "src".to_string(),
+            size: 8,
+            functions: 1,
+            line_ranges: 1,
+        }];
+        previous.function_attributions = vec![FunctionAttribution {
+            raw_name: "main".to_string(),
+            demangled_name: None,
+            path: Some("src/main.c".to_string()),
+            size: 8,
+            ranges: vec![SourceSpan {
+                path: "src/main.c".to_string(),
+                line_start: 10,
+                line_end: 10,
+                column: None,
+            }],
+        }];
+        previous.line_hotspots = vec![LineRangeAttribution {
+            path: "src/main.c".to_string(),
+            line_start: 10,
+            line_end: 10,
+            section_name: Some(".text".to_string()),
+            size: 8,
+        }];
+        previous.unknown_source.size = 1;
+        let diff = diff_results(&current, &previous);
+        assert_eq!(diff.unknown_source_delta, 3);
+        assert!(diff.source_file_diffs.iter().any(|item| item.name == "src/main.c" && item.delta == 12));
+        assert!(diff.function_diffs.iter().any(|item| item.name == "src/main.c::main" && item.delta == 12));
+        assert!(diff.line_diffs.iter().any(|item| item.name == "src/main.c:10-12" && item.change == DiffChangeKind::Added));
     }
 
     fn stub_analysis(

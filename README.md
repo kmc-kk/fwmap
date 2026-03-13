@@ -120,6 +120,9 @@ cargo run -- analyze \
   --prev-elf prev/app.elf \
   --prev-map prev/app.map \
   --ci-format markdown \
+  --ci-source-summary \
+  --max-source-diff-items 8 \
+  --min-line-diff-bytes 64 \
   --ci-out fwmap_ci.md \
   --fail-on-warning \
   --threshold-rom 90 \
@@ -150,6 +153,7 @@ Top growth object: drivers/net.o (+8192)
 - Top Symbols: largest symbols from the ELF symbol table
 - Top Object Contributions: object sizes from the map file
 - Diff: summary cards plus top section/symbol/object growth and added/removed lists
+- Source Diff: top growing source files, functions, line ranges, and unknown-source delta
 - Source Files: top file-level attribution with function counts
 - Top Functions: symbol-linked function attribution with raw/demangled names
 - Line Hotspots: compressed source line ranges with byte totals
@@ -218,6 +222,9 @@ Supported custom rule kinds:
 - `symbol_delta`
 - `symbol_match`
 - `object_match`
+- `source_path_growth`
+- `function_growth`
+- `unknown_source_ratio`
 
 Example:
 
@@ -227,6 +234,7 @@ schema_version = 1
 [thresholds]
 rom_usage_warn = 0.85
 ram_usage_warn = 0.85
+unknown_source_warn = 0.15
 
 [[rules]]
 id = "dtcm-near-full"
@@ -235,6 +243,14 @@ region = "DTCM"
 warn_if_greater_than = 0.90
 severity = "warn"
 message = "DTCM usage is above 90%"
+
+[[rules]]
+id = "app_sources_growth"
+kind = "source_path_growth"
+pattern = "src/app/**"
+threshold_bytes = 4096
+severity = "warn"
+message = "app sources grew by more than 4 KiB"
 ```
 
 ## Demangling
@@ -282,6 +298,13 @@ cargo run -- analyze \
 ## CI Output
 
 Use `--ci-format text|markdown|json` to select CI summary output. `--ci-summary` remains available as a shorthand for text output. Use `--ci-out <path>` to write the CI summary to a file.
+
+Source-diff oriented flags:
+
+- `--ci-source-summary` includes top growing source files, functions, and line ranges
+- `--max-source-diff-items <n>` limits source diff rows
+- `--min-line-diff-bytes <n>` suppresses tiny line-range noise
+- `--hide-unknown-source` omits unknown-source diff rows from summaries
 
 ```bash
 cargo run -- analyze \
