@@ -29,6 +29,12 @@ pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, ver
     println!("ELF: {}", result.binary.path);
     println!("Toolchain: {} (requested: {})", result.toolchain.resolved, result.toolchain.requested);
     println!(
+        "Linker family: {} | Map format: {} | Parser warnings: {}",
+        result.toolchain.linker_family,
+        result.toolchain.map_format,
+        result.toolchain.parser_warnings_count
+    );
+    println!(
         "DWARF: {} | Source lines: {} | Source files: {} | Unknown ratio: {:.1}%{}{}",
         if result.debug_info.dwarf_used { "used" } else { "not used" },
         result.debug_info.source_lines,
@@ -179,6 +185,8 @@ fn build_json(
         "schema_version": 1,
         "binary": &current.binary,
         "toolchain": &current.toolchain,
+        "map_format": current.toolchain.map_format,
+        "linker_family": current.toolchain.linker_family,
         "debug_info": &current.debug_info,
         "linker_script": &current.linker_script,
         "section_summary": &current.memory.section_totals,
@@ -213,6 +221,12 @@ fn build_ci_text(current: &AnalysisResult, diff: Option<&DiffResult>, source_opt
     lines.push(format!("Warnings: {}", current.warnings.len()));
     lines.push(format!("Errors: {}", current.warnings.iter().filter(|item| item.level == WarningLevel::Error).count()));
     lines.push(format!("Toolchain: {}", current.toolchain.resolved));
+    lines.push(format!(
+        "Map: {} / {} (parser warnings: {})",
+        current.toolchain.linker_family,
+        current.toolchain.map_format,
+        current.toolchain.parser_warnings_count
+    ));
     lines.push(format!(
         "DWARF: {} (source files: {}, unknown ratio: {:.1}%)",
         if current.debug_info.dwarf_used { "used" } else { "not used" },
@@ -287,6 +301,12 @@ fn build_ci_markdown(current: &AnalysisResult, diff: Option<&DiffResult>, source
         current.warnings.iter().filter(|item| item.level == WarningLevel::Error).count()
     ));
     out.push(format!("| Toolchain | {} |", current.toolchain.resolved));
+    out.push(format!(
+        "| Map | {} / {} (warnings: {}) |",
+        current.toolchain.linker_family,
+        current.toolchain.map_format,
+        current.toolchain.parser_warnings_count
+    ));
     out.push(format!(
         "| DWARF | {} ({:.1}% unknown) |",
         if current.debug_info.dwarf_used { "used" } else { "not used" },
@@ -368,6 +388,9 @@ fn build_ci_json(
             "warning_count": current.warnings.len(),
             "error_count": current.warnings.iter().filter(|item| item.level == WarningLevel::Error).count(),
             "toolchain": current.toolchain.resolved,
+            "linker_family": current.toolchain.linker_family,
+            "map_format": current.toolchain.map_format,
+            "parser_warnings_count": current.toolchain.parser_warnings_count,
             "dwarf_used": current.debug_info.dwarf_used,
             "unknown_source_ratio": current.debug_info.unknown_source_ratio,
         },
@@ -418,12 +441,15 @@ fn overview(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
         })
         .unwrap_or_default();
     format!(
-        "<section><h2>Overview</h2><div class=\"grid\"><div class=\"card\"><strong>Binary</strong><div>{}</div></div><div class=\"card\"><strong>Format</strong><div>{} / {}</div></div><div class=\"card\"><strong>Toolchain</strong><div>{} <span class=\"muted\">(requested: {})</span></div></div><div class=\"card\"><strong>DWARF</strong><div>{} <span class=\"muted\">({:.1}% unknown)</span></div></div><div class=\"card\"><strong>Sections</strong><div>{}</div></div><div class=\"card\"><strong>ROM</strong><div>{}</div></div><div class=\"card\"><strong>RAM</strong><div>{}</div></div><div class=\"card\"><strong>Warnings</strong><div>{}</div></div>{}</div></section>",
+        "<section><h2>Overview</h2><div class=\"grid\"><div class=\"card\"><strong>Binary</strong><div>{}</div></div><div class=\"card\"><strong>Format</strong><div>{} / {}</div></div><div class=\"card\"><strong>Toolchain</strong><div>{} <span class=\"muted\">(requested: {})</span></div></div><div class=\"card\"><strong>Map</strong><div>{} / {} <span class=\"muted\">({} parser warnings)</span></div></div><div class=\"card\"><strong>DWARF</strong><div>{} <span class=\"muted\">({:.1}% unknown)</span></div></div><div class=\"card\"><strong>Sections</strong><div>{}</div></div><div class=\"card\"><strong>ROM</strong><div>{}</div></div><div class=\"card\"><strong>RAM</strong><div>{}</div></div><div class=\"card\"><strong>Warnings</strong><div>{}</div></div>{}</div></section>",
         escape(&current.binary.arch),
         escape(&current.binary.elf_class),
         escape(&current.binary.endian),
         escape(&current.toolchain.resolved.to_string()),
         escape(&current.toolchain.requested.to_string()),
+        escape(&current.toolchain.linker_family.to_string()),
+        escape(&current.toolchain.map_format.to_string()),
+        current.toolchain.parser_warnings_count,
         if current.debug_info.dwarf_used { "used" } else { "not used" },
         current.debug_info.unknown_source_ratio * 100.0,
         current.sections.len(),
@@ -1259,6 +1285,9 @@ mod tests {
                 requested: ToolchainSelection::Auto,
                 detected: Some(ToolchainKind::Gnu),
                 resolved: ToolchainKind::Gnu,
+                linker_family: crate::model::LinkerFamily::Gnu,
+                map_format: crate::model::MapFormat::Unknown,
+                parser_warnings_count: 0,
             },
             debug_info: DebugInfoSummary::default(),
             sections: vec![SectionInfo {

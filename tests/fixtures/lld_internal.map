@@ -1,0 +1,4 @@
+             VMA              LMA     Size Align Out     In      Symbol
+        0x08000000       0x08000000     0x20     4 .text
+        0x08000000       0x08000000     0x10     4         <internal>
+        0x08000010       0x08000010     0x10     4         startup.o:(.text)

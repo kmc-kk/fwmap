@@ -6,6 +6,7 @@
 
 - ELF32 / ELF64 parsing
 - GNU ld and LLVM lld style map parsing
+- explicit `--map-format auto|gnu|lld-native` selection for native map text detection
 - GNU ld linker script subset parsing (`MEMORY`, `SECTIONS`, `> REGION`, `AT`, `ALIGN`, `KEEP`)
 - DWARF line-table parsing with `gimli`
 - ROM/RAM summary and section breakdown
@@ -294,6 +295,12 @@ Use `--toolchain auto|gnu|lld|iar|armcc|keil` to control map parser selection.
 - `lld`: force the LLVM lld parser
 - `iar`, `armcc`, `keil`: reserved placeholders that currently return a clear `not implemented` error
 
+Use `--map-format auto|gnu|lld-native` to control map text detection.
+
+- `auto`: detect from map text headers
+- `gnu`: force the GNU ld text parser
+- `lld-native`: force LLVM `ld.lld` native text map parsing
+
 ```bash
 cargo run -- analyze \
   --elf build/app.elf \
@@ -369,6 +376,7 @@ cargo test
 - ELF parsing currently reads the standard symbol table (`SHT_SYMTAB`) only.
 - `map` parsing targets common GNU ld / LLVM lld output and intentionally tolerates unknown lines with warnings.
 - Warning items now retain their source and related entity so skipped input can be explained in reports and verbose CLI output.
+- Toolchain metadata now records linker family, map format, and parser warning count in CLI / HTML / JSON / history output.
 - Warning evaluation is separated into a rule engine so new checks can be added without rewriting core analysis flow.
 - External rule files are validated before analysis starts.
 - Linker script support is currently a subset parser aimed at common GNU ld patterns.
@@ -378,6 +386,7 @@ cargo test
 - Demangling currently prioritizes Itanium ABI names and falls back safely when conversion fails.
 - History storage currently uses a local SQLite file and focuses on summary, section, region, rule-result, and source-attribution metrics.
 - Toolchain auto-detection is intentionally lightweight and currently keys off GNU ld / LLVM lld map patterns only.
+- `lld-native` parsing is aimed at ELF `ld.lld -Map` / `--print-map` text output and may not cover every future column variation.
 - DWARF attribution uses line tables plus ELF symbol ranges; optimized builds may still collapse, duplicate, or split line ranges.
 - Split DWARF (`.dwo` / `.dwp`) is detected but external debug objects are not loaded yet.
 

@@ -8,7 +8,8 @@ use crate::history::{
     HistoryRecordInput,
 };
 use crate::model::{
-    CiFormat, DemangleMode, DwarfMode, SourceLinesMode, ThresholdConfig, ToolchainSelection, WarningLevel,
+    CiFormat, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode, ThresholdConfig, ToolchainSelection,
+    WarningLevel,
 };
 use crate::rule_config::{apply_threshold_overrides, load_rule_config};
 use crate::render::{print_ci_summary, print_cli_summary, write_ci_summary, write_html_report, write_json_report};
@@ -36,6 +37,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             rules,
             demangle,
             toolchain,
+            map_format,
             dwarf_mode,
             source_lines,
             source_root,
@@ -48,6 +50,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 demangle,
                 custom_rules: Vec::new(),
                 toolchain,
+                map_format,
                 dwarf_mode,
                 source_lines,
                 source_root,
@@ -103,6 +106,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             rules,
             demangle,
             toolchain,
+            map_format,
             dwarf_mode,
             source_lines,
             source_root,
@@ -115,6 +119,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 demangle,
                 custom_rules: Vec::new(),
                 toolchain,
+                map_format,
                 dwarf_mode,
                 source_lines,
                 source_root,
@@ -212,6 +217,7 @@ enum Command {
         rules: Option<PathBuf>,
         demangle: DemangleMode,
         toolchain: ToolchainSelection,
+        map_format: MapFormatSelection,
         dwarf_mode: DwarfMode,
         source_lines: SourceLinesMode,
         source_root: Option<PathBuf>,
@@ -251,6 +257,7 @@ enum Command {
         rules: Option<PathBuf>,
         demangle: DemangleMode,
         toolchain: ToolchainSelection,
+        map_format: MapFormatSelection,
         dwarf_mode: DwarfMode,
         source_lines: SourceLinesMode,
         source_root: Option<PathBuf>,
@@ -293,6 +300,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut rules = None;
     let mut demangle = DemangleMode::Auto;
     let mut toolchain = ToolchainSelection::Auto;
+    let mut map_format = MapFormatSelection::Auto;
     let mut dwarf_mode = DwarfMode::Auto;
     let mut source_lines = SourceLinesMode::Off;
     let mut source_root = None;
@@ -394,6 +402,12 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                 index += 2;
                 continue;
             }
+            "--map-format" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --map-format".to_string())?;
+                map_format = parse_map_format(value)?;
+                index += 2;
+                continue;
+            }
             "--source-lines" => {
                 let value = args.get(index + 1).ok_or_else(|| "missing value for --source-lines".to_string())?;
                 source_lines = parse_source_lines_mode(value)?;
@@ -466,6 +480,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         rules,
         demangle,
         toolchain,
+        map_format,
         dwarf_mode,
         source_lines,
         source_root,
@@ -494,8 +509,8 @@ fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--dwarf=auto|on|off] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--verbose]
-fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--dwarf=auto|on|off] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
+fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--verbose]
+fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
 fwmap history list --db <path>
 fwmap history show --db <path> --build <id>
 fwmap history trend --db <path> --metric <rom|ram|warnings|unknown_source|region:NAME|section:NAME|source:PATH|function:KEY|directory:PATH> [--last <n>]
@@ -511,6 +526,7 @@ Options:
   --rules     Load TOML rule configuration from the given path
   --demangle=auto|on|off Control C++ symbol demangling
   --toolchain auto|gnu|lld|iar|armcc|keil Select or detect the map parser family
+  --map-format auto|gnu|lld-native Select or detect the map text format
   --dwarf=auto|on|off Control DWARF line-table usage
   --source-lines off|files|functions|lines|all Control source-level aggregation
   --source-root Apply a root prefix to relative DWARF source paths
@@ -559,6 +575,7 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
     let mut rules = None;
     let mut demangle = DemangleMode::Auto;
     let mut toolchain = ToolchainSelection::Auto;
+    let mut map_format = MapFormatSelection::Auto;
     let mut dwarf_mode = DwarfMode::Auto;
     let mut source_lines = SourceLinesMode::Off;
     let mut source_root = None;
@@ -610,6 +627,11 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
             "--toolchain" => {
                 let value = args.get(index + 1).ok_or_else(|| "missing value for --toolchain".to_string())?;
                 toolchain = parse_toolchain(value)?;
+                index += 2;
+            }
+            "--map-format" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --map-format".to_string())?;
+                map_format = parse_map_format(value)?;
                 index += 2;
             }
             "--source-lines" => {
@@ -671,6 +693,7 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
         rules,
         demangle,
         toolchain,
+        map_format,
         dwarf_mode,
         source_lines,
         source_root,
@@ -777,6 +800,15 @@ fn parse_toolchain(value: &str) -> Result<ToolchainSelection, String> {
     }
 }
 
+fn parse_map_format(value: &str) -> Result<MapFormatSelection, String> {
+    match value {
+        "auto" => Ok(MapFormatSelection::Auto),
+        "gnu" => Ok(MapFormatSelection::Gnu),
+        "lld-native" => Ok(MapFormatSelection::LldNative),
+        _ => Err(format!("invalid map format '{value}', expected auto|gnu|lld-native")),
+    }
+}
+
 fn parse_source_lines_mode(value: &str) -> Result<SourceLinesMode, String> {
     match value {
         "off" => Ok(SourceLinesMode::Off),
@@ -798,7 +830,7 @@ fn parse_path_remap(value: &str) -> Result<(String, String), String> {
 #[cfg(test)]
 mod tests {
     use super::{parse_args, Command};
-    use crate::model::{CiFormat, DemangleMode, DwarfMode, SourceLinesMode, ToolchainSelection};
+    use crate::model::{CiFormat, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode, ToolchainSelection};
     use std::path::PathBuf;
 
     #[test]
@@ -868,6 +900,8 @@ mod tests {
             "--rules".to_string(),
             "Cargo.toml".to_string(),
             "--demangle=on".to_string(),
+            "--map-format".to_string(),
+            "lld-native".to_string(),
             "--ci-summary".to_string(),
             "--fail-on-warning".to_string(),
         ])
@@ -881,6 +915,7 @@ mod tests {
                 ci_source_summary,
                 rules,
                 demangle,
+                map_format,
                 fail_on_warning,
                 max_source_diff_items,
                 min_line_diff_bytes,
@@ -899,6 +934,7 @@ mod tests {
                 assert_eq!(min_line_diff_bytes, 64);
                 assert!(hide_unknown_source);
                 assert!(matches!(demangle, DemangleMode::On));
+                assert_eq!(map_format, MapFormatSelection::LldNative);
                 assert_eq!(thresholds.rom_percent, 90.0);
                 assert_eq!(thresholds.region_percent.get("FLASH"), Some(&92.0));
                 assert_eq!(thresholds.symbol_growth_bytes, 8192);

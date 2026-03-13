@@ -1,0 +1,4 @@
+             VMA              LMA     Size Align Out     In      Symbol
+        0x08000000       0x08000000     0x40     4 .text
+        0x08000000       0x08000000     0x28     4         app/main.o:(.text._ZN3app4mainEv)
+        0x08000028       0x08000028     0x18     4         libcore.a(core.o):(.text._ZN4core4tickEi)

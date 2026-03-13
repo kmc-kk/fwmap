@@ -1,12 +1,18 @@
 # Toolchain Support
 
-`fwmap` accepts `--toolchain auto|gnu|lld|iar|armcc|keil`.
+`fwmap` accepts `--toolchain auto|gnu|lld|iar|armcc|keil` and `--map-format auto|gnu|lld-native`.
 
 ## Supported Families
 
 - `auto`: detect from the map file and fall back to `gnu` when detection is inconclusive
 - `gnu`: force the GNU ld style parser
 - `lld`: force the LLVM lld style parser
+
+## Map Formats
+
+- `auto`: detect from map text and let the parser follow the detected format
+- `gnu`: force GNU ld style text parsing
+- `lld-native`: force ELF `ld.lld -Map` / `--print-map` native text parsing
 
 ## Placeholder Families
 
@@ -20,7 +26,7 @@ These names are recognized so future parser families can reuse the same CLI surf
 
 `auto` currently uses lightweight text detection:
 
-- `lld`: a map header that contains `VMA`, `LMA`, `Out`, and `In`
+- `lld`: a map header that contains `VMA`, `LMA`, `Size`, `Out`, and `In`
 - `gnu`: `Memory Configuration` or `Linker script and memory map`
 - fallback: `gnu`
 
@@ -45,4 +51,4 @@ tests/
     cpp/
 ```
 
-Use the corpus directories for larger toolchain-specific samples and keep `tests/fixtures/` for small focused regression snippets.
+Use the corpus directories for larger toolchain-specific samples and keep `tests/fixtures/` for small focused regression snippets. Current `lld-native` fixture coverage includes C++, `<internal>` rows, path-with-space rows, and malformed-hex degraded parsing.

@@ -34,6 +34,7 @@
 <li>source file / function / line-range 集計</li>
 <li>SQLite ベースの履歴保存とトレンド表示</li>
 <li><code>--toolchain auto|gnu|lld|iar|armcc|keil</code></li>
+<li><code>--map-format auto|gnu|lld-native</code></li>
 <li><code>--verbose</code> / <code>--version</code></li>
 </ul>
 <p>現時点で未対応または限定的な内容:</p>
@@ -256,6 +257,7 @@ fwmap history trend --db history.db --metric unknown_source --last 20
 <li>JSON の <code>toolchain</code> を CI や後続スクリプトで確認する</li>
 </ol>
 <p>GNU ld と LLVM lld は同じ内部モデルに正規化されるため、以後の <code>Top Object Contributions</code> や <code>Diff</code> の見方は同じです。</p>
+<p><code>ld.lld</code> の native text map を明示したい場合は <code>--map-format lld-native</code> を使います。既定は <code>auto</code> で、<code>VMA / LMA / Size / Out / In</code> ヘッダを見て自動判定します。</p>
 <h3 id="linker-script-region">5.4 linker script を付けて region 配置を確認する</h3>
 <p>memory region を確認したい場合は <code>--lds</code> を付けます。</p>
 <pre><code class="language-bash">fwmap analyze \
@@ -622,6 +624,11 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 <td><code>--toolchain &lt;auto|gnu|lld|iar|armcc|keil&gt;</code></td>
 <td>任意</td>
 <td>map parser family の自動判定または強制指定</td>
+</tr>
+<tr>
+<td><code>--map-format &lt;auto|gnu|lld-native&gt;</code></td>
+<td>任意</td>
+<td>map text format の自動判定または強制指定</td>
 </tr>
 <tr>
 <td><code>--dwarf=auto|on|off</code></td>
@@ -1129,6 +1136,7 @@ Top symbol growth: g_rx_ring (+4096)
 <ul>
 <li>ELF は現在 <code>SHT_SYMTAB</code> を中心に参照</li>
 <li>map は GNU ld と LLVM lld を正式対応</li>
+<li><code>lld-native</code> は ELF 向け <code>ld.lld -Map</code> / <code>--print-map</code> の text format を対象にする</li>
 <li>object path は主に map 由来</li>
 <li>archive/member の表記揺れは主要ケース対応に留まる</li>
 <li>linker script は subset 対応であり、複雑な式や完全構文には未対応</li>

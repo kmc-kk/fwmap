@@ -18,6 +18,8 @@ pub struct BuildRecord {
     pub created_at: i64,
     pub elf_path: String,
     pub arch: String,
+    pub linker_family: String,
+    pub map_format: String,
     pub rom_bytes: u64,
     pub ram_bytes: u64,
     pub warning_count: u64,
@@ -77,12 +79,15 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
         .count() as i64;
 
     conn.execute(
-        "INSERT INTO builds (created_at, elf_path, arch, rom_bytes, ram_bytes, warning_count, error_count, metadata_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO builds (
+            created_at, elf_path, arch, linker_family, map_format, rom_bytes, ram_bytes, warning_count, error_count, metadata_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             created_at,
             input.analysis.binary.path,
             input.analysis.binary.arch,
+            input.analysis.toolchain.linker_family.to_string(),
+            input.analysis.toolchain.map_format.to_string(),
             input.analysis.memory.rom_bytes as i64,
             input.analysis.memory.ram_bytes as i64,
             warning_count,
@@ -223,7 +228,7 @@ pub fn list_builds(db_path: &Path) -> Result<Vec<BuildRecord>, String> {
     init_schema(&conn)?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, created_at, elf_path, arch, rom_bytes, ram_bytes, warning_count, error_count, metadata_json
+            "SELECT id, created_at, elf_path, arch, rom_bytes, ram_bytes, warning_count, error_count, metadata_json, linker_family, map_format
              FROM builds ORDER BY id DESC",
         )
         .map_err(|err| format!("failed to query build history: {err}"))?;
@@ -234,6 +239,8 @@ pub fn list_builds(db_path: &Path) -> Result<Vec<BuildRecord>, String> {
                 created_at: row.get(1)?,
                 elf_path: row.get(2)?,
                 arch: row.get(3)?,
+                linker_family: row.get(9)?,
+                map_format: row.get(10)?,
                 rom_bytes: row.get::<_, i64>(4)? as u64,
                 ram_bytes: row.get::<_, i64>(5)? as u64,
                 warning_count: row.get::<_, i64>(6)? as u64,
@@ -252,7 +259,7 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
     init_schema(&conn)?;
     let build = conn
         .query_row(
-            "SELECT id, created_at, elf_path, arch, rom_bytes, ram_bytes, warning_count, error_count, metadata_json
+            "SELECT id, created_at, elf_path, arch, rom_bytes, ram_bytes, warning_count, error_count, metadata_json, linker_family, map_format
              FROM builds WHERE id = ?1",
             params![build_id],
             |row| {
@@ -261,6 +268,8 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
                     created_at: row.get(1)?,
                     elf_path: row.get(2)?,
                     arch: row.get(3)?,
+                    linker_family: row.get(9)?,
+                    map_format: row.get(10)?,
                     rom_bytes: row.get::<_, i64>(4)? as u64,
                     ram_bytes: row.get::<_, i64>(5)? as u64,
                     warning_count: row.get::<_, i64>(6)? as u64,
@@ -588,8 +597,16 @@ pub fn print_build_list(items: &[BuildRecord]) {
     }
     for item in items {
         println!(
-            "#{} {} ROM={} RAM={} warnings={} errors={} {}",
-            item.id, item.created_at, item.rom_bytes, item.ram_bytes, item.warning_count, item.error_count, item.elf_path
+            "#{} {} ROM={} RAM={} warnings={} errors={} {} [{} / {}]",
+            item.id,
+            item.created_at,
+            item.rom_bytes,
+            item.ram_bytes,
+            item.warning_count,
+            item.error_count,
+            item.elf_path,
+            item.linker_family,
+            item.map_format
         );
     }
 }
@@ -600,9 +617,11 @@ pub fn print_build_detail(detail: &BuildDetail) {
         detail.build.id, detail.build.created_at
     );
     println!(
-        "ELF: {} | Arch: {} | ROM: {} | RAM: {} | Warnings: {} | Errors: {}",
+        "ELF: {} | Arch: {} | Linker: {} | Map: {} | ROM: {} | RAM: {} | Warnings: {} | Errors: {}",
         detail.build.elf_path,
         detail.build.arch,
+        detail.build.linker_family,
+        detail.build.map_format,
         detail.build.rom_bytes,
         detail.build.ram_bytes,
         detail.build.warning_count,
@@ -703,6 +722,8 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             created_at INTEGER NOT NULL,
             elf_path TEXT NOT NULL,
             arch TEXT NOT NULL,
+            linker_family TEXT NOT NULL DEFAULT 'unknown',
+            map_format TEXT NOT NULL DEFAULT 'unknown',
             rom_bytes INTEGER NOT NULL,
             ram_bytes INTEGER NOT NULL,
             warning_count INTEGER NOT NULL,
@@ -767,7 +788,30 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
         ON CONFLICT(key) DO UPDATE SET value = excluded.value;
         ",
     )
-    .map_err(|err| format!("failed to initialize history database schema: {err}"))
+    .map_err(|err| format!("failed to initialize history database schema: {err}"))?;
+    ensure_builds_column(conn, "linker_family", "TEXT NOT NULL DEFAULT 'unknown'")?;
+    ensure_builds_column(conn, "map_format", "TEXT NOT NULL DEFAULT 'unknown'")?;
+    Ok(())
+}
+
+fn ensure_builds_column(conn: &Connection, name: &str, definition: &str) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(builds)")
+        .map_err(|err| format!("failed to inspect builds schema: {err}"))?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|err| format!("failed to query builds schema: {err}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("failed to collect builds schema: {err}"))?;
+    if columns.iter().any(|column| column == name) {
+        return Ok(());
+    }
+    conn.execute(
+        &format!("ALTER TABLE builds ADD COLUMN {name} {definition}"),
+        [],
+    )
+    .map_err(|err| format!("failed to migrate builds schema with column '{name}': {err}"))?;
+    Ok(())
 }
 
 fn parse_metadata(raw: String) -> BTreeMap<String, String> {
@@ -865,6 +909,9 @@ mod tests {
                 requested: ToolchainSelection::Auto,
                 detected: None,
                 resolved: ToolchainKind::Gnu,
+                linker_family: crate::model::LinkerFamily::Gnu,
+                map_format: crate::model::MapFormat::Unknown,
+                parser_warnings_count: 0,
             },
             debug_info: DebugInfoSummary {
                 dwarf_mode: crate::model::DwarfMode::Auto,

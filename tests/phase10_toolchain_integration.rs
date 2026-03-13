@@ -1,6 +1,6 @@
 use fwmap::analyze::{analyze_paths, AnalyzeOptions};
 use fwmap::cli;
-use fwmap::model::{ToolchainKind, ToolchainSelection};
+use fwmap::model::{MapFormat, ToolchainKind, ToolchainSelection};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,7 +18,36 @@ fn analyze_auto_detects_lld_map_family() {
     let result = analyze_paths(&elf_path, Some(&map_path), None, &AnalyzeOptions::default()).unwrap();
     assert_eq!(result.toolchain.resolved, ToolchainKind::Lld);
     assert_eq!(result.toolchain.detected, Some(ToolchainKind::Lld));
+    assert_eq!(result.toolchain.map_format, MapFormat::LldNative);
     assert!(result.object_contributions.iter().any(|item| item.object_path.ends_with("main.o")));
+
+    let _ = fs::remove_file(elf_path);
+    let _ = fs::remove_file(map_path);
+    let _ = fs::remove_dir(dir);
+}
+
+#[test]
+fn cli_rejects_forced_lld_native_for_gnu_map() {
+    let dir = temp_dir("phase16-map-format");
+    fs::create_dir_all(&dir).unwrap();
+    let elf_path = dir.join("sample.elf");
+    let map_path = dir.join("sample.map");
+
+    fs::write(&elf_path, build_cpp_elf32()).unwrap();
+    fs::write(&map_path, include_str!("fixtures/sample.map")).unwrap();
+
+    let err = cli::run([
+        "fwmap".to_string(),
+        "analyze".to_string(),
+        "--elf".to_string(),
+        elf_path.display().to_string(),
+        "--map".to_string(),
+        map_path.display().to_string(),
+        "--map-format".to_string(),
+        "lld-native".to_string(),
+    ])
+    .unwrap_err();
+    assert!(err.contains("looks like GNU ld"));
 
     let _ = fs::remove_file(elf_path);
     let _ = fs::remove_file(map_path);

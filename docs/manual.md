@@ -39,6 +39,7 @@
 - source file / function / line-range 集計
 - SQLite ベースの履歴保存とトレンド表示
 - `--toolchain auto|gnu|lld|iar|armcc|keil`
+- `--map-format auto|gnu|lld-native`
 - `--verbose` / `--version`
 
 現時点で未対応または限定的な内容:
@@ -344,6 +345,8 @@ fwmap analyze \
 3. JSON の `toolchain` を CI や後続スクリプトで確認する
 
 GNU ld と LLVM lld は同じ内部モデルに正規化されるため、以後の `Top Object Contributions` や `Diff` の見方は同じです。
+
+`ld.lld` の native text map を明示したい場合は `--map-format lld-native` を使います。既定は `auto` で、`VMA / LMA / Size / Out / In` ヘッダを見て自動判定します。
 
 ### 5.4 linker script を付けて region 配置を確認する
 
@@ -740,6 +743,7 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 | `--rules <path>` | 任意 | 外部 TOML ルール設定 |
 | `--demangle=auto|on|off` | 任意 | C++ symbol demangle 制御 |
 | `--toolchain <auto|gnu|lld|iar|armcc|keil>` | 任意 | map parser family の自動判定または強制指定 |
+| `--map-format <auto|gnu|lld-native>` | 任意 | map text format の自動判定または強制指定 |
 | `--dwarf=auto|on|off` | 任意 | DWARF line table の使用有無 |
 | `--source-lines <off|files|functions|lines|all>` | 任意 | source attribution の粒度 |
 | `--source-root <path>` | 任意 | 相対 source path に付けるルート |
@@ -1210,6 +1214,7 @@ fwmap history trend --db history.db --metric rom --last 20
 
 - ELF は現在 `SHT_SYMTAB` を中心に参照
 - map は GNU ld と LLVM lld を正式対応
+- `lld-native` は ELF 向け `ld.lld -Map` / `--print-map` の text format を対象にする
 - object path は主に map 由来
 - archive/member の表記揺れは主要ケース対応に留まる
 - linker script は subset 対応であり、複雑な式や完全構文には未対応

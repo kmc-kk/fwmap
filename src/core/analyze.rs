@@ -5,9 +5,10 @@ use crate::demangle::apply_demangling;
 use crate::ingest::{dwarf, elf, lds, map};
 use crate::model::{
     AnalysisResult, ArchiveContribution, CustomRule, DemangleMode, DiffResult, DwarfMode, FunctionAttribution,
-    LineAttribution, LineRangeAttribution, MemoryRegion, MemorySummary, ObjectContribution, RegionSectionUsage,
-    RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SourceFile, SourceLinesMode,
-    SourceSpan, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection, WarningItem,
+    LineAttribution, LineRangeAttribution, LinkerFamily, MapFormat, MapFormatSelection, MemoryRegion, MemorySummary,
+    ObjectContribution, RegionSectionUsage, RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement,
+    SectionTotal, SourceFile, SourceLinesMode, SourceSpan, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind,
+    ToolchainSelection, WarningItem,
 };
 use crate::rules::{evaluate_default_rules, RuleContext};
 use crate::validation::quality::evaluate_quality_checks;
@@ -18,6 +19,7 @@ pub struct AnalyzeOptions {
     pub demangle: DemangleMode,
     pub custom_rules: Vec<CustomRule>,
     pub toolchain: ToolchainSelection,
+    pub map_format: MapFormatSelection,
     pub dwarf_mode: DwarfMode,
     pub source_lines: SourceLinesMode,
     pub source_root: Option<std::path::PathBuf>,
@@ -32,6 +34,7 @@ impl Default for AnalyzeOptions {
             demangle: DemangleMode::Auto,
             custom_rules: Vec::new(),
             toolchain: ToolchainSelection::Auto,
+            map_format: MapFormatSelection::Auto,
             dwarf_mode: DwarfMode::Auto,
             source_lines: SourceLinesMode::Off,
             source_root: None,
@@ -49,7 +52,7 @@ pub fn analyze_paths(
 ) -> Result<AnalysisResult, String> {
     let elf = elf::parse_elf(elf_path)?;
     let map_data = match map_path {
-        Some(path) => Some(map::parse_map(path, options.toolchain)?),
+        Some(path) => Some(map::parse_map(path, options.toolchain, options.map_format)?),
         None => None,
     };
     let lds_data = match lds_path {
@@ -92,6 +95,12 @@ pub fn analyze_paths(
                 .as_ref()
                 .map(|item| item.resolved_toolchain)
                 .unwrap_or_else(|| resolve_toolchain_without_map(options.toolchain)),
+            linker_family: map_data
+                .as_ref()
+                .map(|item| item.linker_family)
+                .unwrap_or(LinkerFamily::Unknown),
+            map_format: map_data.as_ref().map(|item| item.map_format).unwrap_or(MapFormat::Unknown),
+            parser_warnings_count: map_data.as_ref().map(|item| item.parser_warnings_count()).unwrap_or(0),
         },
         debug_info: dwarf_data.debug_info,
         sections: elf.sections,
@@ -409,9 +418,9 @@ mod tests {
     use crate::diff::diff_results;
     use crate::model::{
         AnalysisResult, BinaryInfo, DebugInfoSummary, DiffChangeKind, DiffResult, DiffSummary, DwarfMode,
-        FunctionAttribution, LineAttribution, LinkerScriptInfo, MemoryRegion, MemorySummary, SectionCategory,
-        SectionInfo, SectionPlacement, SectionTotal, SourceLocation, SourceSpan, SymbolInfo, ThresholdConfig,
-        ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket,
+        FunctionAttribution, LineAttribution, LinkerFamily, LinkerScriptInfo, MapFormat, MemoryRegion, MemorySummary,
+        SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SourceLocation, SourceSpan, SymbolInfo,
+        ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket,
     };
 
     #[test]
@@ -735,6 +744,9 @@ mod tests {
                 requested: ToolchainSelection::Auto,
                 detected: None,
                 resolved: ToolchainKind::Gnu,
+                linker_family: LinkerFamily::Gnu,
+                map_format: MapFormat::Unknown,
+                parser_warnings_count: 0,
             },
             debug_info: DebugInfoSummary::default(),
             sections: Vec::new(),

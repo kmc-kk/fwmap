@@ -16,3 +16,7 @@ This directory contains small text fixtures used by parser and regression tests.
 - `sample_rules.toml`: external Phase 7 rule configuration example
 - `sample.ld`: linker script subset for region and placement tests
 - `sample_lld.map`: LLVM lld style map snippet used for toolchain auto-detection and normalization tests
+- `lld_cpp.map`: lld-native snippet with mangled C++ symbol-bearing inputs
+- `lld_internal.map`: lld-native snippet with `<internal>` synthetic input
+- `lld_path_spaces.map`: lld-native snippet with spaces in object and archive paths
+- `lld_malformed_hex.map`: lld-native snippet with malformed hex that should warn and continue

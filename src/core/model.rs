@@ -197,6 +197,9 @@ pub struct ToolchainInfo {
     pub requested: ToolchainSelection,
     pub detected: Option<ToolchainKind>,
     pub resolved: ToolchainKind,
+    pub linker_family: LinkerFamily,
+    pub map_format: MapFormat,
+    pub parser_warnings_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -235,9 +238,36 @@ pub enum ToolchainSelection {
     Keil,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MapFormatSelection {
+    #[default]
+    Auto,
+    Gnu,
+    LldNative,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolchainKind {
+    Gnu,
+    Lld,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum MapFormat {
+    #[default]
+    Unknown,
+    Gnu,
+    LldNative,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LinkerFamily {
+    #[default]
+    Unknown,
     Gnu,
     Lld,
 }
@@ -547,6 +577,39 @@ impl fmt::Display for ToolchainKind {
         let text = match self {
             ToolchainKind::Gnu => "gnu",
             ToolchainKind::Lld => "lld",
+        };
+        write!(f, "{text}")
+    }
+}
+
+impl fmt::Display for MapFormatSelection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            MapFormatSelection::Auto => "auto",
+            MapFormatSelection::Gnu => "gnu",
+            MapFormatSelection::LldNative => "lld-native",
+        };
+        write!(f, "{text}")
+    }
+}
+
+impl fmt::Display for MapFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            MapFormat::Unknown => "unknown",
+            MapFormat::Gnu => "gnu",
+            MapFormat::LldNative => "lld-native",
+        };
+        write!(f, "{text}")
+    }
+}
+
+impl fmt::Display for LinkerFamily {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            LinkerFamily::Unknown => "unknown",
+            LinkerFamily::Gnu => "gnu",
+            LinkerFamily::Lld => "lld",
         };
         write!(f, "{text}")
     }
