@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::model::{LinkerScriptInfo, MemoryRegion, SectionPlacement, WarningItem, WarningLevel, WarningSource};
 
@@ -10,8 +11,13 @@ pub struct LdsIngestResult {
 }
 
 pub fn parse_lds(path: &Path) -> Result<LdsIngestResult, String> {
-    let text = fs::read_to_string(path).map_err(|err| format!("failed to read linker script '{}': {err}", path.display()))?;
-    Ok(parse_lds_str(path.display().to_string(), &text))
+    let mut warnings = Vec::new();
+    let mut visited = std::collections::BTreeSet::new();
+    let text = load_lds_with_includes(path, &mut visited, &mut warnings)?;
+    let mut result = parse_lds_str(path.display().to_string(), &text);
+    warnings.append(&mut result.warnings);
+    result.warnings = warnings;
+    Ok(result)
 }
 
 pub fn parse_lds_str(path: String, text: &str) -> LdsIngestResult {
@@ -49,7 +55,11 @@ pub fn parse_lds_str(path: String, text: &str) -> LdsIngestResult {
             }
         } else if in_sections {
             if let Some(section) = start_section_block(line) {
-                current_section = Some(section);
+                if line.contains('}') && !section.region_name.is_empty() {
+                    placements.push(section);
+                } else {
+                    current_section = Some(section);
+                }
             } else if let Some(existing) = current_section.as_mut() {
                 if existing.align.is_none() {
                     existing.align = extract_number_after(line, "ALIGN");
@@ -92,6 +102,10 @@ pub fn parse_lds_str(path: String, text: &str) -> LdsIngestResult {
         }
     }
 
+    if regions.is_empty() {
+        regions = derive_solid_memory_regions(text);
+    }
+
     LdsIngestResult {
         linker_script: LinkerScriptInfo {
             path,
@@ -104,6 +118,61 @@ pub fn parse_lds_str(path: String, text: &str) -> LdsIngestResult {
 
 fn strip_comments(line: &str) -> &str {
     line.split("/*").next().unwrap_or(line).split("//").next().unwrap_or(line)
+}
+
+fn load_lds_with_includes(
+    path: &Path,
+    visited: &mut std::collections::BTreeSet<PathBuf>,
+    warnings: &mut Vec<WarningItem>,
+) -> Result<String, String> {
+    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if !visited.insert(canonical.clone()) {
+        warnings.push(WarningItem {
+            level: WarningLevel::Info,
+            code: "LDS_INCLUDE_SKIPPED".to_string(),
+            message: format!("Skipped already included linker script '{}'", canonical.display()),
+            source: WarningSource::Analyze,
+            related: Some(canonical.display().to_string()),
+        });
+        return Ok(String::new());
+    }
+
+    let text = fs::read_to_string(path).map_err(|err| format!("failed to read linker script '{}': {err}", path.display()))?;
+    let mut merged = String::new();
+    for raw_line in text.lines() {
+        let line = strip_comments(raw_line).trim();
+        if let Some(include_path) = parse_include_line(line) {
+            let resolved = path.parent().unwrap_or_else(|| Path::new(".")).join(include_path);
+            if resolved.exists() {
+                merged.push_str(&load_lds_with_includes(&resolved, visited, warnings)?);
+                merged.push('\n');
+            } else {
+                warnings.push(WarningItem {
+                    level: WarningLevel::Warn,
+                    code: "LDS_INCLUDE_NOT_FOUND".to_string(),
+                    message: format!(
+                        "Included linker script '{}' was not found while reading '{}'",
+                        resolved.display(),
+                        path.display()
+                    ),
+                    source: WarningSource::Analyze,
+                    related: Some(resolved.display().to_string()),
+                });
+            }
+            continue;
+        }
+        merged.push_str(raw_line);
+        merged.push('\n');
+    }
+    Ok(merged)
+}
+
+fn parse_include_line(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("INCLUDE")?.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    Some(rest.trim_matches('"').to_string())
 }
 
 fn parse_memory_line(line: &str) -> Option<MemoryRegion> {
@@ -175,9 +244,56 @@ fn parse_assignment_value(value: &str) -> Option<u64> {
     }
 }
 
+fn derive_solid_memory_regions(text: &str) -> Vec<MemoryRegion> {
+    let mut virtual_addresses = std::collections::BTreeMap::<String, u64>::new();
+    let mut physical_addresses = std::collections::BTreeMap::<String, u64>::new();
+    let mut sizes = std::collections::BTreeMap::<String, u64>::new();
+
+    for raw_line in text.lines() {
+        let line = strip_comments(raw_line).trim();
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        let symbol = name.trim();
+        let parsed = parse_assignment_value(value.trim().trim_end_matches(';'));
+        if let Some(base) = symbol.strip_suffix("_VirtualAddress") {
+            if let Some(value) = parsed {
+                virtual_addresses.insert(base.to_string(), value);
+            }
+        } else if let Some(base) = symbol.strip_suffix("_PhysicalAddress") {
+            if let Some(value) = parsed {
+                physical_addresses.insert(base.to_string(), value);
+            }
+        } else if let Some(base) = symbol.strip_suffix("_Size") {
+            if let Some(value) = parsed {
+                sizes.insert(base.to_string(), value);
+            }
+        }
+    }
+
+    let mut regions = sizes
+        .into_iter()
+        .filter_map(|(base, length)| {
+            let origin = virtual_addresses
+                .get(&base)
+                .copied()
+                .or_else(|| physical_addresses.get(&base).copied())?;
+            Some(MemoryRegion {
+                name: base.trim_start_matches("_smm_").to_string(),
+                origin,
+                length,
+                attributes: String::new(),
+            })
+        })
+        .collect::<Vec<_>>();
+    regions.sort_by(|a, b| a.origin.cmp(&b.origin).then_with(|| a.name.cmp(&b.name)));
+    regions
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_lds_str;
+    use super::{parse_lds, parse_lds_str};
+    use std::path::Path;
 
     #[test]
     fn parses_memory_and_sections_subset() {
@@ -186,5 +302,24 @@ mod tests {
         assert_eq!(result.linker_script.regions.len(), 2);
         assert!(result.linker_script.placements.iter().any(|p| p.section_name == ".text" && p.region_name == "FLASH"));
         assert!(result.linker_script.placements.iter().any(|p| p.load_region_name.as_deref() == Some("FLASH")));
+    }
+
+    #[test]
+    fn resolves_included_memory_regions() {
+        let result = parse_lds(Path::new("tests/fixtures/include_main.ld")).unwrap();
+        assert!(result.linker_script.regions.iter().any(|item| item.name == "FLASH"));
+        assert!(result.linker_script.placements.iter().any(|item| item.section_name == ".text"));
+    }
+
+    #[test]
+    fn derives_solid_memory_map_regions_from_assignments() {
+        let text = include_str!("../../../tests/fixtures/solid_memory_map.ld");
+        let result = parse_lds_str("solid_cs.ld".to_string(), text);
+        assert!(result.linker_script.regions.iter().any(|item| item.name == "SOLID"));
+        assert!(result
+            .linker_script
+            .regions
+            .iter()
+            .any(|item| item.name == "DATARAM" && item.origin == 0x2000_0000));
     }
 }

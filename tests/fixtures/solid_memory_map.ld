@@ -1,0 +1,10 @@
+_smm_RAM_PhysicalAddress = 0x88000000;
+_smm_RAM_Size = 0x08000000;
+_smm_SOLID_PhysicalAddress = 0x80000000;
+_smm_SOLID_VirtualAddress = 0xf8000000;
+_smm_SOLID_Size = 0x00200000;
+_smm_OSSTACK_VirtualAddress = 0xf8300000;
+_smm_OSSTACK_Size = 0x00300000;
+_smm_DATARAM_PhysicalAddress = 0x20000000;
+_smm_DATARAM_VirtualAddress = 0x20000000;
+_smm_DATARAM_Size = 0x00100000;
