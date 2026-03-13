@@ -1,0 +1,14 @@
+Archive member included to satisfy reference by file (symbol)
+
+libapp.a(startup.o)             build/main.o (startup_entry)
+libdrivers.a(clock.o)           build/main.o (__clock_init)
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+FLASH            0x00000000         0x00000100         xr
+
+Linker script and memory map
+
+.text            0x00000000         0x20
+ .text           0x00000000         0x20 libapp.a(startup.o)

@@ -137,6 +137,8 @@ pub fn analyze_paths(
         symbols: sorted_symbols(symbols),
         object_contributions: aggregate_objects(map_data.as_ref().map(|item| item.object_contributions.as_slice()).unwrap_or(&[])),
         archive_contributions: aggregate_archives(map_data.as_ref().map(|item| item.archive_contributions.as_slice()).unwrap_or(&[])),
+        archive_pulls: map_data.as_ref().map(|item| item.archive_pulls.clone()).unwrap_or_default(),
+        cross_references: map_data.map(|item| item.cross_references).unwrap_or_default(),
         linker_script: lds_data.map(|item| item.linker_script),
         memory,
         compilation_units: dwarf_data.compilation_units,
@@ -812,6 +814,8 @@ mod tests {
                 .collect(),
             object_contributions: Vec::new(),
             archive_contributions: Vec::new(),
+            archive_pulls: Vec::new(),
+            cross_references: Vec::new(),
             linker_script: None,
             memory: MemorySummary {
                 rom_bytes: rom,

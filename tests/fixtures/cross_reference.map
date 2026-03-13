@@ -1,0 +1,17 @@
+Memory Configuration
+
+Name             Origin             Length             Attributes
+rom              0x00000000         0x00020000         xr
+
+Linker script and memory map
+
+.text           0x00000000       0x20
+ .text          0x00000000       0x10 build/main.o
+ .text.startup  0x00000010       0x10 libapp.a(startup.o)
+
+Cross Reference Table
+
+Symbol                                            File
+startup_entry                                     libapp.a(startup.o)
+                                                  build/main.o
+main                                              build/main.o

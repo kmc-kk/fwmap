@@ -2,8 +2,8 @@ use std::fs;
 use std::path::Path;
 
 use crate::model::{
-    ArchiveContribution, LinkerFamily, MapFormat, MapFormatSelection, MemoryRegion, ObjectContribution,
-    ObjectSourceKind, ToolchainKind, ToolchainSelection, WarningItem, WarningLevel, WarningSource,
+    ArchiveContribution, ArchivePullDetail, CrossReference, LinkerFamily, MapFormat, MapFormatSelection, MemoryRegion,
+    ObjectContribution, ObjectSourceKind, ToolchainKind, ToolchainSelection, WarningItem, WarningLevel, WarningSource,
 };
 
 #[derive(Debug, Clone)]
@@ -14,6 +14,8 @@ pub struct MapIngestResult {
     pub map_format: MapFormat,
     pub object_contributions: Vec<ObjectContribution>,
     pub archive_contributions: Vec<ArchiveContribution>,
+    pub archive_pulls: Vec<ArchivePullDetail>,
+    pub cross_references: Vec<CrossReference>,
     pub memory_regions: Vec<MemoryRegion>,
     pub warnings: Vec<WarningItem>,
 }
@@ -27,6 +29,8 @@ impl Default for MapIngestResult {
             map_format: MapFormat::Unknown,
             object_contributions: Vec::new(),
             archive_contributions: Vec::new(),
+            archive_pulls: Vec::new(),
+            cross_references: Vec::new(),
             memory_regions: Vec::new(),
             warnings: Vec::new(),
         }
@@ -206,6 +210,16 @@ fn parse_gnu_map_str(text: &str) -> MapIngestResult {
             parse_memory_configuration(&lines, &mut index, &mut result);
             continue;
         }
+        if trimmed == "Cross Reference Table" {
+            index += 1;
+            parse_cross_reference_table(&lines, &mut index, &mut result);
+            continue;
+        }
+        if trimmed.starts_with("Archive member included to satisfy reference by file") {
+            index += 1;
+            parse_archive_pull_table(&lines, &mut index, &mut result);
+            continue;
+        }
         if trimmed == "Discarded input sections" {
             in_discarded = true;
             index += 1;
@@ -239,6 +253,139 @@ fn parse_gnu_map_str(text: &str) -> MapIngestResult {
     }
 
     result
+}
+
+fn parse_cross_reference_table(lines: &[&str], index: &mut usize, result: &mut MapIngestResult) {
+    let mut current_symbol: Option<String> = None;
+    let mut current_defined_in: Option<String> = None;
+    let mut current_referenced_by = Vec::<String>::new();
+
+    while *index < lines.len() {
+        let raw = lines[*index].trim_end();
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            if let (Some(symbol), Some(defined_in)) = (current_symbol.take(), current_defined_in.take()) {
+                result.cross_references.push(CrossReference {
+                    symbol,
+                    defined_in,
+                    referenced_by: std::mem::take(&mut current_referenced_by),
+                });
+            }
+            *index += 1;
+            if *index < lines.len() && !lines[*index].trim().is_empty() {
+                continue;
+            }
+            break;
+        }
+        if trimmed.starts_with("Symbol") && trimmed.contains("File") {
+            *index += 1;
+            continue;
+        }
+
+        let leading_ws = raw.chars().take_while(|c| c.is_whitespace()).count();
+        if leading_ws == 0 {
+            if let (Some(symbol), Some(defined_in)) = (current_symbol.take(), current_defined_in.take()) {
+                result.cross_references.push(CrossReference {
+                    symbol,
+                    defined_in,
+                    referenced_by: std::mem::take(&mut current_referenced_by),
+                });
+            }
+            if let Some((symbol, file)) = split_symbol_and_file(trimmed) {
+                current_symbol = Some(symbol.to_string());
+                current_defined_in = Some(file.to_string());
+            }
+        } else if let Some(file) = trimmed.split_whitespace().next() {
+            current_referenced_by.push(file.to_string());
+        }
+        *index += 1;
+    }
+    if let (Some(symbol), Some(defined_in)) = (current_symbol.take(), current_defined_in.take()) {
+        result.cross_references.push(CrossReference {
+            symbol,
+            defined_in,
+            referenced_by: current_referenced_by,
+        });
+    }
+}
+
+fn parse_archive_pull_table(lines: &[&str], index: &mut usize, result: &mut MapIngestResult) {
+    while *index < lines.len() {
+        let raw = lines[*index].trim_end();
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            *index += 1;
+            continue;
+        }
+        if trimmed.starts_with("Memory Configuration")
+            || trimmed.starts_with("Linker script")
+            || trimmed.starts_with("Cross Reference Table")
+            || trimmed.starts_with("Discarded input sections")
+        {
+            break;
+        }
+        if trimmed.eq_ignore_ascii_case("archive member included to satisfy reference by file (symbol)") {
+            *index += 1;
+            continue;
+        }
+        if let Some(detail) = parse_archive_pull_row(trimmed) {
+            result.archive_pulls.push(detail);
+        } else if !trimmed.starts_with("Allocating common symbols") {
+            result.warnings.push(map_warning(
+                "ARCHIVE_PULL_ROW_SKIPPED",
+                ParserWarningKind::UnsupportedRowShape,
+                format!("Skipped archive pull row {}: {}", *index, trimmed),
+                Some(format!("line:{}", *index)),
+            ));
+        }
+        *index += 1;
+    }
+}
+
+fn parse_archive_pull_row(line: &str) -> Option<ArchivePullDetail> {
+    let split_at = find_column_break(line)?;
+    let archive_member = line[..split_at].trim();
+    let reference = line[split_at..].trim();
+    let open = reference.rfind('(')?;
+    let close = reference.rfind(')')?;
+    if close <= open {
+        return None;
+    }
+    let referenced_by = reference[..open].trim();
+    let symbol = reference[open + 1..close].trim();
+    if archive_member.is_empty() || referenced_by.is_empty() || symbol.is_empty() {
+        return None;
+    }
+    Some(ArchivePullDetail {
+        archive_member: archive_member.to_string(),
+        referenced_by: referenced_by.to_string(),
+        symbol: symbol.to_string(),
+    })
+}
+
+fn find_column_break(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut saw_non_ws = false;
+    let mut index = 0usize;
+    while index + 1 < bytes.len() {
+        let current = bytes[index] as char;
+        let next = bytes[index + 1] as char;
+        if !current.is_whitespace() {
+            saw_non_ws = true;
+        }
+        if saw_non_ws && current.is_whitespace() && next.is_whitespace() {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn split_symbol_and_file(line: &str) -> Option<(&str, &str)> {
+    let mut parts = line.split_whitespace();
+    let symbol = parts.next()?;
+    let file = parts.next()?;
+    Some((symbol, file))
 }
 
 fn parse_lld_map_str(text: &str) -> Result<MapIngestResult, String> {
@@ -538,6 +685,27 @@ mod tests {
             .archive_contributions
             .iter()
             .any(|item| item.archive_path.ends_with("libcolon.a") && item.member_path.as_deref() == Some("member.o")));
+    }
+
+    #[test]
+    fn parses_cross_reference_table() {
+        let text = include_str!("../../../tests/fixtures/cross_reference.map");
+        let result = parse_map_str(text, ToolchainSelection::Auto, MapFormatSelection::Auto).unwrap();
+        assert!(result
+            .cross_references
+            .iter()
+            .any(|item| item.symbol == "startup_entry" && item.defined_in.ends_with("libapp.a(startup.o)") && item.referenced_by == vec!["build/main.o"]));
+    }
+
+    #[test]
+    fn parses_archive_pull_table() {
+        let text = include_str!("../../../tests/fixtures/archive_pull.map");
+        let result = parse_map_str(text, ToolchainSelection::Auto, MapFormatSelection::Auto).unwrap();
+        assert!(result.archive_pulls.iter().any(|item| {
+            item.archive_member == "libapp.a(startup.o)"
+                && item.referenced_by == "build/main.o"
+                && item.symbol == "startup_entry"
+        }));
     }
 
     #[test]

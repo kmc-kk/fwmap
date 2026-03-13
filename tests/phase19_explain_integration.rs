@@ -14,7 +14,7 @@ fn explain_archive_keep_and_symbol_fallback_paths() {
 
     let analysis = analyze_paths(
         &elf_path,
-        Some(&PathBuf::from("tests/fixtures/sample.map")),
+        Some(&PathBuf::from("tests/fixtures/archive_pull.map")),
         Some(&PathBuf::from("tests/fixtures/sample.ld")),
         &AnalyzeOptions {
             dwarf_mode: DwarfMode::Off,
@@ -27,11 +27,37 @@ fn explain_archive_keep_and_symbol_fallback_paths() {
     let section = explain_section(&analysis, ".text").unwrap();
     let symbol = explain_symbol(&analysis, "main").unwrap();
 
-    assert!(object.summary.contains("archive member"));
-    assert!(object.evidence.iter().any(|item| item.detail.contains("contributes")));
+    assert!(object.summary.contains("linked to satisfy"));
+    assert!(object.evidence.iter().any(|item| item.source == "map.archive_pull"));
     assert!(section.summary.contains("placed"));
     assert!(section.evidence.iter().any(|item| item.detail.contains("Linker script")));
     assert!(symbol.summary.contains("Candidate contributing object") || symbol.summary.contains("final ELF symbol table"));
+
+    let _ = fs::remove_file(elf_path);
+    let _ = fs::remove_dir(dir);
+}
+
+#[test]
+fn explain_symbol_uses_archive_pull_reason_when_symbol_matches() {
+    let dir = temp_dir("phase19-explain-symbol");
+    fs::create_dir_all(&dir).unwrap();
+    let elf_path = dir.join("sample.elf");
+    fs::write(&elf_path, build_plain_elf32()).unwrap();
+
+    let analysis = analyze_paths(
+        &elf_path,
+        Some(&PathBuf::from("tests/fixtures/archive_pull.map")),
+        None,
+        &AnalyzeOptions {
+            dwarf_mode: DwarfMode::Off,
+            ..AnalyzeOptions::default()
+        },
+    )
+    .unwrap();
+
+    let explain = explain_symbol(&analysis, "startup_entry");
+    assert!(explain.is_none(), "startup_entry is not in the synthetic ELF symbol table");
+    assert!(analysis.archive_pulls.iter().any(|item| item.symbol == "startup_entry"));
 
     let _ = fs::remove_file(elf_path);
     let _ = fs::remove_dir(dir);

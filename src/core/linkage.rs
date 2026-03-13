@@ -137,6 +137,52 @@ pub fn build_linkage_graph(current: &AnalysisResult) -> LinkageGraph {
                 Some(format!("symbol {} resolves into {}", symbol.name, section_name)),
             ));
         }
+        for cref in current.cross_references.iter().filter(|item| item.symbol == symbol.name) {
+            let target_id = format!("symbol:{}", cref.symbol);
+            let provider_id = object_node_id(&cref.defined_in, ObjectSourceKind::Object);
+            nodes.entry(provider_id.clone()).or_insert(LinkageNode {
+                id: provider_id.clone(),
+                kind: LinkageNodeKind::Object,
+                name: cref.defined_in.clone(),
+            });
+            edges.insert((
+                provider_id,
+                target_id.clone(),
+                LinkageEdgeKind::Resolution,
+                Some(format!("{} defines {}", cref.defined_in, cref.symbol)),
+            ));
+            for reference in &cref.referenced_by {
+                let ref_id = object_node_id(reference, ObjectSourceKind::Object);
+                nodes.entry(ref_id.clone()).or_insert(LinkageNode {
+                    id: ref_id.clone(),
+                    kind: LinkageNodeKind::Object,
+                    name: reference.clone(),
+                });
+                edges.insert((
+                    ref_id,
+                    target_id.clone(),
+                    LinkageEdgeKind::Reference,
+                    Some(format!("{} references {}", reference, cref.symbol)),
+                ));
+            }
+        }
+        for pull in current.archive_pulls.iter().filter(|item| item.symbol == symbol.name) {
+            let ref_id = object_node_id(&pull.referenced_by, ObjectSourceKind::Object);
+            nodes.entry(ref_id.clone()).or_insert(LinkageNode {
+                id: ref_id.clone(),
+                kind: LinkageNodeKind::Object,
+                name: pull.referenced_by.clone(),
+            });
+            edges.insert((
+                ref_id,
+                format!("symbol:{}", pull.symbol),
+                LinkageEdgeKind::Reference,
+                Some(format!(
+                    "{} pulls {} to resolve {}",
+                    pull.referenced_by, pull.archive_member, pull.symbol
+                )),
+            ));
+        }
         if is_entry_symbol(&symbol.name) {
             let entry_id = format!("entry:{}", symbol.name);
             nodes.entry(entry_id.clone()).or_insert(LinkageNode {
@@ -286,6 +332,42 @@ pub fn explain_symbol(current: &AnalysisResult, symbol_name: &str) -> Option<Exp
             );
             confidence = Confidence::Low;
         }
+        if let Some(cref) = current.cross_references.iter().find(|item| item.symbol == symbol.name) {
+            for reference in &cref.referenced_by {
+                evidence.push(Evidence {
+                    kind: EvidenceKind::CandidateReference,
+                    detail: format!("Cross reference table shows {} referenced by {}", cref.symbol, reference),
+                    source: "map.cref".to_string(),
+                });
+            }
+            if !cref.referenced_by.is_empty() {
+                summary = format!(
+                    "{} is linked because {} is referenced by {}",
+                    symbol.demangled_name.as_deref().unwrap_or(&symbol.name),
+                    cref.symbol,
+                    cref.referenced_by.join(", ")
+                );
+                confidence = confidence.max(Confidence::High);
+            }
+        }
+        for pull in current.archive_pulls.iter().filter(|item| item.symbol == symbol.name) {
+            evidence.push(Evidence {
+                kind: EvidenceKind::ArchivePull,
+                detail: format!(
+                    "Archive member {} was pulled because {} referenced {}",
+                    pull.archive_member, pull.referenced_by, pull.symbol
+                ),
+                source: "map.archive_pull".to_string(),
+            });
+            summary = format!(
+                "{} is linked because {} referenced {} and pulled {}",
+                symbol.demangled_name.as_deref().unwrap_or(&symbol.name),
+                pull.referenced_by,
+                pull.symbol,
+                pull.archive_member
+            );
+            confidence = confidence.max(Confidence::High);
+        }
         if let Some(placement) = placement_for_section(current.linker_script.as_ref(), section_name) {
             evidence.push(script_evidence(placement));
             if placement.keep {
@@ -322,11 +404,22 @@ pub fn explain_object(current: &AnalysisResult, query: &str) -> Option<ExplainRe
         .filter(|item| normalize_archive_member(item) == normalized)
         .collect::<Vec<_>>();
     if !archive_hits.is_empty() {
+        let pull_hits = current
+            .archive_pulls
+            .iter()
+            .filter(|item| normalize_object_query(&item.archive_member) == normalized)
+            .collect::<Vec<_>>();
+        let normalized_defined = normalize_object_query(query);
+        let cref_hits = current
+            .cross_references
+            .iter()
+            .filter(|item| normalize_object_query(&item.defined_in) == normalized_defined)
+            .collect::<Vec<_>>();
         let sections = archive_hits
             .iter()
             .map(|item| format!("{} ({})", item.section_name.clone().unwrap_or_else(|| "<unknown>".to_string()), item.size))
             .collect::<Vec<_>>();
-        let summary = format!(
+        let mut summary = format!(
             "{} is linked because the map records archive member contributions to {}",
             query,
             sections.join(", ")
@@ -351,6 +444,48 @@ pub fn explain_object(current: &AnalysisResult, query: &str) -> Option<ExplainRe
                     }
                 }
             }
+        }
+        for pull in &pull_hits {
+            evidence.push(Evidence {
+                kind: EvidenceKind::ArchivePull,
+                detail: format!(
+                    "Archive pull table shows {} included because {} referenced {}",
+                    pull.archive_member, pull.referenced_by, pull.symbol
+                ),
+                source: "map.archive_pull".to_string(),
+            });
+        }
+        for cref in &cref_hits {
+            for reference in &cref.referenced_by {
+                evidence.push(Evidence {
+                    kind: EvidenceKind::CandidateReference,
+                    detail: format!("Cross reference table shows {} referenced by {}", cref.symbol, reference),
+                    source: "map.cref".to_string(),
+                });
+            }
+        }
+        if !pull_hits.is_empty() {
+            confidence = Confidence::High;
+            summary = format!(
+                "{} is linked to satisfy {}",
+                query,
+                pull_hits
+                    .iter()
+                    .map(|item| format!("{} from {}", item.symbol, item.referenced_by))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        } else if cref_hits.iter().any(|item| !item.referenced_by.is_empty()) {
+            confidence = Confidence::High;
+            summary = format!(
+                "{} is linked to satisfy {}",
+                query,
+                cref_hits
+                    .iter()
+                    .flat_map(|item| item.referenced_by.iter().map(move |reference| format!("{} from {}", item.symbol, reference)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
         }
         confidence = confidence.max(Confidence::Medium);
         return Some(ExplainResult {
@@ -397,12 +532,59 @@ pub fn explain_object(current: &AnalysisResult, query: &str) -> Option<ExplainRe
             }
         }
     }
+    for pull in current
+        .archive_pulls
+        .iter()
+        .filter(|item| normalize_object_query(&item.referenced_by) == normalized)
+    {
+        evidence.push(Evidence {
+            kind: EvidenceKind::CandidateReference,
+            detail: format!(
+                "Archive pull table shows {} referenced {} and pulled {}",
+                pull.referenced_by, pull.symbol, pull.archive_member
+            ),
+            source: "map.archive_pull".to_string(),
+        });
+        summary = format!(
+            "{} is linked because it references {} and pulls {}",
+            query, pull.symbol, pull.archive_member
+        );
+        confidence = Confidence::High;
+    }
+    let cref_hits = current
+        .cross_references
+        .iter()
+        .filter(|item| normalize_object_query(&item.defined_in) == normalized)
+        .collect::<Vec<_>>();
+    for cref in &cref_hits {
+        for reference in &cref.referenced_by {
+            evidence.push(Evidence {
+                kind: EvidenceKind::CandidateReference,
+                detail: format!("Cross reference table shows {} referenced by {}", cref.symbol, reference),
+                source: "map.cref".to_string(),
+            });
+        }
+    }
+    if cref_hits.iter().any(|item| !item.referenced_by.is_empty()) {
+        confidence = Confidence::High;
+        summary = format!(
+            "{} is linked to resolve {}",
+            query,
+            cref_hits
+                .iter()
+                .flat_map(|item| item.referenced_by.iter().map(move |reference| format!("{} from {}", item.symbol, reference)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
 
     Some(ExplainResult {
         target: query.to_string(),
         kind: ExplainTargetKind::Object,
         summary,
-        confidence: if object_hits.iter().any(|item| item.section_name.is_some()) {
+        confidence: if confidence != Confidence::Low {
+            confidence
+        } else if object_hits.iter().any(|item| item.section_name.is_some()) {
             Confidence::Medium
         } else {
             Confidence::Low
@@ -512,19 +694,19 @@ fn kind_label(kind: ObjectSourceKind) -> &'static str {
 mod tests {
     use super::{build_linkage_graph, explain_object, explain_section, explain_symbol, explain_top_growth, Confidence};
     use crate::model::{
-        AnalysisResult, ArchiveContribution, BinaryInfo, DebugArtifactInfo, DebugInfoSummary, DiffChangeKind, DiffEntry,
-        DiffResult, DiffSummary, LinkerFamily, LinkerScriptInfo, MapFormat, MemorySummary, ObjectContribution,
-        ObjectSourceKind, SectionCategory, SectionInfo, SectionPlacement, SymbolInfo, ToolchainInfo, ToolchainKind,
-        ToolchainSelection, UnknownSourceBucket,
+        AnalysisResult, ArchiveContribution, BinaryInfo, CrossReference, DebugArtifactInfo, DebugInfoSummary,
+        DiffChangeKind, DiffEntry, DiffResult, DiffSummary, LinkerFamily, LinkerScriptInfo, MapFormat, MemorySummary,
+        ObjectContribution, ObjectSourceKind, SectionCategory, SectionInfo, SectionPlacement, SymbolInfo, ToolchainInfo,
+        ToolchainKind, ToolchainSelection, UnknownSourceBucket,
     };
 
     #[test]
     fn explains_archive_member_with_map_evidence() {
         let analysis = sample_analysis();
         let explain = explain_object(&analysis, "libapp.a(startup.o)").unwrap();
-        assert_eq!(explain.confidence, Confidence::Medium);
-        assert!(explain.summary.contains("archive member"));
-        assert!(explain.evidence.iter().any(|item| item.detail.contains("contributes")));
+        assert_eq!(explain.confidence, Confidence::High);
+        assert!(explain.summary.contains("linked to satisfy"));
+        assert!(explain.evidence.iter().any(|item| item.source == "map.cref"));
     }
 
     #[test]
@@ -634,6 +816,16 @@ mod tests {
                 member_path: Some("startup.o".to_string()),
                 section_name: Some(".isr_vector".to_string()),
                 size: 0x10,
+            }],
+            archive_pulls: vec![crate::model::ArchivePullDetail {
+                archive_member: "libapp.a(startup.o)".to_string(),
+                referenced_by: "build/main.o".to_string(),
+                symbol: "startup_entry".to_string(),
+            }],
+            cross_references: vec![CrossReference {
+                symbol: "startup_entry".to_string(),
+                defined_in: "libapp.a(startup.o)".to_string(),
+                referenced_by: vec!["build/main.o".to_string()],
             }],
             linker_script: Some(LinkerScriptInfo {
                 path: "sample.ld".to_string(),

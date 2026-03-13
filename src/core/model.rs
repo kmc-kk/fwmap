@@ -121,6 +121,20 @@ pub struct WarningItem {
     pub related: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CrossReference {
+    pub symbol: String,
+    pub defined_in: String,
+    pub referenced_by: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ArchivePullDetail {
+    pub archive_member: String,
+    pub referenced_by: String,
+    pub symbol: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AnalysisResult {
     pub binary: BinaryInfo,
@@ -131,6 +145,8 @@ pub struct AnalysisResult {
     pub symbols: Vec<SymbolInfo>,
     pub object_contributions: Vec<ObjectContribution>,
     pub archive_contributions: Vec<ArchiveContribution>,
+    pub archive_pulls: Vec<ArchivePullDetail>,
+    pub cross_references: Vec<CrossReference>,
     pub linker_script: Option<LinkerScriptInfo>,
     pub memory: MemorySummary,
     pub compilation_units: Vec<CompilationUnit>,

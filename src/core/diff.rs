@@ -378,6 +378,8 @@ mod tests {
                     size: *size,
                 })
                 .collect(),
+            archive_pulls: Vec::new(),
+            cross_references: Vec::new(),
             linker_script: None,
             memory: MemorySummary {
                 rom_bytes: 0,

@@ -76,6 +76,8 @@ fn sample_analysis() -> AnalysisResult {
             size: 16,
         }],
         archive_contributions: Vec::new(),
+        archive_pulls: Vec::new(),
+        cross_references: Vec::new(),
         linker_script: None,
         memory: MemorySummary {
             rom_bytes: 16,

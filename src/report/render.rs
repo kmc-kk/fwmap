@@ -224,6 +224,7 @@ fn build_json(
         "top_symbols": current.symbols.iter().take(50).collect::<Vec<_>>(),
         "top_object_contributions": current.object_contributions.iter().take(30).collect::<Vec<_>>(),
         "archive_contributions": current.archive_contributions.iter().take(30).collect::<Vec<_>>(),
+        "archive_pulls": &current.archive_pulls,
         "source_files": &current.source_files,
         "functions": &current.function_attributions,
         "line_hotspots": current.line_hotspots.iter().take(100).collect::<Vec<_>>(),
@@ -1411,6 +1412,8 @@ mod tests {
             }],
             object_contributions: Vec::new(),
             archive_contributions: Vec::new(),
+            archive_pulls: Vec::new(),
+            cross_references: Vec::new(),
             linker_script: None,
             memory: MemorySummary {
                 rom_bytes: 128,
