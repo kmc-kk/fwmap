@@ -138,6 +138,7 @@ pub fn analyze_paths(
         object_contributions: aggregate_objects(map_data.as_ref().map(|item| item.object_contributions.as_slice()).unwrap_or(&[])),
         archive_contributions: aggregate_archives(map_data.as_ref().map(|item| item.archive_contributions.as_slice()).unwrap_or(&[])),
         archive_pulls: map_data.as_ref().map(|item| item.archive_pulls.clone()).unwrap_or_default(),
+        relocation_references: elf.relocation_references,
         cross_references: map_data.map(|item| item.cross_references).unwrap_or_default(),
         linker_script: lds_data.map(|item| item.linker_script),
         memory,
@@ -815,6 +816,7 @@ mod tests {
             object_contributions: Vec::new(),
             archive_contributions: Vec::new(),
             archive_pulls: Vec::new(),
+            relocation_references: Vec::new(),
             cross_references: Vec::new(),
             linker_script: None,
             memory: MemorySummary {

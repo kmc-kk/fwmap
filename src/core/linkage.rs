@@ -79,6 +79,7 @@ pub struct Evidence {
 pub enum EvidenceKind {
     MapContribution,
     ArchivePull,
+    RelocationReference,
     SymbolPlacement,
     ScriptPlacement,
     EntryRoot,
@@ -182,6 +183,23 @@ pub fn build_linkage_graph(current: &AnalysisResult) -> LinkageGraph {
                     pull.referenced_by, pull.archive_member, pull.symbol
                 )),
             ));
+        }
+        for relocation in current
+            .relocation_references
+            .iter()
+            .filter(|item| item.target_symbol == symbol.name)
+        {
+            if let Some(section_name) = relocation.from_section.as_deref() {
+                edges.insert((
+                    format!("section:{section_name}"),
+                    format!("symbol:{}", relocation.target_symbol),
+                    LinkageEdgeKind::Reference,
+                    Some(format!(
+                        "{} contains {} relocation at 0x{:x}",
+                        section_name, relocation.kind, relocation.offset
+                    )),
+                ));
+            }
         }
         if is_entry_symbol(&symbol.name) {
             let entry_id = format!("entry:{}", symbol.name);
@@ -368,6 +386,31 @@ pub fn explain_symbol(current: &AnalysisResult, symbol_name: &str) -> Option<Exp
             );
             confidence = confidence.max(Confidence::High);
         }
+        for relocation in current
+            .relocation_references
+            .iter()
+            .filter(|item| item.target_symbol == symbol.name)
+        {
+            evidence.push(Evidence {
+                kind: EvidenceKind::RelocationReference,
+                detail: format!(
+                    "ELF relocation in {} references {} at 0x{:x} ({})",
+                    relocation.from_section.as_deref().unwrap_or("<unknown section>"),
+                    relocation.target_symbol,
+                    relocation.offset,
+                    relocation.kind
+                ),
+                source: "elf.relocation".to_string(),
+            });
+            if confidence < Confidence::High {
+                summary = format!(
+                    "{} is referenced by relocations from {}",
+                    symbol.demangled_name.as_deref().unwrap_or(&symbol.name),
+                    relocation.from_section.as_deref().unwrap_or("<unknown section>")
+                );
+                confidence = confidence.max(Confidence::Medium);
+            }
+        }
         if let Some(placement) = placement_for_section(current.linker_script.as_ref(), section_name) {
             evidence.push(script_evidence(placement));
             if placement.keep {
@@ -550,6 +593,32 @@ pub fn explain_object(current: &AnalysisResult, query: &str) -> Option<ExplainRe
             query, pull.symbol, pull.archive_member
         );
         confidence = Confidence::High;
+    }
+    for relocation in &current.relocation_references {
+        if object_hits
+            .iter()
+            .any(|item| item.section_name.as_deref() == relocation.from_section.as_deref())
+        {
+            evidence.push(Evidence {
+                kind: EvidenceKind::RelocationReference,
+                detail: format!(
+                    "Section {} contains a relocation against {} at 0x{:x}",
+                    relocation.from_section.as_deref().unwrap_or("<unknown section>"),
+                    relocation.target_symbol,
+                    relocation.offset
+                ),
+                source: "elf.relocation".to_string(),
+            });
+            if confidence < Confidence::High {
+                confidence = confidence.max(Confidence::Medium);
+                summary = format!(
+                    "{} contributes to {} which contains relocations against {}",
+                    query,
+                    relocation.from_section.as_deref().unwrap_or("<unknown section>"),
+                    relocation.target_symbol
+                );
+            }
+        }
     }
     let cref_hits = current
         .cross_references
@@ -821,6 +890,12 @@ mod tests {
                 archive_member: "libapp.a(startup.o)".to_string(),
                 referenced_by: "build/main.o".to_string(),
                 symbol: "startup_entry".to_string(),
+            }],
+            relocation_references: vec![crate::model::RelocationReference {
+                from_section: Some(".text".to_string()),
+                target_symbol: "main".to_string(),
+                offset: 4,
+                kind: "Relative".to_string(),
             }],
             cross_references: vec![CrossReference {
                 symbol: "startup_entry".to_string(),

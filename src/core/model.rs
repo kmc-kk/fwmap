@@ -135,6 +135,14 @@ pub struct ArchivePullDetail {
     pub symbol: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RelocationReference {
+    pub from_section: Option<String>,
+    pub target_symbol: String,
+    pub offset: u64,
+    pub kind: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AnalysisResult {
     pub binary: BinaryInfo,
@@ -146,6 +154,7 @@ pub struct AnalysisResult {
     pub object_contributions: Vec<ObjectContribution>,
     pub archive_contributions: Vec<ArchiveContribution>,
     pub archive_pulls: Vec<ArchivePullDetail>,
+    pub relocation_references: Vec<RelocationReference>,
     pub cross_references: Vec<CrossReference>,
     pub linker_script: Option<LinkerScriptInfo>,
     pub memory: MemorySummary,

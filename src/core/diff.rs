@@ -379,6 +379,7 @@ mod tests {
                 })
                 .collect(),
             archive_pulls: Vec::new(),
+            relocation_references: Vec::new(),
             cross_references: Vec::new(),
             linker_script: None,
             memory: MemorySummary {

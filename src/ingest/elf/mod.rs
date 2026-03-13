@@ -1,7 +1,10 @@
 use std::fs;
 use std::path::Path;
 
+use object::{Object, ObjectSection, ObjectSymbol, RelocationTarget};
+
 use crate::model::{BinaryInfo, SectionCategory, SectionInfo, SymbolInfo, WarningItem, WarningLevel, WarningSource};
+use crate::model::RelocationReference;
 
 const EI_CLASS: usize = 4;
 const EI_DATA: usize = 5;
@@ -20,6 +23,7 @@ pub struct ElfIngestResult {
     pub binary: BinaryInfo,
     pub sections: Vec<SectionInfo>,
     pub symbols: Vec<SymbolInfo>,
+    pub relocation_references: Vec<RelocationReference>,
     pub warnings: Vec<WarningItem>,
 }
 
@@ -99,7 +103,20 @@ pub fn parse_elf(path: &Path) -> Result<ElfIngestResult, String> {
             category: classify_section(&string_at(&section_names, raw.name_offset), raw.flags),
         })
         .collect::<Vec<_>>();
-    let (symbols, warnings) = parse_symbols(&bytes, class, endian, &raw_sections, &section_names)?;
+    let (symbols, mut warnings) = parse_symbols(&bytes, class, endian, &raw_sections, &section_names)?;
+    let relocation_references = match parse_relocation_references(&bytes) {
+        Ok(items) => items,
+        Err(err) => {
+            warnings.push(WarningItem {
+                level: WarningLevel::Info,
+                code: "RELOCATION_PARSE_SKIPPED".to_string(),
+                message: format!("ELF relocation evidence was unavailable: {err}"),
+                source: WarningSource::Elf,
+                related: None,
+            });
+            Vec::new()
+        }
+    };
 
     Ok(ElfIngestResult {
         binary: BinaryInfo {
@@ -113,6 +130,7 @@ pub fn parse_elf(path: &Path) -> Result<ElfIngestResult, String> {
         },
         sections,
         symbols,
+        relocation_references,
         warnings,
     })
 }
@@ -232,6 +250,53 @@ fn parse_symbols(
     Ok((symbols, warnings))
 }
 
+fn parse_relocation_references(bytes: &[u8]) -> Result<Vec<RelocationReference>, String> {
+    let file = object::File::parse(bytes).map_err(|err| format!("failed to parse relocations: {err}"))?;
+    let symbol_names = file
+        .symbols()
+        .filter_map(|symbol| {
+            symbol
+                .name()
+                .ok()
+                .filter(|name| !name.is_empty())
+                .map(|name| (symbol.index(), name.to_string()))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let section_names = file
+        .sections()
+        .filter_map(|section| section.name().ok().map(|name| (section.index(), name.to_string())))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let mut references = Vec::new();
+    for section in file.sections() {
+        let from_section = section.name().ok().map(|name| name.to_string());
+        for (offset, relocation) in section.relocations() {
+            let target_symbol = match relocation.target() {
+                RelocationTarget::Symbol(index) => symbol_names.get(&index).cloned(),
+                RelocationTarget::Section(index) => section_names.get(&index).cloned(),
+                RelocationTarget::Absolute => None,
+                _ => None,
+            };
+            let Some(target_symbol) = target_symbol else {
+                continue;
+            };
+            references.push(RelocationReference {
+                from_section: from_section.clone(),
+                target_symbol,
+                offset,
+                kind: format!("{:?}", relocation.kind()),
+            });
+        }
+    }
+    references.sort_by(|a, b| {
+        a.target_symbol
+            .cmp(&b.target_symbol)
+            .then_with(|| a.from_section.cmp(&b.from_section))
+            .then_with(|| a.offset.cmp(&b.offset))
+    });
+    Ok(references)
+}
+
 fn build_string_table(bytes: &[u8], sections: &[RawSection], index: usize) -> Result<Vec<u8>, String> {
     let section = sections.get(index).ok_or_else(|| format!("invalid string table index {index}"))?;
     let start = section.offset as usize;
@@ -338,6 +403,11 @@ fn offset_checked(base: u64, size: u64, index: u64, total_len: usize) -> Result<
 #[cfg(test)]
 mod tests {
     use super::parse_elf;
+    use object::write::{Object, Relocation as WriteRelocation, Symbol, SymbolSection};
+    use object::{
+        Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags, RelocationKind, SectionKind,
+        SymbolFlags, SymbolKind, SymbolScope,
+    };
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -384,6 +454,18 @@ mod tests {
         fs::write(&path, data).unwrap();
         let err = parse_elf(&path).unwrap_err();
         assert!(err.contains("does not contain a section table"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn parses_relocation_references_with_object_crate() {
+        let path = temp_file("reloc.elf");
+        fs::write(&path, build_relocatable_elf()).unwrap();
+        let result = parse_elf(&path).unwrap();
+        assert!(result
+            .relocation_references
+            .iter()
+            .any(|item| item.target_symbol == "callee" && item.from_section.as_deref() == Some(".text")));
         let _ = fs::remove_file(path);
     }
 
@@ -463,6 +545,48 @@ mod tests {
             data[0x1a4..0x1a4 + strtab.len()].copy_from_slice(strtab);
         }
         data
+    }
+
+    fn build_relocatable_elf() -> Vec<u8> {
+        let mut object = Object::new(BinaryFormat::Elf, Architecture::Arm, Endianness::Little);
+        let text = object.add_section(Vec::new(), b".text".to_vec(), SectionKind::Text);
+        object.append_section_data(text, &[0u8; 16], 4);
+        let callee = object.add_symbol(Symbol {
+            name: b"callee".to_vec(),
+            value: 0,
+            size: 4,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: SymbolSection::Section(text),
+            flags: SymbolFlags::None,
+        });
+        object.add_symbol(Symbol {
+            name: b"caller".to_vec(),
+            value: 4,
+            size: 8,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: SymbolSection::Section(text),
+            flags: SymbolFlags::None,
+        });
+        object
+            .add_relocation(
+                text,
+                WriteRelocation {
+                    offset: 8,
+                    symbol: callee,
+                    addend: 0,
+                    flags: RelocationFlags::Generic {
+                        kind: RelocationKind::Absolute,
+                        encoding: RelocationEncoding::Generic,
+                        size: 32,
+                    },
+                },
+            )
+            .unwrap();
+        object.write().unwrap()
     }
 
     fn write_u16(buf: &mut [u8], offset: usize, value: u16) {

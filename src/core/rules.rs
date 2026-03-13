@@ -746,6 +746,7 @@ mod tests {
             object_contributions: Vec::new(),
             archive_contributions: Vec::new(),
             archive_pulls: Vec::new(),
+            relocation_references: Vec::new(),
             cross_references: Vec::new(),
             linker_script: None,
             memory: MemorySummary {

@@ -1,6 +1,11 @@
 use fwmap::analyze::{analyze_paths, AnalyzeOptions};
 use fwmap::linkage::{explain_object, explain_section, explain_symbol};
 use fwmap::model::DwarfMode;
+use object::write::{Object, Relocation as WriteRelocation, Symbol, SymbolSection};
+use object::{
+    Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags, RelocationKind, SectionKind,
+    SymbolFlags, SymbolKind, SymbolScope,
+};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -63,6 +68,32 @@ fn explain_symbol_uses_archive_pull_reason_when_symbol_matches() {
     let _ = fs::remove_dir(dir);
 }
 
+#[test]
+fn explain_symbol_uses_relocation_evidence() {
+    let dir = temp_dir("phase19-explain-reloc");
+    fs::create_dir_all(&dir).unwrap();
+    let elf_path = dir.join("reloc.elf");
+    fs::write(&elf_path, build_relocatable_elf()).unwrap();
+
+    let analysis = analyze_paths(
+        &elf_path,
+        None,
+        None,
+        &AnalyzeOptions {
+            dwarf_mode: DwarfMode::Off,
+            ..AnalyzeOptions::default()
+        },
+    )
+    .unwrap();
+
+    let explain = explain_symbol(&analysis, "callee").unwrap();
+    assert!(explain.evidence.iter().any(|item| item.source == "elf.relocation"));
+    assert!(explain.summary.contains("referenced by relocations"));
+
+    let _ = fs::remove_file(elf_path);
+    let _ = fs::remove_dir(dir);
+}
+
 fn temp_dir(label: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     std::env::temp_dir().join(format!("fwmap-{label}-{nanos}"))
@@ -97,6 +128,48 @@ fn build_plain_elf32() -> Vec<u8> {
     write_sym32(&mut data, 0x230, 1, 0, 16, 0x12, 0, 2);
     data[0x240..0x240 + strtab.len()].copy_from_slice(strtab);
     data
+}
+
+fn build_relocatable_elf() -> Vec<u8> {
+    let mut object = Object::new(BinaryFormat::Elf, Architecture::Arm, Endianness::Little);
+    let text = object.add_section(Vec::new(), b".text".to_vec(), SectionKind::Text);
+    object.append_section_data(text, &[0u8; 16], 4);
+    let callee = object.add_symbol(Symbol {
+        name: b"callee".to_vec(),
+        value: 0,
+        size: 4,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: SymbolSection::Section(text),
+        flags: SymbolFlags::None,
+    });
+    object.add_symbol(Symbol {
+        name: b"caller".to_vec(),
+        value: 4,
+        size: 8,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: SymbolSection::Section(text),
+        flags: SymbolFlags::None,
+    });
+    object
+        .add_relocation(
+            text,
+            WriteRelocation {
+                offset: 8,
+                symbol: callee,
+                addend: 0,
+                flags: RelocationFlags::Generic {
+                    kind: RelocationKind::Absolute,
+                    encoding: RelocationEncoding::Generic,
+                    size: 32,
+                },
+            },
+        )
+        .unwrap();
+    object.write().unwrap()
 }
 
 fn write_u16(buf: &mut [u8], offset: usize, value: u16) {

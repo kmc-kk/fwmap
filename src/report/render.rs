@@ -225,6 +225,7 @@ fn build_json(
         "top_object_contributions": current.object_contributions.iter().take(30).collect::<Vec<_>>(),
         "archive_contributions": current.archive_contributions.iter().take(30).collect::<Vec<_>>(),
         "archive_pulls": &current.archive_pulls,
+        "relocation_references": &current.relocation_references,
         "source_files": &current.source_files,
         "functions": &current.function_attributions,
         "line_hotspots": current.line_hotspots.iter().take(100).collect::<Vec<_>>(),
@@ -1413,6 +1414,7 @@ mod tests {
             object_contributions: Vec::new(),
             archive_contributions: Vec::new(),
             archive_pulls: Vec::new(),
+            relocation_references: Vec::new(),
             cross_references: Vec::new(),
             linker_script: None,
             memory: MemorySummary {
