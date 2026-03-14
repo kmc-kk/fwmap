@@ -879,9 +879,12 @@ commit range の差分を見る場合:
 ```bash
 fwmap history range main~20..main --repo . --include-changed-files
 fwmap history range main...feature/foo --repo . --json
+fwmap history regression --metric rom_total main~50..main --threshold +8192 --repo .
+fwmap history regression --rule ram-budget-exceeded main~50..main --include-evidence --json
+fwmap history regression --entity source:src/net/proto.cpp v1.2.0..HEAD --include-changed-files --html regression.html
 ```
 
-`history commits` は Git の commit 順に沿って解析済み build を並べ、前回解析済み commit 比の ROM/RAM 差分を表示します。`history range` は `A..B` と `A...B` の両方に対応し、累積差分、worst commit、missing-analysis commit 数、changed files と source diff の交差を確認できます。
+`history commits` は Git の commit 順に沿って解析済み build を並べ、前回解析済み commit 比の ROM/RAM 差分を表示します。`history range` は `A..B` と `A...B` の両方に対応し、累積差分、worst commit、missing-analysis commit 数、changed files と source diff の交差を確認できます。`history regression` は metric / rule / entity の起点推定を行い、`last_good`、`first_observed_bad`、`first_bad_candidate`、confidence、reasoning、evidence を返します。
 
 一覧確認:
 
@@ -989,6 +992,7 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 | `history trend --db <path> --metric <metric>` | 推移表示 |
 | `history commits [--repo <path>]` | Git commit 順に解析済み build を一覧表示。`--json` / `--html` 対応 |
 | `history range <A..B|A...B>` | commit range の累積差分と worst commit を表示。`--include-changed-files` / `--json` / `--html` 対応 |
+| `history regression (--metric <key> \| --rule <id> \| --entity <key>) <A..B\|A...B>` | 回帰起点を推定。`--mode` `--threshold` `--jump-threshold` `--include-evidence` `--include-changed-files` `--json` `--html` 対応 |
 
 ## 7. 出力内容
 

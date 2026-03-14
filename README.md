@@ -100,10 +100,14 @@ cargo run -- history commits --repo . --limit 50 --order ancestry
 cargo run -- history commits --repo . --branch main --json
 cargo run -- history range main~20..main --repo . --include-changed-files
 cargo run -- history range main...feature/foo --repo . --json
+cargo run -- history regression --metric rom_total main~50..main --threshold +8192 --repo .
+cargo run -- history regression --rule ram-budget-exceeded main~50..main --include-evidence --json
+cargo run -- history regression --entity source:src/net/proto.cpp v1.2.0..HEAD --include-changed-files --html regression.html
 ```
 
 When the current working tree is inside a Git repository, history records and report output include Git metadata such as commit hash, branch, `git describe`, subject, and dirty state. Use `--git-repo <path>` to probe a specific repository or `--no-git` to disable Git collection explicitly.
 `history commits` shows analyzed commits aligned to Git history order, while `history range` summarizes an `A..B` or `A...B` slice with cumulative ROM/RAM deltas, worst commit, missing-analysis count, and optional changed-files intersection.
+`history regression` estimates the first analyzed commit where a metric threshold was crossed, a rule first became active, or an entity first appeared. The report includes `last_good`, `first_observed_bad`, `first_bad_candidate`, confidence, reasoning, and optional evidence such as transition rows and changed files.
 
 JSON report example:
 

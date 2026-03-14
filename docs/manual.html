@@ -632,8 +632,11 @@ fwmap history commits --repo . --branch main --json
 <p>commit range の差分を見る場合:</p>
 <pre><code class="language-bash">fwmap history range main~20..main --repo . --include-changed-files
 fwmap history range main...feature/foo --repo . --json
+fwmap history regression --metric rom_total main~50..main --threshold +8192 --repo .
+fwmap history regression --rule ram-budget-exceeded main~50..main --include-evidence --json
+fwmap history regression --entity source:src/net/proto.cpp v1.2.0..HEAD --include-changed-files --html regression.html
 </code></pre>
-<p><code>history commits</code> は Git の commit 順に沿って解析済み build を並べ、前回解析済み commit 比の ROM/RAM 差分を表示します。<code>history range</code> は <code>A..B</code> と <code>A...B</code> の両方に対応し、累積差分、worst commit、missing-analysis commit 数、changed files と source diff の交差を確認できます。</p>
+<p><code>history commits</code> は Git の commit 順に沿って解析済み build を並べ、前回解析済み commit 比の ROM/RAM 差分を表示します。<code>history range</code> は <code>A..B</code> と <code>A...B</code> の両方に対応し、累積差分、worst commit、missing-analysis commit 数、changed files と source diff の交差を確認できます。<code>history regression</code> は metric / rule / entity の起点推定を行い、<code>last_good</code>、<code>first_observed_bad</code>、<code>first_bad_candidate</code>、confidence、reasoning、evidence を返します。</p>
 <p>一覧確認:</p>
 <pre><code class="language-bash">fwmap history list --db history.db --limit 20
 fwmap history list --db history.db --limit 20 --json
@@ -917,6 +920,10 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 <tr>
 <td><code>history range &lt;A..B|A...B&gt;</code></td>
 <td>commit range の累積差分と worst commit を表示。<code>--include-changed-files</code> / <code>--json</code> / <code>--html</code> 対応</td>
+</tr>
+<tr>
+<td><code>history regression (--metric &lt;key&gt; | --rule &lt;id&gt; | --entity &lt;key&gt;) &lt;A..B|A...B&gt;</code></td>
+<td>回帰起点を推定。<code>--mode</code> <code>--threshold</code> <code>--jump-threshold</code> <code>--include-evidence</code> <code>--include-changed-files</code> <code>--json</code> <code>--html</code> 対応</td>
 </tr>
 </tbody>
 </table>

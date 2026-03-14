@@ -168,6 +168,115 @@ pub struct RangeDiffReport {
     pub timeline_rows: Vec<CommitTimelineRow>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RegressionMode {
+    FirstCrossing,
+    FirstJump,
+    FirstPresence,
+    FirstViolation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RegressionConfidence {
+    High,
+    Medium,
+    Low,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RegressionDetector {
+    Metric,
+    Rule,
+    Entity,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RegressionQuery {
+    pub detector_type: RegressionDetector,
+    pub key: String,
+    pub mode: RegressionMode,
+    pub range_spec: String,
+    pub resolved_base: String,
+    pub resolved_head: String,
+    pub order: String,
+    pub threshold: Option<i64>,
+    pub threshold_percent: Option<f64>,
+    pub jump_threshold: Option<i64>,
+    pub include_evidence: bool,
+    pub include_changed_files: bool,
+    pub bisect_like: bool,
+}
+
+#[derive(Debug, Clone)]
+struct RegressionPoint {
+    commit_index: usize,
+    commit: GitCommit,
+    build: BuildRecord,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DetectionResult {
+    values: Vec<Option<i64>>,
+    last_good_index: Option<usize>,
+    first_bad_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RegressionOriginPoint {
+    pub commit: String,
+    pub short_commit: String,
+    pub subject: String,
+    pub value: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RegressionSummary {
+    pub searched_commit_count: usize,
+    pub analyzed_commit_count: usize,
+    pub missing_analysis_count: usize,
+    pub confidence: RegressionConfidence,
+    pub mixed_configuration: bool,
+    pub reasoning: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RegressionOrigin {
+    pub last_good: Option<RegressionOriginPoint>,
+    pub first_observed_bad: Option<RegressionOriginPoint>,
+    pub first_bad_candidate: Option<RegressionOriginPoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RegressionWindowRow {
+    pub commit: String,
+    pub short_commit: String,
+    pub subject: String,
+    pub status: String,
+    pub value: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct RegressionEvidence {
+    pub transition_window: Vec<RegressionWindowRow>,
+    pub top_growth: TimelineTopIncreases,
+    pub changed_files: Option<ChangedFilesSummary>,
+    pub related_rule_hits: Vec<String>,
+    pub narrowed_commits: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RegressionReport {
+    pub repo_id: String,
+    pub query: RegressionQuery,
+    pub summary: RegressionSummary,
+    pub origin: RegressionOrigin,
+    pub evidence: Option<RegressionEvidence>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct BuildDebugInfo {
     pub dwarf_used: bool,
@@ -876,6 +985,514 @@ pub fn range_diff(
     })
 }
 
+pub fn regression_origin(
+    db_path: &Path,
+    repo: Option<&Path>,
+    spec: &str,
+    detector_type: RegressionDetector,
+    key: &str,
+    mode: RegressionMode,
+    threshold: Option<i64>,
+    threshold_percent: Option<f64>,
+    jump_threshold: Option<i64>,
+    order: CommitOrder,
+    include_evidence: bool,
+    include_changed_files: bool,
+    bisect_like: bool,
+    max_steps: usize,
+    limit_commits: Option<usize>,
+    profile: Option<&str>,
+    toolchain: Option<&str>,
+    target: Option<&str>,
+) -> Result<RegressionReport, String> {
+    validate_regression_query(detector_type.clone(), key, mode, threshold, threshold_percent, jump_threshold)?;
+    let repo_root = resolve_repo_root(repo).ok_or_else(|| "git repository was not found".to_string())?;
+    let resolved = resolve_range_spec(repo, spec)?;
+    let mut commits = list_commits(repo, &resolved.diff_base, 1, CommitOrder::Timestamp)?;
+    let mut range_commits = list_range_commits(repo, &resolved.git_range, order)?;
+    range_commits.reverse();
+    commits.extend(range_commits);
+    if let Some(limit) = limit_commits {
+        commits.truncate(limit);
+    }
+    let all_builds = list_builds(db_path)?;
+    let build_map = latest_build_by_commit(&all_builds, &repo_root);
+    let mut analyzed = Vec::new();
+    for (index, commit) in commits.iter().enumerate() {
+        let Some(build) = build_map.get(&commit.commit).cloned() else {
+            continue;
+        };
+        if !matches_filters(&build, profile, toolchain, target, None) {
+            continue;
+        }
+        analyzed.push(RegressionPoint {
+            commit_index: index,
+            commit: commit.clone(),
+            build,
+        });
+    }
+    let mixed_configuration = analyzed
+        .iter()
+        .map(|point| variant_key(&point.build))
+        .collect::<BTreeSet<_>>()
+        .len()
+        > 1;
+    let detection = match detector_type {
+        RegressionDetector::Metric => detect_metric_regression(
+            db_path,
+            &analyzed,
+            key,
+            mode,
+            threshold,
+            threshold_percent,
+            jump_threshold,
+        )?,
+        RegressionDetector::Rule => detect_rule_regression(db_path, &analyzed, key)?,
+        RegressionDetector::Entity => detect_entity_regression(db_path, &analyzed, key)?,
+    };
+    let missing_analysis_count = commits.len().saturating_sub(analyzed.len());
+    let missing_between_boundary = detection
+        .last_good_index
+        .zip(detection.first_bad_index)
+        .map(|(good, bad)| {
+            let commit_gap = analyzed[bad].commit_index.saturating_sub(analyzed[good].commit_index + 1);
+            commit_gap
+        })
+        .unwrap_or(missing_analysis_count);
+    let confidence = classify_regression_confidence(
+        analyzed.is_empty(),
+        detection.last_good_index,
+        detection.first_bad_index,
+        missing_between_boundary,
+        missing_analysis_count,
+        mixed_configuration,
+    );
+    let reasoning = build_regression_reasoning(&detector_type, key, mode, &detection, confidence, missing_between_boundary);
+    let origin = RegressionOrigin {
+        last_good: detection.last_good_index.map(|index| regression_origin_point(&analyzed[index], detection.values[index])),
+        first_observed_bad: detection.first_bad_index.map(|index| regression_origin_point(&analyzed[index], detection.values[index])),
+        first_bad_candidate: detection.first_bad_index.map(|index| regression_origin_point(&analyzed[index], detection.values[index])),
+    };
+    let evidence = if include_evidence {
+        let transition_window = build_transition_window(&analyzed, &detection);
+        let top_growth = detection
+            .last_good_index
+            .zip(detection.first_bad_index)
+            .map(|(good, bad)| build_metric_diff(db_path, analyzed[bad].build.id, analyzed[good].build.id))
+            .transpose()?
+            .map(|diff| TimelineTopIncreases {
+                sections: diff.sections,
+                objects: diff.objects,
+                source_files: diff.source_files,
+                symbols: diff.symbols,
+            })
+            .unwrap_or_default();
+        let changed_files = if include_changed_files {
+            detection.last_good_index.zip(detection.first_bad_index).map(|(good, bad)| {
+                build_changed_files_summary(
+                    repo,
+                    &analyzed[good].commit.commit,
+                    &analyzed[bad].commit.commit,
+                    top_growth.source_files.iter().map(|item| item.name.clone()).collect::<Vec<_>>(),
+                )
+            }).transpose()?
+        } else {
+            None
+        };
+        let related_rule_hits = if matches!(detector_type, RegressionDetector::Rule) {
+            detection
+                .first_bad_index
+                .map(|index| load_rule_ids_for_build(db_path, analyzed[index].build.id))
+                .transpose()?
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let narrowed_commits = if bisect_like {
+            build_narrowed_commits(&analyzed, &detection, max_steps)
+        } else {
+            Vec::new()
+        };
+        Some(RegressionEvidence {
+            transition_window,
+            top_growth,
+            changed_files,
+            related_rule_hits,
+            narrowed_commits,
+        })
+    } else {
+        None
+    };
+    Ok(RegressionReport {
+        repo_id: repo_root,
+        query: RegressionQuery {
+            detector_type,
+            key: key.to_string(),
+            mode,
+            range_spec: spec.to_string(),
+            resolved_base: resolved.resolved_base,
+            resolved_head: resolved.resolved_head,
+            order: commit_order_name(order).to_string(),
+            threshold,
+            threshold_percent,
+            jump_threshold,
+            include_evidence,
+            include_changed_files,
+            bisect_like,
+        },
+        summary: RegressionSummary {
+            searched_commit_count: commits.len(),
+            analyzed_commit_count: analyzed.len(),
+            missing_analysis_count,
+            confidence,
+            mixed_configuration,
+            reasoning,
+        },
+        origin,
+        evidence,
+    })
+}
+
+fn detect_metric_regression(
+    db_path: &Path,
+    analyzed: &[RegressionPoint],
+    key: &str,
+    mode: RegressionMode,
+    threshold: Option<i64>,
+    threshold_percent: Option<f64>,
+    jump_threshold: Option<i64>,
+) -> Result<DetectionResult, String> {
+    let conn = open_history_db(db_path)?;
+    init_schema(&conn)?;
+    let mut values = Vec::with_capacity(analyzed.len());
+    for point in analyzed {
+        values.push(load_metric_value(&conn, point.build.id, key)?);
+    }
+    let mut result = DetectionResult {
+        values,
+        ..DetectionResult::default()
+    };
+    if analyzed.is_empty() {
+        return Ok(result);
+    }
+    match mode {
+        RegressionMode::FirstCrossing => {
+            let Some(baseline) = result.values.first().and_then(|value| *value) else {
+                return Ok(result);
+            };
+            let absolute_threshold = threshold_percent
+                .map(|percent| ((baseline as f64) * percent / 100.0).round() as i64)
+                .or(threshold)
+                .unwrap_or_default();
+            result.last_good_index = Some(0);
+            for index in 1..result.values.len() {
+                let Some(value) = result.values[index] else {
+                    continue;
+                };
+                let delta = value - baseline;
+                if delta >= absolute_threshold {
+                    result.first_bad_index = Some(index);
+                    break;
+                }
+                result.last_good_index = Some(index);
+            }
+        }
+        RegressionMode::FirstJump => {
+            let threshold = jump_threshold.unwrap_or_default();
+            let mut previous_seen = None;
+            for index in 0..result.values.len() {
+                let Some(value) = result.values[index] else {
+                    continue;
+                };
+                if let Some((previous_index, previous_value)) = previous_seen {
+                    if value - previous_value >= threshold {
+                        result.last_good_index = Some(previous_index);
+                        result.first_bad_index = Some(index);
+                        break;
+                    }
+                }
+                previous_seen = Some((index, value));
+            }
+            if result.first_bad_index.is_none() {
+                result.last_good_index = previous_seen.map(|(index, _)| index);
+            }
+        }
+        _ => {}
+    }
+    Ok(result)
+}
+
+fn detect_rule_regression(db_path: &Path, analyzed: &[RegressionPoint], key: &str) -> Result<DetectionResult, String> {
+    let mut result = DetectionResult {
+        values: vec![None; analyzed.len()],
+        ..DetectionResult::default()
+    };
+    for (index, point) in analyzed.iter().enumerate() {
+        let rule_ids = load_rule_ids_for_build(db_path, point.build.id)?;
+        if rule_ids.iter().any(|item| item == key) {
+            result.first_bad_index = Some(index);
+            break;
+        }
+        result.last_good_index = Some(index);
+    }
+    Ok(result)
+}
+
+fn detect_entity_regression(db_path: &Path, analyzed: &[RegressionPoint], key: &str) -> Result<DetectionResult, String> {
+    let conn = open_history_db(db_path)?;
+    init_schema(&conn)?;
+    let mut values = Vec::with_capacity(analyzed.len());
+    let mut result = DetectionResult::default();
+    for (index, point) in analyzed.iter().enumerate() {
+        let value = load_entity_value(&conn, point.build.id, key)?;
+        values.push(value);
+        if result.first_bad_index.is_none() && value.unwrap_or_default() > 0 {
+            result.first_bad_index = Some(index);
+            break;
+        }
+        result.last_good_index = Some(index);
+    }
+    while values.len() < analyzed.len() {
+        values.push(None);
+    }
+    result.values = values;
+    Ok(result)
+}
+
+fn load_metric_value(conn: &Connection, build_id: i64, key: &str) -> Result<Option<i64>, String> {
+    if key == "rom_total" {
+        return conn
+            .query_row("SELECT rom_bytes FROM builds WHERE id = ?1", params![build_id], |row| row.get::<_, i64>(0))
+            .optional()
+            .map_err(|err| format!("failed to query rom_total: {err}"));
+    }
+    if key == "ram_total" {
+        return conn
+            .query_row("SELECT ram_bytes FROM builds WHERE id = ?1", params![build_id], |row| row.get::<_, i64>(0))
+            .optional()
+            .map_err(|err| format!("failed to query ram_total: {err}"));
+    }
+    if let Some(name) = key.strip_prefix("region:").and_then(|value| value.strip_suffix(".used")) {
+        return query_named_metric_value(conn, "region_metrics", "region_name", "used_bytes", build_id, name);
+    }
+    if let Some(name) = key.strip_prefix("section:").and_then(|value| value.strip_suffix(".size")) {
+        return query_named_metric_value(conn, "section_metrics", "section_name", "size_bytes", build_id, name);
+    }
+    if let Some(name) = key.strip_prefix("source:").and_then(|value| value.strip_suffix(".size")) {
+        return query_named_metric_value(conn, "source_file_metrics", "path", "size_bytes", build_id, name);
+    }
+    if let Some(name) = key.strip_prefix("object:").and_then(|value| value.strip_suffix(".size")) {
+        return query_named_metric_value(conn, "object_metrics", "object_path", "size_bytes", build_id, name);
+    }
+    if let Some(name) = key.strip_prefix("symbol:").and_then(|value| value.strip_suffix(".size")) {
+        return query_named_metric_value(conn, "symbol_metrics", "name", "size_bytes", build_id, name);
+    }
+    Err(format!("unsupported metric key '{key}'"))
+}
+
+fn load_entity_value(conn: &Connection, build_id: i64, key: &str) -> Result<Option<i64>, String> {
+    if let Some(name) = key.strip_prefix("symbol:") {
+        return query_named_metric_value(conn, "symbol_metrics", "name", "size_bytes", build_id, name);
+    }
+    if let Some(name) = key.strip_prefix("object:") {
+        return query_named_metric_value(conn, "object_metrics", "object_path", "size_bytes", build_id, name);
+    }
+    if let Some(name) = key.strip_prefix("source:") {
+        return query_named_metric_value(conn, "source_file_metrics", "path", "size_bytes", build_id, name);
+    }
+    if let Some(name) = key.strip_prefix("section:") {
+        return query_named_metric_value(conn, "section_metrics", "section_name", "size_bytes", build_id, name);
+    }
+    if let Some(name) = key.strip_prefix("region:") {
+        return query_named_metric_value(conn, "region_metrics", "region_name", "used_bytes", build_id, name);
+    }
+    Err(format!("unsupported entity key '{key}'"))
+}
+
+fn query_named_metric_value(
+    conn: &Connection,
+    table: &str,
+    name_column: &str,
+    value_column: &str,
+    build_id: i64,
+    name: &str,
+) -> Result<Option<i64>, String> {
+    let sql = format!(
+        "SELECT {value_column} FROM {table} WHERE build_id = ?1 AND {name_column} = ?2 LIMIT 1"
+    );
+    conn.query_row(&sql, params![build_id, name], |row| row.get::<_, i64>(0))
+        .optional()
+        .map_err(|err| format!("failed to query {table} '{name}': {err}"))
+}
+
+fn classify_regression_confidence(
+    no_analyzed: bool,
+    last_good_index: Option<usize>,
+    first_bad_index: Option<usize>,
+    missing_between_boundary: usize,
+    missing_total: usize,
+    mixed_configuration: bool,
+) -> RegressionConfidence {
+    if no_analyzed {
+        return RegressionConfidence::Unknown;
+    }
+    let Some(first_bad_index) = first_bad_index else {
+        return RegressionConfidence::Unknown;
+    };
+    if mixed_configuration {
+        return RegressionConfidence::Low;
+    }
+    let Some(last_good_index) = last_good_index else {
+        return if first_bad_index == 0 {
+            RegressionConfidence::Low
+        } else {
+            RegressionConfidence::Medium
+        };
+    };
+    if missing_between_boundary == 0 && first_bad_index == last_good_index + 1 {
+        return RegressionConfidence::High;
+    }
+    if missing_total > 0 {
+        return RegressionConfidence::Medium;
+    }
+    RegressionConfidence::Low
+}
+
+fn build_regression_reasoning(
+    detector_type: &RegressionDetector,
+    key: &str,
+    mode: RegressionMode,
+    detection: &DetectionResult,
+    confidence: RegressionConfidence,
+    missing_between_boundary: usize,
+) -> String {
+    let Some(first_bad_index) = detection.first_bad_index else {
+        return format!(
+            "No analyzed commit matched detector {:?} for '{}' in the requested range.",
+            detector_type, key
+        );
+    };
+    let first_bad = detection.values.get(first_bad_index).and_then(|value| *value);
+    let boundary = detection
+        .last_good_index
+        .map(|index| format!("between analyzed commits {index} and {first_bad_index}"))
+        .unwrap_or_else(|| format!("at the first analyzed bad commit index {first_bad_index}"));
+    let detector_label = match detector_type {
+        RegressionDetector::Metric => match mode {
+            RegressionMode::FirstCrossing => "first exceeded threshold",
+            RegressionMode::FirstJump => "first crossed jump threshold",
+            _ => "matched",
+        },
+        RegressionDetector::Rule => "first became active",
+        RegressionDetector::Entity => "was first observed",
+    };
+    let mut reasoning = format!("{} {} for '{}' {}; ", format!("{:?}", detector_type), detector_label, key, boundary);
+    if let Some(value) = first_bad {
+        reasoning.push_str(&format!("first observed value is {value}. "));
+    }
+    if missing_between_boundary > 0 {
+        reasoning.push_str(&format!(
+            "{} commits in the boundary have no stored analysis, so confidence is {:?}.",
+            missing_between_boundary, confidence
+        ));
+    } else {
+        reasoning.push_str(&format!("No missing analyzed commits around the boundary; confidence is {:?}.", confidence));
+    }
+    reasoning
+}
+
+fn regression_origin_point(point: &RegressionPoint, value: Option<i64>) -> RegressionOriginPoint {
+    RegressionOriginPoint {
+        commit: point.commit.commit.clone(),
+        short_commit: point.commit.short_commit.clone(),
+        subject: point.commit.subject.clone(),
+        value,
+    }
+}
+
+fn build_transition_window(analyzed: &[RegressionPoint], detection: &DetectionResult) -> Vec<RegressionWindowRow> {
+    let mut rows = Vec::new();
+    if let Some(index) = detection.last_good_index {
+        rows.push(RegressionWindowRow {
+            commit: analyzed[index].commit.commit.clone(),
+            short_commit: analyzed[index].commit.short_commit.clone(),
+            subject: analyzed[index].commit.subject.clone(),
+            status: "good".to_string(),
+            value: detection.values[index],
+        });
+    }
+    if let Some(index) = detection.first_bad_index {
+        rows.push(RegressionWindowRow {
+            commit: analyzed[index].commit.commit.clone(),
+            short_commit: analyzed[index].commit.short_commit.clone(),
+            subject: analyzed[index].commit.subject.clone(),
+            status: "bad".to_string(),
+            value: detection.values[index],
+        });
+    }
+    rows
+}
+
+fn build_narrowed_commits(analyzed: &[RegressionPoint], detection: &DetectionResult, max_steps: usize) -> Vec<String> {
+    let Some(mut left) = detection.last_good_index else {
+        return Vec::new();
+    };
+    let Some(right) = detection.first_bad_index else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    let mut steps = 0usize;
+    while right > left + 1 && steps < max_steps {
+        let mid = left + (right - left) / 2;
+        rows.push(analyzed[mid].commit.short_commit.clone());
+        left = mid;
+        steps += 1;
+    }
+    rows
+}
+
+fn validate_regression_query(
+    detector_type: RegressionDetector,
+    key: &str,
+    mode: RegressionMode,
+    threshold: Option<i64>,
+    threshold_percent: Option<f64>,
+    jump_threshold: Option<i64>,
+) -> Result<(), String> {
+    if key.trim().is_empty() {
+        return Err("regression detector key must not be empty".to_string());
+    }
+    match detector_type {
+        RegressionDetector::Metric => match mode {
+            RegressionMode::FirstCrossing => {
+                if threshold.is_some() && threshold_percent.is_some() {
+                    return Err("use either --threshold or --threshold-percent, not both".to_string());
+                }
+                if threshold.is_none() && threshold_percent.is_none() {
+                    return Err("metric first-crossing requires --threshold or --threshold-percent".to_string());
+                }
+            }
+            RegressionMode::FirstJump => {
+                if jump_threshold.is_none() {
+                    return Err("metric first-jump requires --jump-threshold".to_string());
+                }
+            }
+            _ => return Err("metric detector supports only first-crossing or first-jump".to_string()),
+        },
+        RegressionDetector::Rule => {
+            if !matches!(mode, RegressionMode::FirstViolation) {
+                return Err("rule detector supports only first-violation".to_string());
+            }
+        }
+        RegressionDetector::Entity => {
+            if !matches!(mode, RegressionMode::FirstPresence) {
+                return Err("entity detector supports only first-presence".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn query_simple_trend(
     conn: &Connection,
     column: &str,
@@ -1192,6 +1809,39 @@ pub fn print_range_diff(report: &RangeDiffReport) {
     }
 }
 
+pub fn print_regression_report(report: &RegressionReport) {
+    println!(
+        "Regression {} {} {} analyzed={} missing={} confidence={:?}",
+        match report.query.detector_type {
+            RegressionDetector::Metric => "metric",
+            RegressionDetector::Rule => "rule",
+            RegressionDetector::Entity => "entity",
+        },
+        report.query.key,
+        report.query.range_spec,
+        report.summary.analyzed_commit_count,
+        report.summary.missing_analysis_count,
+        report.summary.confidence
+    );
+    println!("{}", report.summary.reasoning);
+    if let Some(point) = report.origin.last_good.as_ref() {
+        println!(
+            "Last good: {} {}{}",
+            point.short_commit,
+            point.subject,
+            point.value.map(|value| format!(" value={value}")).unwrap_or_default()
+        );
+    }
+    if let Some(point) = report.origin.first_observed_bad.as_ref() {
+        println!(
+            "First observed bad: {} {}{}",
+            point.short_commit,
+            point.subject,
+            point.value.map(|value| format!(" value={value}")).unwrap_or_default()
+        );
+    }
+}
+
 pub fn write_commit_timeline_html(path: &Path, report: &CommitTimelineReport) -> Result<(), String> {
     let rows = report
         .rows
@@ -1250,6 +1900,42 @@ pub fn write_range_diff_html(path: &Path, report: &RangeDiffReport) -> Result<()
         ),
     )
     .map_err(|err| format!("failed to write range diff HTML '{}': {err}", path.display()))
+}
+
+pub fn write_regression_html(path: &Path, report: &RegressionReport) -> Result<(), String> {
+    let transition_rows = report
+        .evidence
+        .as_ref()
+        .map(|evidence| {
+            evidence
+                .transition_window
+                .iter()
+                .map(|row| {
+                    format!(
+                        "<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                        escape_html(&row.short_commit),
+                        escape_html(&row.status),
+                        row.value.map(|value| value.to_string()).unwrap_or_else(|| "-".to_string()),
+                        escape_html(&row.subject)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    fs::write(
+        path,
+        format!(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>fwmap history regression</title></head><body><h1>Regression Origin</h1><p>{}</p><p>confidence={:?} analyzed={} missing={}</p><p>{}</p><table border=\"1\"><thead><tr><th>Commit</th><th>Status</th><th>Value</th><th>Subject</th></tr></thead><tbody>{}</tbody></table></body></html>",
+            escape_html(&report.query.range_spec),
+            report.summary.confidence,
+            report.summary.analyzed_commit_count,
+            report.summary.missing_analysis_count,
+            escape_html(&report.summary.reasoning),
+            transition_rows
+        ),
+    )
+    .map_err(|err| format!("failed to write regression HTML '{}': {err}", path.display()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1825,7 +2511,8 @@ fn now_unix() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        commit_timeline, list_builds, range_diff, record_build, show_build, trend_metric, HistoryRecordInput, TrendFormat,
+        commit_timeline, list_builds, range_diff, record_build, regression_origin, show_build, trend_metric,
+        HistoryRecordInput, RegressionConfidence, RegressionDetector, RegressionMode, TrendFormat,
     };
     use crate::git::{collect_git_metadata, CommitOrder, GitOptions};
     use crate::model::{
@@ -1994,6 +2681,166 @@ mod tests {
         let _ = fs::remove_dir_all(repo);
     }
 
+    #[test]
+    fn detects_metric_regression_origin() {
+        let db = temp_db();
+        let repo = init_repo("regression-metric");
+        let commit_one = checkout_and_collect(&repo, "HEAD");
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: analysis_for_commit(100, 20, &commit_one),
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+        fs::write(repo.join("src").join("main.cpp"), "hello 2\n").unwrap();
+        run_git(&repo, &["commit", "-am", "second commit"]);
+        let commit_two = checkout_and_collect(&repo, "HEAD");
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: analysis_for_commit(112, 21, &commit_two),
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+        fs::write(repo.join("src").join("main.cpp"), "hello 3\n").unwrap();
+        run_git(&repo, &["commit", "-am", "third commit"]);
+        let commit_three = checkout_and_collect(&repo, "HEAD");
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: analysis_for_commit(140, 24, &commit_three),
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+
+        let report = regression_origin(
+            &db,
+            Some(&repo),
+            "HEAD~2..HEAD",
+            RegressionDetector::Metric,
+            "rom_total",
+            RegressionMode::FirstCrossing,
+            Some(30),
+            None,
+            None,
+            CommitOrder::Ancestry,
+            true,
+            true,
+            false,
+            8,
+            None,
+            Some("release"),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(report.summary.confidence, RegressionConfidence::High);
+        assert_eq!(report.origin.last_good.as_ref().map(|item| item.subject.as_str()), Some("second commit"));
+        assert_eq!(
+            report.origin.first_observed_bad.as_ref().map(|item| item.subject.as_str()),
+            Some("third commit")
+        );
+        assert!(report.evidence.as_ref().unwrap().changed_files.as_ref().unwrap().intersection_count >= 1);
+        let _ = fs::remove_file(db);
+        let _ = fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn detects_rule_and_entity_regression_origin() {
+        let db = temp_db();
+        let repo = init_repo("regression-rule");
+        let commit_one = checkout_and_collect(&repo, "HEAD");
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: analysis_for_commit(100, 20, &commit_one),
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+        fs::write(repo.join("src").join("main.cpp"), "hello 2\n").unwrap();
+        run_git(&repo, &["commit", "-am", "second commit"]);
+        let commit_two = checkout_and_collect(&repo, "HEAD");
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: analysis_for_commit_with_warning(120, 22, &commit_two, "ram-budget-exceeded"),
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+        fs::write(repo.join("src").join("feature.cpp"), "feature\n").unwrap();
+        run_git(&repo, &["add", "src/feature.cpp"]);
+        run_git(&repo, &["commit", "-m", "third commit"]);
+        let commit_three = checkout_and_collect(&repo, "HEAD");
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: analysis_for_commit_with_source(150, 30, &commit_three, "src/feature.cpp"),
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+
+        let rule_report = regression_origin(
+            &db,
+            Some(&repo),
+            "HEAD~2..HEAD",
+            RegressionDetector::Rule,
+            "ram-budget-exceeded",
+            RegressionMode::FirstViolation,
+            None,
+            None,
+            None,
+            CommitOrder::Ancestry,
+            true,
+            false,
+            false,
+            8,
+            None,
+            Some("release"),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            rule_report.origin.first_observed_bad.as_ref().map(|item| item.subject.as_str()),
+            Some("second commit")
+        );
+
+        let entity_report = regression_origin(
+            &db,
+            Some(&repo),
+            "HEAD~2..HEAD",
+            RegressionDetector::Entity,
+            "source:src/feature.cpp",
+            RegressionMode::FirstPresence,
+            None,
+            None,
+            None,
+            CommitOrder::Ancestry,
+            false,
+            false,
+            false,
+            8,
+            None,
+            Some("release"),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            entity_report.origin.first_observed_bad.as_ref().map(|item| item.subject.as_str()),
+            Some("third commit")
+        );
+        let _ = fs::remove_file(db);
+        let _ = fs::remove_dir_all(repo);
+    }
+
     fn temp_db() -> std::path::PathBuf {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         std::env::temp_dir().join(format!("fwmap-history-{nanos}.db"))
@@ -2024,6 +2871,45 @@ mod tests {
             addr: 0,
             size: rom,
         }];
+        analysis
+    }
+
+    fn analysis_for_commit_with_warning(
+        rom: u64,
+        ram: u64,
+        git: &crate::model::GitMetadata,
+        code: &str,
+    ) -> AnalysisResult {
+        let mut analysis = analysis_for_commit(rom, ram, git);
+        analysis.warnings.push(WarningItem {
+            level: WarningLevel::Warn,
+            code: code.to_string(),
+            message: "warning".to_string(),
+            source: WarningSource::Analyze,
+            related: None,
+        });
+        analysis
+    }
+
+    fn analysis_for_commit_with_source(
+        rom: u64,
+        ram: u64,
+        git: &crate::model::GitMetadata,
+        source_path: &str,
+    ) -> AnalysisResult {
+        let mut analysis = analysis_for_commit(rom, ram, git);
+        analysis.source_files.push(crate::model::SourceFile {
+            path: source_path.to_string(),
+            display_path: source_path.to_string(),
+            directory: Path::new(source_path)
+                .parent()
+                .and_then(|item| item.to_str())
+                .unwrap_or_default()
+                .to_string(),
+            size: rom / 2,
+            functions: 1,
+            line_ranges: 1,
+        });
         analysis
     }
 

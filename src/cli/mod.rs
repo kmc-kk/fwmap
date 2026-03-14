@@ -6,8 +6,9 @@ use crate::demangle::display_name;
 use crate::git::{CommitOrder, GitOptions};
 use crate::history::{
     commit_timeline, list_builds, print_build_detail, print_build_list, print_commit_timeline, print_range_diff,
-    print_trend, range_diff, record_build, show_build, trend_metric, write_commit_timeline_html, write_range_diff_html,
-    HistoryRecordInput,
+    print_regression_report, print_trend, range_diff, record_build, regression_origin, show_build, trend_metric,
+    write_commit_timeline_html, write_range_diff_html, write_regression_html, HistoryRecordInput, RegressionDetector,
+    RegressionMode,
 };
 use crate::linkage::{explain_object, explain_section, explain_symbol, ExplainResult};
 use crate::model::{
@@ -209,6 +210,62 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 println!("HTML: {}", path.display());
             } else {
                 print_range_diff(&report);
+            }
+            Ok(0)
+        }
+        Command::HistoryRegression {
+            db,
+            repo,
+            spec,
+            detector_type,
+            key,
+            mode,
+            threshold,
+            threshold_percent,
+            jump_threshold,
+            order,
+            include_evidence,
+            include_changed_files,
+            bisect_like,
+            max_steps,
+            limit_commits,
+            profile,
+            toolchain,
+            target,
+            json,
+            html,
+        } => {
+            let report = regression_origin(
+                &db,
+                repo.as_deref(),
+                &spec,
+                detector_type,
+                &key,
+                mode,
+                threshold,
+                threshold_percent,
+                jump_threshold,
+                order,
+                include_evidence,
+                include_changed_files,
+                bisect_like,
+                max_steps,
+                limit_commits,
+                profile.as_deref(),
+                toolchain.as_deref(),
+                target.as_deref(),
+            )?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report)
+                        .map_err(|err| format!("failed to serialize regression report: {err}"))?
+                );
+            } else if let Some(path) = html.as_deref() {
+                write_regression_html(path, &report)?;
+                println!("HTML: {}", path.display());
+            } else {
+                print_regression_report(&report);
             }
             Ok(0)
         }
@@ -554,6 +611,28 @@ enum Command {
         spec: String,
         order: CommitOrder,
         include_changed_files: bool,
+        profile: Option<String>,
+        toolchain: Option<String>,
+        target: Option<String>,
+        json: bool,
+        html: Option<PathBuf>,
+    },
+    HistoryRegression {
+        db: PathBuf,
+        repo: Option<PathBuf>,
+        spec: String,
+        detector_type: RegressionDetector,
+        key: String,
+        mode: RegressionMode,
+        threshold: Option<i64>,
+        threshold_percent: Option<f64>,
+        jump_threshold: Option<i64>,
+        order: CommitOrder,
+        include_evidence: bool,
+        include_changed_files: bool,
+        bisect_like: bool,
+        max_steps: usize,
+        limit_commits: Option<usize>,
         profile: Option<String>,
         toolchain: Option<String>,
         target: Option<String>,
@@ -1010,6 +1089,7 @@ fwmap history show --db <path> --build <id>
 fwmap history trend --db <path> --metric <rom|ram|warnings|unknown_source|region:NAME|section:NAME|source:PATH|function:KEY|object:PATH|archive-member:ARCHIVE(MEMBER)|directory:PATH> [--last <n>]
 fwmap history commits [--db <path>] [--repo <path>] [--branch <name>] [--limit <n>] [--profile <name>] [--toolchain <id>] [--target <id>] [--order <timestamp|ancestry>] [--json] [--html <path>]
 fwmap history range <A..B|A...B> [--db <path>] [--repo <path>] [--profile <name>] [--toolchain <id>] [--target <id>] [--order <timestamp|ancestry>] [--include-changed-files] [--json] [--html <path>]
+fwmap history regression (--metric <key> | --rule <id> | --entity <key>) [<A..B|A...B>] [--db <path>] [--repo <path>] [--base <rev> --head <rev> | --from <rev> --to <rev>] [--mode <first-crossing|first-jump|first-presence|first-violation>] [--threshold <delta>] [--threshold-percent <percent>] [--jump-threshold <delta>] [--profile <name>] [--toolchain <id>] [--target <id>] [--order <timestamp|ancestry>] [--include-evidence] [--include-changed-files] [--bisect-like] [--max-steps <n>] [--limit-commits <n>] [--json] [--html <path>]
 
 Options:
   --elf       Input ELF file (required)
@@ -1063,6 +1143,9 @@ Options:
   --threshold-ram Percent threshold for RAM warnings
   --threshold-region name:percent threshold for a region warning
   --threshold-symbol-growth Bytes threshold for symbol growth warning
+  --metric    Regression detector metric key such as rom_total, ram_total, section:.text.size
+  --rule      Regression detector rule id
+  --entity    Regression detector entity key such as symbol:main or source:src/main.cpp
   --verbose   Print detailed warnings to the console
   --version   Show version
   --help      Show this help
@@ -1083,6 +1166,7 @@ fn parse_history_args(args: Vec<String>) -> Result<Command, String> {
         "trend" => parse_history_trend_args(args),
         "commits" => parse_history_commits_args(args),
         "range" => parse_history_range_args(args),
+        "regression" => parse_history_regression_args(args),
         _ => Err(format!("unknown history subcommand '{}'\n\n{}", sub, help_text())),
     }
 }
@@ -1495,6 +1579,89 @@ fn parse_history_range_args(args: Vec<String>) -> Result<Command, String> {
     })
 }
 
+fn parse_history_regression_args(args: Vec<String>) -> Result<Command, String> {
+    let db = parse_optional_path_arg(&args[3..], "--db")?.unwrap_or_else(|| PathBuf::from("history.db"));
+    let repo = parse_optional_path_arg(&args[3..], "--repo")?;
+    let metric = parse_optional_string_arg(&args[3..], "--metric")?;
+    let rule = parse_optional_string_arg(&args[3..], "--rule")?;
+    let entity = parse_optional_string_arg(&args[3..], "--entity")?;
+    let detector_count = usize::from(metric.is_some()) + usize::from(rule.is_some()) + usize::from(entity.is_some());
+    if detector_count != 1 {
+        return Err("history regression requires exactly one of --metric, --rule, or --entity".to_string());
+    }
+    let (detector_type, key, default_mode) = if let Some(key) = metric {
+        (RegressionDetector::Metric, key, RegressionMode::FirstCrossing)
+    } else if let Some(key) = rule {
+        (RegressionDetector::Rule, key, RegressionMode::FirstViolation)
+    } else {
+        (
+            RegressionDetector::Entity,
+            entity.unwrap_or_default(),
+            RegressionMode::FirstPresence,
+        )
+    };
+    let spec = args
+        .get(3)
+        .filter(|item| !item.starts_with("--"))
+        .cloned()
+        .or_else(|| {
+            let base = parse_optional_string_arg(&args[3..], "--base").ok().flatten()?;
+            let head = parse_optional_string_arg(&args[3..], "--head").ok().flatten()?;
+            Some(format!("{base}...{head}"))
+        })
+        .or_else(|| {
+            let from = parse_optional_string_arg(&args[3..], "--from").ok().flatten()?;
+            let to = parse_optional_string_arg(&args[3..], "--to").ok().flatten()?;
+            Some(format!("{from}..{to}"))
+        })
+        .ok_or_else(|| "history regression requires <A..B>, <A...B>, --base/--head, or --from/--to".to_string())?;
+    let mode = parse_optional_string_arg(&args[3..], "--mode")?
+        .as_deref()
+        .map(parse_regression_mode)
+        .transpose()?
+        .unwrap_or(default_mode);
+    let threshold = parse_optional_i64_arg(&args[3..], "--threshold")?;
+    let threshold_percent = parse_optional_f64_arg(&args[3..], "--threshold-percent")?;
+    let jump_threshold = parse_optional_i64_arg(&args[3..], "--jump-threshold")?;
+    let profile = parse_optional_string_arg(&args[3..], "--profile")?;
+    let toolchain = parse_optional_string_arg(&args[3..], "--toolchain")?;
+    let target = parse_optional_string_arg(&args[3..], "--target")?;
+    let order = parse_optional_string_arg(&args[3..], "--order")?
+        .as_deref()
+        .map(parse_commit_order)
+        .transpose()?
+        .unwrap_or(CommitOrder::Ancestry);
+    let include_evidence = args[3..].iter().any(|item| item == "--include-evidence");
+    let include_changed_files = args[3..].iter().any(|item| item == "--include-changed-files");
+    let bisect_like = args[3..].iter().any(|item| item == "--bisect-like");
+    let max_steps = parse_optional_usize_arg(&args[3..], "--max-steps")?.unwrap_or(12);
+    let limit_commits = parse_optional_usize_arg(&args[3..], "--limit-commits")?;
+    let json = args[3..].iter().any(|item| item == "--json");
+    let html = parse_optional_path_arg(&args[3..], "--html")?;
+    Ok(Command::HistoryRegression {
+        db,
+        repo,
+        spec,
+        detector_type,
+        key,
+        mode,
+        threshold,
+        threshold_percent,
+        jump_threshold,
+        order,
+        include_evidence,
+        include_changed_files,
+        bisect_like,
+        max_steps,
+        limit_commits,
+        profile,
+        toolchain,
+        target,
+        json,
+        html,
+    })
+}
+
 fn parse_required_path_arg(args: &[String], key: &str) -> Result<PathBuf, String> {
     parse_required_string_arg(args, key).map(PathBuf::from)
 }
@@ -1542,6 +1709,32 @@ fn parse_optional_usize_arg(args: &[String], key: &str) -> Result<Option<usize>,
         .map_err(|_| format!("invalid integer for {key}"))
 }
 
+fn parse_optional_i64_arg(args: &[String], key: &str) -> Result<Option<i64>, String> {
+    let Some(index) = args.iter().position(|item| item == key) else {
+        return Ok(None);
+    };
+    let value = args
+        .get(index + 1)
+        .ok_or_else(|| format!("missing value for {key}"))?;
+    value
+        .parse::<i64>()
+        .map(Some)
+        .map_err(|_| format!("invalid integer for {key}"))
+}
+
+fn parse_optional_f64_arg(args: &[String], key: &str) -> Result<Option<f64>, String> {
+    let Some(index) = args.iter().position(|item| item == key) else {
+        return Ok(None);
+    };
+    let value = args
+        .get(index + 1)
+        .ok_or_else(|| format!("missing value for {key}"))?;
+    value
+        .parse::<f64>()
+        .map(Some)
+        .map_err(|_| format!("invalid number for {key}"))
+}
+
 fn parse_percent(value: &str, key: &str) -> Result<f64, String> {
     let parsed = value.parse::<f64>().map_err(|_| format!("invalid percent for {key}: {value}"))?;
     if !(0.0..=100.0).contains(&parsed) {
@@ -1571,6 +1764,18 @@ fn parse_ci_format(value: &str) -> Result<CiFormat, String> {
         "markdown" => Ok(CiFormat::Markdown),
         "json" => Ok(CiFormat::Json),
         _ => Err(format!("invalid ci format '{value}', expected text|markdown|json")),
+    }
+}
+
+fn parse_regression_mode(value: &str) -> Result<RegressionMode, String> {
+    match value {
+        "first-crossing" => Ok(RegressionMode::FirstCrossing),
+        "first-jump" => Ok(RegressionMode::FirstJump),
+        "first-presence" => Ok(RegressionMode::FirstPresence),
+        "first-violation" => Ok(RegressionMode::FirstViolation),
+        _ => Err(format!(
+            "invalid regression mode '{value}', expected first-crossing|first-jump|first-presence|first-violation"
+        )),
     }
 }
 
@@ -1670,6 +1875,7 @@ fn print_grouped_cpp_diff(diff: &crate::model::DiffResult, group_by: CppGroupBy)
 mod tests {
     use super::{parse_args, Command};
     use crate::git::CommitOrder;
+    use crate::history::{RegressionDetector, RegressionMode};
     use crate::model::{
         CiFormat, CppGroupBy, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode, ToolchainSelection,
         WarningLevel,
@@ -1937,6 +2143,46 @@ mod tests {
                 assert_eq!(html, Some(PathBuf::from("range.html")));
             }
             _ => panic!("expected history range command"),
+        }
+    }
+
+    #[test]
+    fn parses_history_regression_command() {
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "history".to_string(),
+            "regression".to_string(),
+            "main~20..main".to_string(),
+            "--metric".to_string(),
+            "rom_total".to_string(),
+            "--mode".to_string(),
+            "first-jump".to_string(),
+            "--jump-threshold".to_string(),
+            "+4096".to_string(),
+            "--include-evidence".to_string(),
+            "--json".to_string(),
+        ])
+        .unwrap();
+        match cmd {
+            Command::HistoryRegression {
+                spec,
+                detector_type,
+                key,
+                mode,
+                jump_threshold,
+                include_evidence,
+                json,
+                ..
+            } => {
+                assert_eq!(spec, "main~20..main");
+                assert_eq!(detector_type, RegressionDetector::Metric);
+                assert_eq!(key, "rom_total");
+                assert_eq!(mode, RegressionMode::FirstJump);
+                assert_eq!(jump_threshold, Some(4096));
+                assert!(include_evidence);
+                assert!(json);
+            }
+            _ => panic!("expected history regression command"),
         }
     }
 
