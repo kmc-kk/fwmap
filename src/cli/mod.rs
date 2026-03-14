@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 use crate::analyze::{analyze_paths, evaluate_warnings, AnalyzeOptions};
 use crate::diff::{diff_results, top_increases};
 use crate::demangle::display_name;
-use crate::git::GitOptions;
+use crate::git::{CommitOrder, GitOptions};
 use crate::history::{
-    list_builds, print_build_detail, print_build_list, print_trend, record_build, show_build, trend_metric,
+    commit_timeline, list_builds, print_build_detail, print_build_list, print_commit_timeline, print_range_diff,
+    print_trend, range_diff, record_build, show_build, trend_metric, write_commit_timeline_html, write_range_diff_html,
     HistoryRecordInput,
 };
 use crate::linkage::{explain_object, explain_section, explain_symbol, ExplainResult};
@@ -98,6 +99,27 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 analysis.policy = Some(evaluation);
             }
             print_debug_trace(&analysis);
+            let mut metadata = metadata;
+            if let Some(profile) = profile.as_ref() {
+                metadata.insert("build.profile".to_string(), profile.clone());
+            }
+            metadata.insert(
+                "toolchain.id".to_string(),
+                analysis
+                    .toolchain
+                    .detected
+                    .map(|item| item.to_string())
+                    .unwrap_or_else(|| analysis.toolchain.resolved.to_string()),
+            );
+            metadata.insert(
+                "config.fingerprint".to_string(),
+                format!(
+                    "{}|{}|{}",
+                    analysis.toolchain.linker_family,
+                    analysis.toolchain.map_format,
+                    analysis.debug_info.source_lines
+                ),
+            );
             let id = record_build(&db, HistoryRecordInput { analysis, metadata })?;
             println!("Recorded build #{id} into {}", db.display());
             Ok(0)
@@ -127,6 +149,67 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
         Command::HistoryTrend { db, metric, last } => {
             let points = trend_metric(&db, &metric, last)?;
             print_trend(&points);
+            Ok(0)
+        }
+        Command::HistoryCommits {
+            db,
+            repo,
+            branch,
+            limit,
+            profile,
+            toolchain,
+            target,
+            order,
+            json,
+            html,
+        } => {
+            let report = commit_timeline(&db, repo.as_deref(), branch.as_deref(), limit, profile.as_deref(), toolchain.as_deref(), target.as_deref(), order)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).map_err(|err| format!("failed to serialize commit timeline: {err}"))?
+                );
+            } else if let Some(path) = html.as_deref() {
+                write_commit_timeline_html(path, &report)?;
+                println!("HTML: {}", path.display());
+            } else {
+                print_commit_timeline(&report);
+            }
+            Ok(0)
+        }
+        Command::HistoryRange {
+            db,
+            repo,
+            spec,
+            order,
+            include_changed_files,
+            profile,
+            toolchain,
+            target,
+            json,
+            html,
+        } => {
+            let report = range_diff(
+                &db,
+                repo.as_deref(),
+                &spec,
+                order,
+                include_changed_files,
+                profile.as_deref(),
+                toolchain.as_deref(),
+                target.as_deref(),
+            )?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).map_err(|err| format!("failed to serialize range diff: {err}"))?
+                );
+            } else if let Some(path) = html.as_deref() {
+                write_range_diff_html(path, &report)?;
+                println!("HTML: {}", path.display());
+            } else {
+                print_range_diff(&report);
+            }
             Ok(0)
         }
         Command::Explain {
@@ -296,11 +379,32 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             }
             if save_history {
                 let db = history_db.clone().unwrap_or_else(|| PathBuf::from("history.db"));
+                let mut metadata = std::collections::BTreeMap::new();
+                if let Some(profile) = profile.as_ref() {
+                    metadata.insert("build.profile".to_string(), profile.clone());
+                }
+                metadata.insert(
+                    "toolchain.id".to_string(),
+                    current
+                        .toolchain
+                        .detected
+                        .map(|item| item.to_string())
+                        .unwrap_or_else(|| current.toolchain.resolved.to_string()),
+                );
+                metadata.insert(
+                    "config.fingerprint".to_string(),
+                    format!(
+                        "{}|{}|{}",
+                        current.toolchain.linker_family,
+                        current.toolchain.map_format,
+                        current.debug_info.source_lines
+                    ),
+                );
                 let build_id = record_build(
                     &db,
                     HistoryRecordInput {
                         analysis: current.clone(),
-                        metadata: std::collections::BTreeMap::new(),
+                        metadata,
                     },
                 )?;
                 if !ci_summary {
@@ -431,6 +535,30 @@ enum Command {
         db: PathBuf,
         metric: String,
         last: usize,
+    },
+    HistoryCommits {
+        db: PathBuf,
+        repo: Option<PathBuf>,
+        branch: Option<String>,
+        limit: usize,
+        profile: Option<String>,
+        toolchain: Option<String>,
+        target: Option<String>,
+        order: CommitOrder,
+        json: bool,
+        html: Option<PathBuf>,
+    },
+    HistoryRange {
+        db: PathBuf,
+        repo: Option<PathBuf>,
+        spec: String,
+        order: CommitOrder,
+        include_changed_files: bool,
+        profile: Option<String>,
+        toolchain: Option<String>,
+        target: Option<String>,
+        json: bool,
+        html: Option<PathBuf>,
     },
     Explain {
         elf: PathBuf,
@@ -880,6 +1008,8 @@ fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--r
 fwmap history list --db <path> [--limit <n>] [--json]
 fwmap history show --db <path> --build <id>
 fwmap history trend --db <path> --metric <rom|ram|warnings|unknown_source|region:NAME|section:NAME|source:PATH|function:KEY|object:PATH|archive-member:ARCHIVE(MEMBER)|directory:PATH> [--last <n>]
+fwmap history commits [--db <path>] [--repo <path>] [--branch <name>] [--limit <n>] [--profile <name>] [--toolchain <id>] [--target <id>] [--order <timestamp|ancestry>] [--json] [--html <path>]
+fwmap history range <A..B|A...B> [--db <path>] [--repo <path>] [--profile <name>] [--toolchain <id>] [--target <id>] [--order <timestamp|ancestry>] [--include-changed-files] [--json] [--html <path>]
 
 Options:
   --elf       Input ELF file (required)
@@ -951,6 +1081,8 @@ fn parse_history_args(args: Vec<String>) -> Result<Command, String> {
         "list" => parse_history_list_args(args),
         "show" => parse_history_show_args(args),
         "trend" => parse_history_trend_args(args),
+        "commits" => parse_history_commits_args(args),
+        "range" => parse_history_range_args(args),
         _ => Err(format!("unknown history subcommand '{}'\n\n{}", sub, help_text())),
     }
 }
@@ -1291,6 +1423,78 @@ fn parse_history_trend_args(args: Vec<String>) -> Result<Command, String> {
     Ok(Command::HistoryTrend { db, metric, last })
 }
 
+fn parse_history_commits_args(args: Vec<String>) -> Result<Command, String> {
+    let db = parse_optional_path_arg(&args[3..], "--db")?.unwrap_or_else(|| PathBuf::from("history.db"));
+    let repo = parse_optional_path_arg(&args[3..], "--repo")?;
+    let branch = parse_optional_string_arg(&args[3..], "--branch")?;
+    let limit = parse_optional_usize_arg(&args[3..], "--limit")?.unwrap_or(100);
+    let profile = parse_optional_string_arg(&args[3..], "--profile")?;
+    let toolchain = parse_optional_string_arg(&args[3..], "--toolchain")?;
+    let target = parse_optional_string_arg(&args[3..], "--target")?;
+    let order = parse_optional_string_arg(&args[3..], "--order")?
+        .as_deref()
+        .map(parse_commit_order)
+        .transpose()?
+        .unwrap_or(CommitOrder::Timestamp);
+    let json = args[3..].iter().any(|item| item == "--json");
+    let html = parse_optional_path_arg(&args[3..], "--html")?;
+    Ok(Command::HistoryCommits {
+        db,
+        repo,
+        branch,
+        limit,
+        profile,
+        toolchain,
+        target,
+        order,
+        json,
+        html,
+    })
+}
+
+fn parse_history_range_args(args: Vec<String>) -> Result<Command, String> {
+    let db = parse_optional_path_arg(&args[3..], "--db")?.unwrap_or_else(|| PathBuf::from("history.db"));
+    let repo = parse_optional_path_arg(&args[3..], "--repo")?;
+    let spec = args
+        .get(3)
+        .filter(|item| !item.starts_with("--"))
+        .cloned()
+        .or_else(|| {
+            let base = parse_optional_string_arg(&args[3..], "--base").ok().flatten()?;
+            let head = parse_optional_string_arg(&args[3..], "--head").ok().flatten()?;
+            Some(format!("{base}...{head}"))
+        })
+        .or_else(|| {
+            let from = parse_optional_string_arg(&args[3..], "--from").ok().flatten()?;
+            let to = parse_optional_string_arg(&args[3..], "--to").ok().flatten()?;
+            Some(format!("{from}..{to}"))
+        })
+        .ok_or_else(|| "history range requires <A..B>, <A...B>, --base/--head, or --from/--to".to_string())?;
+    let profile = parse_optional_string_arg(&args[3..], "--profile")?;
+    let toolchain = parse_optional_string_arg(&args[3..], "--toolchain")?;
+    let target = parse_optional_string_arg(&args[3..], "--target")?;
+    let order = parse_optional_string_arg(&args[3..], "--order")?
+        .as_deref()
+        .map(parse_commit_order)
+        .transpose()?
+        .unwrap_or(CommitOrder::Timestamp);
+    let include_changed_files = args[3..].iter().any(|item| item == "--include-changed-files");
+    let json = args[3..].iter().any(|item| item == "--json");
+    let html = parse_optional_path_arg(&args[3..], "--html")?;
+    Ok(Command::HistoryRange {
+        db,
+        repo,
+        spec,
+        order,
+        include_changed_files,
+        profile,
+        toolchain,
+        target,
+        json,
+        html,
+    })
+}
+
 fn parse_required_path_arg(args: &[String], key: &str) -> Result<PathBuf, String> {
     parse_required_string_arg(args, key).map(PathBuf::from)
 }
@@ -1303,6 +1507,20 @@ fn parse_required_string_arg(args: &[String], key: &str) -> Result<String, Strin
     args.get(index + 1)
         .cloned()
         .ok_or_else(|| format!("missing value for {key}"))
+}
+
+fn parse_optional_string_arg(args: &[String], key: &str) -> Result<Option<String>, String> {
+    let Some(index) = args.iter().position(|item| item == key) else {
+        return Ok(None);
+    };
+    args.get(index + 1)
+        .cloned()
+        .map(Some)
+        .ok_or_else(|| format!("missing value for {key}"))
+}
+
+fn parse_optional_path_arg(args: &[String], key: &str) -> Result<Option<PathBuf>, String> {
+    parse_optional_string_arg(args, key).map(|item| item.map(PathBuf::from))
 }
 
 fn parse_required_i64_arg(args: &[String], key: &str) -> Result<i64, String> {
@@ -1427,6 +1645,14 @@ fn parse_cpp_group_by(value: &str) -> Result<CppGroupBy, String> {
     }
 }
 
+fn parse_commit_order(value: &str) -> Result<CommitOrder, String> {
+    match value {
+        "timestamp" => Ok(CommitOrder::Timestamp),
+        "ancestry" => Ok(CommitOrder::Ancestry),
+        _ => Err(format!("invalid value for --order: '{value}', expected timestamp|ancestry")),
+    }
+}
+
 fn print_grouped_cpp_diff(diff: &crate::model::DiffResult, group_by: CppGroupBy) {
     let (label, entries) = match group_by {
         CppGroupBy::Symbol => return,
@@ -1443,6 +1669,7 @@ fn print_grouped_cpp_diff(diff: &crate::model::DiffResult, group_by: CppGroupBy)
 #[cfg(test)]
 mod tests {
     use super::{parse_args, Command};
+    use crate::git::CommitOrder;
     use crate::model::{
         CiFormat, CppGroupBy, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode, ToolchainSelection,
         WarningLevel,
@@ -1658,6 +1885,58 @@ mod tests {
                 assert_eq!(last, 5);
             }
             _ => panic!("expected history trend command"),
+        }
+    }
+
+    #[test]
+    fn parses_history_commits_command() {
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "history".to_string(),
+            "commits".to_string(),
+            "--repo".to_string(),
+            ".".to_string(),
+            "--limit".to_string(),
+            "50".to_string(),
+            "--order".to_string(),
+            "ancestry".to_string(),
+            "--json".to_string(),
+        ])
+        .unwrap();
+        match cmd {
+            Command::HistoryCommits { limit, order, json, .. } => {
+                assert_eq!(limit, 50);
+                assert_eq!(order, CommitOrder::Ancestry);
+                assert!(json);
+            }
+            _ => panic!("expected history commits command"),
+        }
+    }
+
+    #[test]
+    fn parses_history_range_command() {
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "history".to_string(),
+            "range".to_string(),
+            "main...feature/foo".to_string(),
+            "--include-changed-files".to_string(),
+            "--html".to_string(),
+            "range.html".to_string(),
+        ])
+        .unwrap();
+        match cmd {
+            Command::HistoryRange {
+                spec,
+                include_changed_files,
+                html,
+                ..
+            } => {
+                assert_eq!(spec, "main...feature/foo");
+                assert!(include_changed_files);
+                assert_eq!(html, Some(PathBuf::from("range.html")));
+            }
+            _ => panic!("expected history range command"),
         }
     }
 

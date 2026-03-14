@@ -1,4 +1,5 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -6,6 +7,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::linkage::explain_object;
+use crate::git::{changed_files, list_commits, list_range_commits, merge_base, resolve_repo_root, resolve_revision, CommitOrder, GitCommit};
 use crate::model::{AnalysisResult, GitMetadata, WarningLevel};
 
 #[derive(Debug, Clone)]
@@ -59,6 +61,111 @@ pub struct TrendPoint {
     pub value: i64,
     pub format: TrendFormat,
     pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChangeEntry {
+    pub name: String,
+    pub delta: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct TimelineTopIncreases {
+    pub sections: Vec<ChangeEntry>,
+    pub objects: Vec<ChangeEntry>,
+    pub source_files: Vec<ChangeEntry>,
+    pub symbols: Vec<ChangeEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CommitTimelineRow {
+    pub repo_id: String,
+    pub commit: String,
+    pub short_commit: String,
+    pub commit_time: String,
+    pub author_name: String,
+    pub subject: String,
+    pub branch_names: Vec<String>,
+    pub tag_names: Vec<String>,
+    pub describe: Option<String>,
+    pub build_profile: Option<String>,
+    pub toolchain_id: Option<String>,
+    pub target_id: Option<String>,
+    pub configuration_fingerprint: Option<String>,
+    pub rom_total: u64,
+    pub ram_total: u64,
+    pub rom_delta_vs_previous: Option<i64>,
+    pub ram_delta_vs_previous: Option<i64>,
+    pub rule_violations_count: u64,
+    pub top_increases: TimelineTopIncreases,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CommitTimelineReport {
+    pub repo_id: String,
+    pub order: String,
+    pub filters: TimelineFilters,
+    pub rows: Vec<CommitTimelineRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct TimelineFilters {
+    pub branch: Option<String>,
+    pub profile: Option<String>,
+    pub toolchain: Option<String>,
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChangedFilesSummary {
+    pub git_changed_files: Vec<String>,
+    pub changed_source_files_in_analysis: Vec<String>,
+    pub intersection_files: Vec<String>,
+    pub git_only_files_count: usize,
+    pub analysis_only_files_count: usize,
+    pub intersection_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorstCommitSummary {
+    pub commit: String,
+    pub delta: i64,
+    pub subject: String,
+    pub date: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FirstRuleViolationSummary {
+    pub commit: String,
+    pub rule_ids: Vec<String>,
+    pub subject: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RangeDiffReport {
+    pub repo_id: String,
+    pub input_range_spec: String,
+    pub comparison_mode: String,
+    pub resolved_base: String,
+    pub resolved_head: String,
+    pub resolved_merge_base: Option<String>,
+    pub order: String,
+    pub total_commits_in_git_range: usize,
+    pub analyzed_commits_count: usize,
+    pub missing_analysis_commits_count: usize,
+    pub first_analyzed_commit: Option<String>,
+    pub last_analyzed_commit: Option<String>,
+    pub cumulative_rom_delta: i64,
+    pub cumulative_ram_delta: i64,
+    pub worst_commit_by_rom: Option<WorstCommitSummary>,
+    pub worst_commit_by_ram: Option<WorstCommitSummary>,
+    pub first_rule_violation: Option<FirstRuleViolationSummary>,
+    pub top_changed_sections: Vec<ChangeEntry>,
+    pub top_changed_objects: Vec<ChangeEntry>,
+    pub top_changed_source_files: Vec<ChangeEntry>,
+    pub top_changed_symbols: Vec<ChangeEntry>,
+    pub changed_files_summary: Option<ChangedFilesSummary>,
+    pub timeline_rows: Vec<CommitTimelineRow>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -230,6 +337,21 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
     }
 
     {
+        let mut object_stmt = tx
+            .prepare("INSERT INTO object_metrics (build_id, object_path, size_bytes) VALUES (?1, ?2, ?3)")
+            .map_err(|err| format!("failed to prepare object insert: {err}"))?;
+        let mut object_totals = BTreeMap::<String, u64>::new();
+        for object in &input.analysis.object_contributions {
+            *object_totals.entry(object.object_path.clone()).or_default() += object.size;
+        }
+        for (object_path, size) in object_totals {
+            object_stmt
+                .execute(params![build_id, object_path, size as i64])
+                .map_err(|err| format!("failed to insert object metric: {err}"))?;
+        }
+    }
+
+    {
         let mut function_stmt = tx
             .prepare(
                 "INSERT INTO function_metrics (
@@ -252,6 +374,19 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
                     function.size as i64
                 ])
                 .map_err(|err| format!("failed to insert function metric: {err}"))?;
+        }
+    }
+
+    {
+        let mut symbol_stmt = tx
+            .prepare(
+                "INSERT INTO symbol_metrics (build_id, name, demangled_name, size_bytes) VALUES (?1, ?2, ?3, ?4)",
+            )
+            .map_err(|err| format!("failed to prepare symbol insert: {err}"))?;
+        for symbol in &input.analysis.symbols {
+            symbol_stmt
+                .execute(params![build_id, symbol.name, symbol.demangled_name, symbol.size as i64])
+                .map_err(|err| format!("failed to insert symbol metric: {err}"))?;
         }
     }
 
@@ -585,6 +720,162 @@ pub fn trend_metric(db_path: &Path, metric: &str, last: usize) -> Result<Vec<Tre
     ))
 }
 
+pub fn commit_timeline(
+    db_path: &Path,
+    repo: Option<&Path>,
+    branch: Option<&str>,
+    limit: usize,
+    profile: Option<&str>,
+    toolchain: Option<&str>,
+    target: Option<&str>,
+    order: CommitOrder,
+) -> Result<CommitTimelineReport, String> {
+    let repo_root = resolve_repo_root(repo).ok_or_else(|| "git repository was not found".to_string())?;
+    let revision = branch.unwrap_or("HEAD");
+    let commits = list_commits(repo, revision, limit, order)?;
+    let all_builds = list_builds(db_path)?;
+    let build_map = latest_build_by_commit(&all_builds, &repo_root);
+    let mut rows = Vec::new();
+    let mut previous_by_variant = HashMap::<String, BuildRecord>::new();
+    for commit in commits {
+        let Some(build) = build_map.get(&commit.commit).cloned() else {
+            continue;
+        };
+        if !matches_filters(&build, profile, toolchain, target, branch) {
+            continue;
+        }
+        let variant = variant_key(&build);
+        let previous = previous_by_variant.get(&variant);
+        let metric_diff = previous.map(|prev| build_metric_diff(db_path, build.id, prev.id)).transpose()?;
+        let row = build_timeline_row(&repo_root, &commit, &build, metric_diff.as_ref());
+        previous_by_variant.insert(variant, build);
+        rows.push(row);
+    }
+    Ok(CommitTimelineReport {
+        repo_id: repo_root,
+        order: commit_order_name(order).to_string(),
+        filters: TimelineFilters {
+            branch: branch.map(ToOwned::to_owned),
+            profile: profile.map(ToOwned::to_owned),
+            toolchain: toolchain.map(ToOwned::to_owned),
+            target: target.map(ToOwned::to_owned),
+        },
+        rows,
+    })
+}
+
+pub fn range_diff(
+    db_path: &Path,
+    repo: Option<&Path>,
+    spec: &str,
+    order: CommitOrder,
+    include_changed_files: bool,
+    profile: Option<&str>,
+    toolchain: Option<&str>,
+    target: Option<&str>,
+) -> Result<RangeDiffReport, String> {
+    let repo_root = resolve_repo_root(repo).ok_or_else(|| "git repository was not found".to_string())?;
+    let resolved = resolve_range_spec(repo, spec)?;
+    let commits = list_range_commits(repo, &resolved.git_range, order)?;
+    let all_builds = list_builds(db_path)?;
+    let build_map = latest_build_by_commit(&all_builds, &repo_root);
+    let mut rows = Vec::new();
+    let mut previous_by_variant = HashMap::<String, BuildRecord>::new();
+    let mut analyzed_builds = Vec::<BuildRecord>::new();
+    for commit in &commits {
+        let Some(build) = build_map.get(&commit.commit).cloned() else {
+            continue;
+        };
+        if !matches_filters(&build, profile, toolchain, target, None) {
+            continue;
+        }
+        let variant = variant_key(&build);
+        let metric_diff = previous_by_variant.get(&variant).map(|prev| build_metric_diff(db_path, build.id, prev.id)).transpose()?;
+        rows.push(build_timeline_row(&repo_root, commit, &build, metric_diff.as_ref()));
+        previous_by_variant.insert(variant, build.clone());
+        analyzed_builds.push(build);
+    }
+    let mut cumulative_rom_delta = 0i64;
+    let mut cumulative_ram_delta = 0i64;
+    let mut worst_commit_by_rom = None;
+    let mut worst_commit_by_ram = None;
+    for row in &rows {
+        if let Some(delta) = row.rom_delta_vs_previous {
+            cumulative_rom_delta += delta;
+            if worst_commit_by_rom.as_ref().map(|item: &WorstCommitSummary| delta > item.delta).unwrap_or(true) {
+                worst_commit_by_rom = Some(WorstCommitSummary {
+                    commit: row.short_commit.clone(),
+                    delta,
+                    subject: row.subject.clone(),
+                    date: row.commit_time.clone(),
+                });
+            }
+        }
+        if let Some(delta) = row.ram_delta_vs_previous {
+            cumulative_ram_delta += delta;
+            if worst_commit_by_ram.as_ref().map(|item: &WorstCommitSummary| delta > item.delta).unwrap_or(true) {
+                worst_commit_by_ram = Some(WorstCommitSummary {
+                    commit: row.short_commit.clone(),
+                    delta,
+                    subject: row.subject.clone(),
+                    date: row.commit_time.clone(),
+                });
+            }
+        }
+    }
+    let first_rule_violation = rows.iter().find(|row| row.rule_violations_count > 0).map(|row| FirstRuleViolationSummary {
+        commit: row.short_commit.clone(),
+        rule_ids: load_rule_ids_for_build(db_path, analyzed_builds.iter().find(|build| build.git.as_ref().map(|git| git.commit_hash.as_str()) == Some(row.commit.as_str())).map(|b| b.id).unwrap_or_default()).unwrap_or_default(),
+        subject: row.subject.clone(),
+    });
+    let range_metrics = match (analyzed_builds.first(), analyzed_builds.last()) {
+        (Some(first), Some(last)) if first.id != last.id => Some(build_metric_diff(db_path, last.id, first.id)?),
+        _ => None,
+    };
+    let changed_files_summary = if include_changed_files {
+        Some(build_changed_files_summary(
+            repo,
+            &resolved.diff_base,
+            &resolved.diff_head,
+            rows.last()
+                .map(|_| {
+                    range_metrics
+                        .as_ref()
+                        .map(|diff| diff.source_files.iter().map(|item| item.name.clone()).collect::<Vec<_>>())
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default(),
+        )?)
+    } else {
+        None
+    };
+    Ok(RangeDiffReport {
+        repo_id: repo_root,
+        input_range_spec: spec.to_string(),
+        comparison_mode: resolved.mode,
+        resolved_base: resolved.resolved_base,
+        resolved_head: resolved.resolved_head,
+        resolved_merge_base: resolved.resolved_merge_base,
+        order: commit_order_name(order).to_string(),
+        total_commits_in_git_range: commits.len(),
+        analyzed_commits_count: rows.len(),
+        missing_analysis_commits_count: commits.len().saturating_sub(rows.len()),
+        first_analyzed_commit: rows.first().map(|row| row.short_commit.clone()),
+        last_analyzed_commit: rows.last().map(|row| row.short_commit.clone()),
+        cumulative_rom_delta,
+        cumulative_ram_delta,
+        worst_commit_by_rom,
+        worst_commit_by_ram,
+        first_rule_violation,
+        top_changed_sections: range_metrics.as_ref().map(|diff| diff.sections.clone()).unwrap_or_default(),
+        top_changed_objects: range_metrics.as_ref().map(|diff| diff.objects.clone()).unwrap_or_default(),
+        top_changed_source_files: range_metrics.as_ref().map(|diff| diff.source_files.clone()).unwrap_or_default(),
+        top_changed_symbols: range_metrics.as_ref().map(|diff| diff.symbols.clone()).unwrap_or_default(),
+        changed_files_summary,
+        timeline_rows: rows,
+    })
+}
+
 fn query_simple_trend(
     conn: &Connection,
     column: &str,
@@ -860,9 +1151,414 @@ pub fn print_trend(points: &[TrendPoint]) {
     }
 }
 
+pub fn print_commit_timeline(report: &CommitTimelineReport) {
+    if report.rows.is_empty() {
+        println!("No analyzed commits matched the requested timeline.");
+        return;
+    }
+    for row in &report.rows {
+        println!(
+            "{} {} ROM={} RAM={} warnings={}{}{}",
+            row.short_commit,
+            row.subject,
+            row.rom_total,
+            row.ram_total,
+            row.rule_violations_count,
+            row.rom_delta_vs_previous
+                .map(|delta| format!(" | ROM delta {delta:+}"))
+                .unwrap_or_default(),
+            row.ram_delta_vs_previous
+                .map(|delta| format!(" | RAM delta {delta:+}"))
+                .unwrap_or_default()
+        );
+    }
+}
+
+pub fn print_range_diff(report: &RangeDiffReport) {
+    println!(
+        "Range {} {} analyzed={} missing={} cumulative_rom={:+} cumulative_ram={:+}",
+        report.input_range_spec,
+        report.comparison_mode,
+        report.analyzed_commits_count,
+        report.missing_analysis_commits_count,
+        report.cumulative_rom_delta,
+        report.cumulative_ram_delta
+    );
+    if let Some(item) = report.worst_commit_by_rom.as_ref() {
+        println!("Worst ROM commit: {} {} ({:+})", item.commit, item.subject, item.delta);
+    }
+    if let Some(item) = report.worst_commit_by_ram.as_ref() {
+        println!("Worst RAM commit: {} {} ({:+})", item.commit, item.subject, item.delta);
+    }
+}
+
+pub fn write_commit_timeline_html(path: &Path, report: &CommitTimelineReport) -> Result<(), String> {
+    let rows = report
+        .rows
+        .iter()
+        .map(|row| {
+            format!(
+                "<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{:+}</td><td>{:+}</td><td>{}</td></tr>",
+                escape_html(&row.short_commit),
+                escape_html(&row.commit_time),
+                escape_html(&row.subject),
+                row.rom_total,
+                row.ram_total,
+                row.rom_delta_vs_previous.unwrap_or(0),
+                row.ram_delta_vs_previous.unwrap_or(0),
+                row.rule_violations_count
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    fs::write(
+        path,
+        format!(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>fwmap history commits</title></head><body><h1>Commit Timeline</h1><p>repo: {}</p><table border=\"1\"><thead><tr><th>Commit</th><th>Time</th><th>Subject</th><th>ROM</th><th>RAM</th><th>ROM delta</th><th>RAM delta</th><th>Rules</th></tr></thead><tbody>{}</tbody></table></body></html>",
+            escape_html(&report.repo_id),
+            rows
+        ),
+    )
+    .map_err(|err| format!("failed to write commit timeline HTML '{}': {err}", path.display()))
+}
+
+pub fn write_range_diff_html(path: &Path, report: &RangeDiffReport) -> Result<(), String> {
+    let rows = report
+        .timeline_rows
+        .iter()
+        .map(|row| {
+            format!(
+                "<tr><td><code>{}</code></td><td>{}</td><td>{:+}</td><td>{:+}</td><td>{}</td></tr>",
+                escape_html(&row.short_commit),
+                escape_html(&row.subject),
+                row.rom_delta_vs_previous.unwrap_or(0),
+                row.ram_delta_vs_previous.unwrap_or(0),
+                row.rule_violations_count
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    fs::write(
+        path,
+        format!(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>fwmap history range</title></head><body><h1>Range Diff</h1><p>{}</p><p>commits={} analyzed={} missing={}</p><table border=\"1\"><thead><tr><th>Commit</th><th>Subject</th><th>ROM delta</th><th>RAM delta</th><th>Rules</th></tr></thead><tbody>{}</tbody></table></body></html>",
+            escape_html(&report.input_range_spec),
+            report.total_commits_in_git_range,
+            report.analyzed_commits_count,
+            report.missing_analysis_commits_count,
+            rows
+        ),
+    )
+    .map_err(|err| format!("failed to write range diff HTML '{}': {err}", path.display()))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NamedMetricMode {
     ByName,
+}
+
+#[derive(Debug, Clone)]
+struct BuildMetricDiff {
+    rom_delta: i64,
+    ram_delta: i64,
+    sections: Vec<ChangeEntry>,
+    objects: Vec<ChangeEntry>,
+    source_files: Vec<ChangeEntry>,
+    symbols: Vec<ChangeEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedRange {
+    mode: String,
+    git_range: String,
+    resolved_base: String,
+    resolved_head: String,
+    resolved_merge_base: Option<String>,
+    diff_base: String,
+    diff_head: String,
+}
+
+fn latest_build_by_commit(items: &[BuildRecord], repo_root: &str) -> HashMap<String, BuildRecord> {
+    let mut result = HashMap::new();
+    for item in items {
+        let Some(git) = item.git.as_ref() else {
+            continue;
+        };
+        if git.repo_root != repo_root {
+            continue;
+        }
+        result.entry(git.commit_hash.clone()).or_insert_with(|| item.clone());
+    }
+    result
+}
+
+fn matches_filters(
+    build: &BuildRecord,
+    profile: Option<&str>,
+    toolchain: Option<&str>,
+    target: Option<&str>,
+    branch: Option<&str>,
+) -> bool {
+    if let Some(profile) = profile {
+        if build.metadata.get("build.profile").map(String::as_str) != Some(profile) {
+            return false;
+        }
+    }
+    if let Some(toolchain) = toolchain {
+        let value = build
+            .metadata
+            .get("toolchain.id")
+            .map(String::as_str)
+            .unwrap_or(build.linker_family.as_str());
+        if value != toolchain {
+            return false;
+        }
+    }
+    if let Some(target) = target {
+        if build.metadata.get("target.id").map(String::as_str) != Some(target) {
+            return false;
+        }
+    }
+    if let Some(branch) = branch {
+        if build.git.as_ref().and_then(|git| git.branch_name.as_deref()) != Some(branch) {
+            return false;
+        }
+    }
+    true
+}
+
+fn variant_key(build: &BuildRecord) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        build.metadata.get("build.profile").cloned().unwrap_or_default(),
+        build.metadata
+            .get("toolchain.id")
+            .cloned()
+            .unwrap_or_else(|| build.linker_family.clone()),
+        build.metadata.get("target.id").cloned().unwrap_or_default(),
+        build.metadata.get("config.fingerprint").cloned().unwrap_or_default()
+    )
+}
+
+fn build_timeline_row(repo_id: &str, commit: &GitCommit, build: &BuildRecord, diff: Option<&BuildMetricDiff>) -> CommitTimelineRow {
+    let git = build.git.as_ref();
+    CommitTimelineRow {
+        repo_id: repo_id.to_string(),
+        commit: commit.commit.clone(),
+        short_commit: commit.short_commit.clone(),
+        commit_time: commit.commit_time.clone(),
+        author_name: commit.author_name.clone(),
+        subject: commit.subject.clone(),
+        branch_names: git
+            .and_then(|item| item.branch_name.clone())
+            .map(|item| vec![item])
+            .unwrap_or_default(),
+        tag_names: git.map(|item| item.tag_names.clone()).unwrap_or_default(),
+        describe: git.and_then(|item| item.describe.clone()),
+        build_profile: build.metadata.get("build.profile").cloned(),
+        toolchain_id: build
+            .metadata
+            .get("toolchain.id")
+            .cloned()
+            .or_else(|| Some(build.linker_family.clone())),
+        target_id: build.metadata.get("target.id").cloned(),
+        configuration_fingerprint: build.metadata.get("config.fingerprint").cloned(),
+        rom_total: build.rom_bytes,
+        ram_total: build.ram_bytes,
+        rom_delta_vs_previous: diff.map(|item| item.rom_delta),
+        ram_delta_vs_previous: diff.map(|item| item.ram_delta),
+        rule_violations_count: build.warning_count,
+        top_increases: diff
+            .map(|item| TimelineTopIncreases {
+                sections: item.sections.clone(),
+                objects: item.objects.clone(),
+                source_files: item.source_files.clone(),
+                symbols: item.symbols.clone(),
+            })
+            .unwrap_or_default(),
+    }
+}
+
+fn build_metric_diff(db_path: &Path, current_build_id: i64, previous_build_id: i64) -> Result<BuildMetricDiff, String> {
+    let conn = open_history_db(db_path)?;
+    init_schema(&conn)?;
+    let current = load_build_record(&conn, current_build_id)?.ok_or_else(|| format!("build id {current_build_id} was not found"))?;
+    let previous = load_build_record(&conn, previous_build_id)?.ok_or_else(|| format!("build id {previous_build_id} was not found"))?;
+    Ok(BuildMetricDiff {
+        rom_delta: current.rom_bytes as i64 - previous.rom_bytes as i64,
+        ram_delta: current.ram_bytes as i64 - previous.ram_bytes as i64,
+        sections: diff_metric_entries(
+            load_metric_map(&conn, "section_metrics", "section_name", current_build_id)?,
+            load_metric_map(&conn, "section_metrics", "section_name", previous_build_id)?,
+            3,
+        ),
+        objects: diff_metric_entries(
+            load_metric_map(&conn, "object_metrics", "object_path", current_build_id)?,
+            load_metric_map(&conn, "object_metrics", "object_path", previous_build_id)?,
+            3,
+        ),
+        source_files: diff_metric_entries(
+            load_metric_map(&conn, "source_file_metrics", "path", current_build_id)?,
+            load_metric_map(&conn, "source_file_metrics", "path", previous_build_id)?,
+            3,
+        ),
+        symbols: diff_metric_entries(
+            load_metric_map(&conn, "symbol_metrics", "name", current_build_id)?,
+            load_metric_map(&conn, "symbol_metrics", "name", previous_build_id)?,
+            5,
+        ),
+    })
+}
+
+fn load_build_record(conn: &Connection, build_id: i64) -> Result<Option<BuildRecord>, String> {
+    conn.query_row(
+        "SELECT b.id, b.created_at, b.elf_path, b.arch, b.rom_bytes, b.ram_bytes, b.warning_count, b.error_count,
+                b.metadata_json, b.linker_family, b.map_format,
+                g.repo_root, g.commit_hash, g.short_commit_hash, g.branch_name, g.detached_head, g.tag_names_json,
+                g.commit_subject, g.author_name, g.author_email, g.commit_timestamp, g.describe, g.is_dirty
+         FROM builds b
+         LEFT JOIN git_metadata g ON g.build_id = b.id
+         WHERE b.id = ?1",
+        params![build_id],
+        |row| {
+            Ok(BuildRecord {
+                id: row.get(0)?,
+                created_at: row.get(1)?,
+                elf_path: row.get(2)?,
+                arch: row.get(3)?,
+                linker_family: row.get(9)?,
+                map_format: row.get(10)?,
+                rom_bytes: row.get::<_, i64>(4)? as u64,
+                ram_bytes: row.get::<_, i64>(5)? as u64,
+                warning_count: row.get::<_, i64>(6)? as u64,
+                error_count: row.get::<_, i64>(7)? as u64,
+                metadata: parse_metadata(row.get::<_, String>(8)?),
+                git: parse_git_metadata(row)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|err| format!("failed to query build record: {err}"))
+}
+
+fn load_metric_map(conn: &Connection, table: &str, name_column: &str, build_id: i64) -> Result<HashMap<String, i64>, String> {
+    let sql = format!("SELECT {name_column}, size_bytes FROM {table} WHERE build_id = ?1");
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|err| format!("failed to prepare metric query for {table}: {err}"))?;
+    let rows = stmt
+        .query_map(params![build_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+        .map_err(|err| format!("failed to query metric table {table}: {err}"))?;
+    Ok(rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("failed to collect metric table {table}: {err}"))?
+        .into_iter()
+        .collect())
+}
+
+fn diff_metric_entries(current: HashMap<String, i64>, previous: HashMap<String, i64>, limit: usize) -> Vec<ChangeEntry> {
+    let mut names = current.keys().cloned().collect::<BTreeSet<_>>();
+    names.extend(previous.keys().cloned());
+    let mut entries = names
+        .into_iter()
+        .filter_map(|name| {
+            let delta = current.get(&name).copied().unwrap_or(0) - previous.get(&name).copied().unwrap_or(0);
+            (delta != 0).then_some(ChangeEntry { name, delta })
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| b.delta.abs().cmp(&a.delta.abs()).then_with(|| a.name.cmp(&b.name)));
+    entries.truncate(limit);
+    entries
+}
+
+fn resolve_range_spec(repo: Option<&Path>, spec: &str) -> Result<ResolvedRange, String> {
+    if let Some((base, head)) = spec.split_once("...") {
+        let resolved_base = resolve_revision(repo, base).ok_or_else(|| format!("failed to resolve revision '{base}'"))?;
+        let resolved_head = resolve_revision(repo, head).ok_or_else(|| format!("failed to resolve revision '{head}'"))?;
+        let merge = merge_base(repo, base, head).ok_or_else(|| format!("failed to resolve merge-base for '{base}' and '{head}'"))?;
+        return Ok(ResolvedRange {
+            mode: "triple-dot".to_string(),
+            git_range: format!("{merge}..{resolved_head}"),
+            resolved_base,
+            resolved_head: resolved_head.clone(),
+            resolved_merge_base: Some(merge.clone()),
+            diff_base: merge,
+            diff_head: resolved_head,
+        });
+    }
+    if let Some((base, head)) = spec.split_once("..") {
+        let resolved_base = resolve_revision(repo, base).ok_or_else(|| format!("failed to resolve revision '{base}'"))?;
+        let resolved_head = resolve_revision(repo, head).ok_or_else(|| format!("failed to resolve revision '{head}'"))?;
+        return Ok(ResolvedRange {
+            mode: "double-dot".to_string(),
+            git_range: format!("{resolved_base}..{resolved_head}"),
+            resolved_base: resolved_base.clone(),
+            resolved_head: resolved_head.clone(),
+            resolved_merge_base: None,
+            diff_base: resolved_base,
+            diff_head: resolved_head,
+        });
+    }
+    Err(format!("invalid range spec '{spec}', expected A..B or A...B"))
+}
+
+fn build_changed_files_summary(
+    repo: Option<&Path>,
+    base: &str,
+    head: &str,
+    analysis_changed_files: Vec<String>,
+) -> Result<ChangedFilesSummary, String> {
+    let git_files = changed_files(repo, base, head)?;
+    let git_normalized = git_files
+        .iter()
+        .map(|item| normalize_repo_path(item))
+        .collect::<BTreeSet<_>>();
+    let analysis_normalized = analysis_changed_files
+        .iter()
+        .map(|item| normalize_repo_path(item))
+        .collect::<BTreeSet<_>>();
+    let intersection_files = git_normalized
+        .intersection(&analysis_normalized)
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok(ChangedFilesSummary {
+        git_changed_files: git_files,
+        changed_source_files_in_analysis: analysis_changed_files,
+        git_only_files_count: git_normalized.difference(&analysis_normalized).count(),
+        analysis_only_files_count: analysis_normalized.difference(&git_normalized).count(),
+        intersection_count: intersection_files.len(),
+        intersection_files,
+    })
+}
+
+fn normalize_repo_path(path: &str) -> String {
+    path.replace('\\', "/").trim_start_matches("./").to_string()
+}
+
+fn load_rule_ids_for_build(db_path: &Path, build_id: i64) -> Result<Vec<String>, String> {
+    if build_id == 0 {
+        return Ok(Vec::new());
+    }
+    let conn = open_history_db(db_path)?;
+    let mut stmt = conn
+        .prepare("SELECT code FROM rule_results WHERE build_id = ?1 ORDER BY id ASC")
+        .map_err(|err| format!("failed to prepare rule query: {err}"))?;
+    let rows = stmt
+        .query_map(params![build_id], |row| row.get::<_, String>(0))
+        .map_err(|err| format!("failed to query rules for build: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("failed to collect rules for build: {err}"))
+}
+
+fn commit_order_name(order: CommitOrder) -> &'static str {
+    match order {
+        CommitOrder::Timestamp => "timestamp",
+        CommitOrder::Ancestry => "ancestry",
+    }
+}
+
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 fn query_pairs_i64(conn: &Connection, sql: &str, build_id: i64) -> Result<Vec<(String, u64)>, String> {
@@ -938,6 +1634,12 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             function_count INTEGER NOT NULL,
             line_range_count INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS object_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            build_id INTEGER NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+            object_path TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS function_metrics (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             build_id INTEGER NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
@@ -945,6 +1647,13 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             raw_name TEXT NOT NULL,
             demangled_name TEXT,
             path TEXT,
+            size_bytes INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS symbol_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            build_id INTEGER NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            demangled_name TEXT,
             size_bytes INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS why_linked_metrics (
@@ -975,7 +1684,7 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-        INSERT INTO schema_meta(key, value) VALUES ('history_schema_version', '4')
+        INSERT INTO schema_meta(key, value) VALUES ('history_schema_version', '5')
         ON CONFLICT(key) DO UPDATE SET value = excluded.value;
         ",
     )
@@ -1115,7 +1824,10 @@ fn now_unix() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{list_builds, record_build, show_build, trend_metric, HistoryRecordInput, TrendFormat};
+    use super::{
+        commit_timeline, list_builds, range_diff, record_build, show_build, trend_metric, HistoryRecordInput, TrendFormat,
+    };
+    use crate::git::{collect_git_metadata, CommitOrder, GitOptions};
     use crate::model::{
         AnalysisResult, BinaryInfo, DebugArtifactInfo, DebugInfoSummary, MemorySummary, ObjectContribution,
         ObjectSourceKind, SectionCategory, SectionTotal, SymbolInfo, ToolchainInfo, ToolchainKind, ToolchainSelection,
@@ -1123,6 +1835,8 @@ mod tests {
     };
     use std::collections::BTreeMap;
     use std::fs;
+    use std::path::Path;
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -1207,9 +1921,138 @@ mod tests {
         let _ = fs::remove_file(db);
     }
 
+    #[test]
+    fn builds_commit_timeline_with_deltas() {
+        let db = temp_db();
+        let repo = init_repo("timeline");
+        let commit_one = checkout_and_collect(&repo, "HEAD");
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: analysis_for_commit(100, 20, &commit_one),
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+        fs::write(repo.join("src").join("main.cpp"), "hello 2\n").unwrap();
+        run_git(&repo, &["commit", "-am", "second commit"]);
+        let commit_two = checkout_and_collect(&repo, "HEAD");
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: analysis_for_commit(140, 24, &commit_two),
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+
+        let report = commit_timeline(&db, Some(&repo), None, 10, Some("release"), None, None, CommitOrder::Ancestry).unwrap();
+        assert_eq!(report.rows.len(), 2);
+        assert_eq!(report.rows[0].subject, "second commit");
+        assert_eq!(report.rows[1].subject, "initial commit");
+        assert_eq!(report.rows[1].rom_delta_vs_previous, Some(-40));
+        let _ = fs::remove_file(db);
+        let _ = fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn builds_range_diff_and_reports_missing_analysis() {
+        let db = temp_db();
+        let repo = init_repo("range");
+        let _commit_one = checkout_and_collect(&repo, "HEAD");
+        fs::write(repo.join("src").join("main.cpp"), "hello 2\n").unwrap();
+        run_git(&repo, &["commit", "-am", "second commit"]);
+        let commit_two = checkout_and_collect(&repo, "HEAD");
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: analysis_for_commit(120, 22, &commit_two),
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+        fs::write(repo.join("src").join("main.cpp"), "hello 3\n").unwrap();
+        run_git(&repo, &["commit", "-am", "third commit"]);
+        let commit_three = checkout_and_collect(&repo, "HEAD");
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: analysis_for_commit(180, 30, &commit_three),
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+
+        let report = range_diff(&db, Some(&repo), "HEAD~2..HEAD", CommitOrder::Timestamp, true, Some("release"), None, None)
+            .unwrap();
+        assert_eq!(report.total_commits_in_git_range, 2);
+        assert_eq!(report.analyzed_commits_count, 2);
+        assert_eq!(report.missing_analysis_commits_count, 0);
+        assert_eq!(report.cumulative_rom_delta, -60);
+        assert!(report.changed_files_summary.as_ref().unwrap().intersection_count >= 1);
+        let _ = fs::remove_file(db);
+        let _ = fs::remove_dir_all(repo);
+    }
+
     fn temp_db() -> std::path::PathBuf {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         std::env::temp_dir().join(format!("fwmap-history-{nanos}.db"))
+    }
+
+    fn metadata_for_profile(profile: &str) -> BTreeMap<String, String> {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("build.profile".to_string(), profile.to_string());
+        metadata.insert("toolchain.id".to_string(), "gnu".to_string());
+        metadata.insert("config.fingerprint".to_string(), "gnu|unknown|all".to_string());
+        metadata
+    }
+
+    fn analysis_for_commit(rom: u64, ram: u64, git: &crate::model::GitMetadata) -> AnalysisResult {
+        let mut analysis = sample_analysis(rom, ram, 0);
+        analysis.git = Some(git.clone());
+        analysis.object_contributions = vec![ObjectContribution {
+            object_path: "build/main.o".to_string(),
+            source_kind: ObjectSourceKind::Object,
+            section_name: Some(".text".to_string()),
+            size: rom,
+        }];
+        analysis.symbols = vec![SymbolInfo {
+            name: "main".to_string(),
+            demangled_name: Some("main()".to_string()),
+            section_name: Some(".text".to_string()),
+            object_path: Some("build/main.o".to_string()),
+            addr: 0,
+            size: rom,
+        }];
+        analysis
+    }
+
+    fn init_repo(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("fwmap-history-{label}-{}", super::now_unix()));
+        fs::create_dir_all(&dir).unwrap();
+        run_git(&dir, &["init"]);
+        run_git(&dir, &["config", "user.name", "fwmap test"]);
+        run_git(&dir, &["config", "user.email", "fwmap@example.com"]);
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src").join("main.cpp"), "hello\n").unwrap();
+        run_git(&dir, &["add", "src/main.cpp"]);
+        run_git(&dir, &["commit", "-m", "initial commit"]);
+        run_git(&dir, &["branch", "-M", "main"]);
+        dir
+    }
+
+    fn checkout_and_collect(repo: &Path, revision: &str) -> crate::model::GitMetadata {
+        run_git(repo, &["checkout", revision]);
+        collect_git_metadata(&GitOptions {
+            enabled: true,
+            repo_path: Some(repo.to_path_buf()),
+        })
+        .unwrap()
+    }
+
+    fn run_git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git").arg("-C").arg(dir).args(args).status().unwrap();
+        assert!(status.success(), "git {:?} failed", args);
     }
 
     fn sample_analysis(rom: u64, ram: u64, warnings: usize) -> AnalysisResult {

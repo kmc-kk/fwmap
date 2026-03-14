@@ -625,6 +625,15 @@ fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --
   --save-history \
   --no-git
 </code></pre>
+<p>commit timeline を見る場合:</p>
+<pre><code class="language-bash">fwmap history commits --repo . --limit 50 --order ancestry
+fwmap history commits --repo . --branch main --json
+</code></pre>
+<p>commit range の差分を見る場合:</p>
+<pre><code class="language-bash">fwmap history range main~20..main --repo . --include-changed-files
+fwmap history range main...feature/foo --repo . --json
+</code></pre>
+<p><code>history commits</code> は Git の commit 順に沿って解析済み build を並べ、前回解析済み commit 比の ROM/RAM 差分を表示します。<code>history range</code> は <code>A..B</code> と <code>A...B</code> の両方に対応し、累積差分、worst commit、missing-analysis commit 数、changed files と source diff の交差を確認できます。</p>
 <p>一覧確認:</p>
 <pre><code class="language-bash">fwmap history list --db history.db --limit 20
 fwmap history list --db history.db --limit 20 --json
@@ -900,6 +909,14 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 <tr>
 <td><code>history trend --db &lt;path&gt; --metric &lt;metric&gt;</code></td>
 <td>推移表示</td>
+</tr>
+<tr>
+<td><code>history commits [--repo &lt;path&gt;]</code></td>
+<td>Git commit 順に解析済み build を一覧表示。<code>--json</code> / <code>--html</code> 対応</td>
+</tr>
+<tr>
+<td><code>history range &lt;A..B|A...B&gt;</code></td>
+<td>commit range の累積差分と worst commit を表示。<code>--include-changed-files</code> / <code>--json</code> / <code>--html</code> 対応</td>
 </tr>
 </tbody>
 </table>

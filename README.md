@@ -96,9 +96,14 @@ cargo run -- history trend --db history.db --metric object:build/main.o --last 2
 cargo run -- history trend --db history.db --metric archive-member:libapp.a(startup.o) --last 20
 cargo run -- history trend --db history.db --metric directory:src/app --last 20
 cargo run -- history trend --db history.db --metric unknown_source --last 20
+cargo run -- history commits --repo . --limit 50 --order ancestry
+cargo run -- history commits --repo . --branch main --json
+cargo run -- history range main~20..main --repo . --include-changed-files
+cargo run -- history range main...feature/foo --repo . --json
 ```
 
 When the current working tree is inside a Git repository, history records and report output include Git metadata such as commit hash, branch, `git describe`, subject, and dirty state. Use `--git-repo <path>` to probe a specific repository or `--no-git` to disable Git collection explicitly.
+`history commits` shows analyzed commits aligned to Git history order, while `history range` summarizes an `A..B` or `A...B` slice with cumulative ROM/RAM deltas, worst commit, missing-analysis count, and optional changed-files intersection.
 
 JSON report example:
 

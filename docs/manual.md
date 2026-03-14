@@ -867,6 +867,22 @@ fwmap analyze \
   --no-git
 ```
 
+commit timeline を見る場合:
+
+```bash
+fwmap history commits --repo . --limit 50 --order ancestry
+fwmap history commits --repo . --branch main --json
+```
+
+commit range の差分を見る場合:
+
+```bash
+fwmap history range main~20..main --repo . --include-changed-files
+fwmap history range main...feature/foo --repo . --json
+```
+
+`history commits` は Git の commit 順に沿って解析済み build を並べ、前回解析済み commit 比の ROM/RAM 差分を表示します。`history range` は `A..B` と `A...B` の両方に対応し、累積差分、worst commit、missing-analysis commit 数、changed files と source diff の交差を確認できます。
+
 一覧確認:
 
 ```bash
@@ -971,6 +987,8 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 | `history list --db <path> [--limit <n>] [--json]` | 保存済み履歴の一覧表示。Git 情報を含む JSON 出力にも対応 |
 | `history show --db <path> --build <id>` | 特定 build の詳細表示 |
 | `history trend --db <path> --metric <metric>` | 推移表示 |
+| `history commits [--repo <path>]` | Git commit 順に解析済み build を一覧表示。`--json` / `--html` 対応 |
+| `history range <A..B|A...B>` | commit range の累積差分と worst commit を表示。`--include-changed-files` / `--json` / `--html` 対応 |
 
 ## 7. 出力内容
 
