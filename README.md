@@ -82,8 +82,12 @@ Default output path is `fwmap_report.html`.
 History examples:
 
 ```bash
-cargo run -- history record --db history.db --elf build/app.elf --map build/app.map --meta commit=abc123
-cargo run -- history list --db history.db
+cargo run -- analyze --elf build/app.elf --map build/app.map --save-history
+cargo run -- analyze --elf build/app.elf --map build/app.map --save-history --history-db history.db --git-repo .
+cargo run -- analyze --elf build/app.elf --map build/app.map --save-history --no-git
+cargo run -- history record --db history.db --elf build/app.elf --map build/app.map --git-repo .
+cargo run -- history list --db history.db --limit 20
+cargo run -- history list --db history.db --limit 20 --json
 cargo run -- history show --db history.db --build 1
 cargo run -- history trend --db history.db --metric rom --last 20
 cargo run -- history trend --db history.db --metric source:src/main.cpp --last 20
@@ -93,6 +97,8 @@ cargo run -- history trend --db history.db --metric archive-member:libapp.a(star
 cargo run -- history trend --db history.db --metric directory:src/app --last 20
 cargo run -- history trend --db history.db --metric unknown_source --last 20
 ```
+
+When the current working tree is inside a Git repository, history records and report output include Git metadata such as commit hash, branch, `git describe`, subject, and dirty state. Use `--git-repo <path>` to probe a specific repository or `--no-git` to disable Git collection explicitly.
 
 JSON report example:
 

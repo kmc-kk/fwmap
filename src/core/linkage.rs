@@ -883,6 +883,7 @@ mod tests {
                 elf_class: "ELF32".to_string(),
                 endian: "little".to_string(),
             },
+            git: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: Some(ToolchainKind::Gnu),

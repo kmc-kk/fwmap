@@ -11,6 +11,23 @@ pub struct BinaryInfo {
     pub endian: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct GitMetadata {
+    pub repo_root: String,
+    pub commit_hash: String,
+    pub short_commit_hash: String,
+    pub branch_name: Option<String>,
+    pub detached_head: bool,
+    #[serde(default)]
+    pub tag_names: Vec<String>,
+    pub commit_subject: Option<String>,
+    pub author_name: Option<String>,
+    pub author_email: Option<String>,
+    pub commit_timestamp: Option<String>,
+    pub describe: Option<String>,
+    pub is_dirty: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SectionInfo {
     pub name: String,
@@ -153,6 +170,7 @@ pub struct WholeArchiveCandidate {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AnalysisResult {
     pub binary: BinaryInfo,
+    pub git: Option<GitMetadata>,
     pub toolchain: ToolchainInfo,
     pub debug_info: DebugInfoSummary,
     pub debug_artifact: DebugArtifactInfo,

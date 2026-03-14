@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::cpp::build_cpp_view;
 use crate::debug::{resolve_debug_artifact, DebugArtifactResolver};
 use crate::demangle::apply_demangling;
+use crate::git::{collect_git_metadata, GitOptions};
 use crate::ingest::{dwarf, elf, lds, map};
 use crate::model::{
     AnalysisResult, ArchiveContribution, CustomRule, DebuginfodMode, DemangleMode, DiffResult,
@@ -25,6 +26,7 @@ pub struct AnalyzeOptions {
     pub dwarf_mode: DwarfMode,
     pub debug_file_dirs: Vec<std::path::PathBuf>,
     pub debug_trace: bool,
+    pub git: GitOptions,
     pub debuginfod: DebuginfodMode,
     pub debuginfod_urls: Vec<String>,
     pub debuginfod_cache_dir: Option<std::path::PathBuf>,
@@ -45,6 +47,7 @@ impl Default for AnalyzeOptions {
             dwarf_mode: DwarfMode::Auto,
             debug_file_dirs: Vec::new(),
             debug_trace: false,
+            git: GitOptions::default(),
             debuginfod: DebuginfodMode::Off,
             debuginfod_urls: Vec::new(),
             debuginfod_cache_dir: None,
@@ -121,6 +124,7 @@ pub fn analyze_paths(
 
     let mut result = AnalysisResult {
         binary: elf.binary,
+        git: collect_git_metadata(&options.git),
         toolchain: ToolchainInfo {
             requested: options.toolchain,
             detected: map_data.as_ref().and_then(|item| item.detected_toolchain),
@@ -809,6 +813,7 @@ mod tests {
                 elf_class: "ELF32".to_string(),
                 endian: "little-endian".to_string(),
             },
+            git: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: None,

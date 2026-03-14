@@ -32,6 +32,21 @@ impl Default for SourceRenderOptions {
 
 pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, verbose: bool) {
     println!("ELF: {}", result.binary.path);
+    if let Some(git) = result.git.as_ref() {
+        println!(
+            "Git: {}{}{}{}",
+            git.short_commit_hash,
+            git.branch_name
+                .as_deref()
+                .map(|value| format!(" | branch: {value}"))
+                .unwrap_or_else(|| " | detached HEAD".to_string()),
+            git.describe
+                .as_deref()
+                .map(|value| format!(" | describe: {value}"))
+                .unwrap_or_default(),
+            if git.is_dirty { " | dirty" } else { "" }
+        );
+    }
     println!("Toolchain: {} (requested: {})", result.toolchain.resolved, result.toolchain.requested);
     println!(
         "Linker family: {} | Map format: {} | Parser warnings: {}",
@@ -247,6 +262,7 @@ fn build_json(
     let payload = serde_json::json!({
         "schema_version": 1,
         "binary": &current.binary,
+        "git": &current.git,
         "toolchain": &current.toolchain,
         "map_format": current.toolchain.map_format,
         "linker_family": current.toolchain.linker_family,
@@ -291,6 +307,17 @@ fn build_ci_text(current: &AnalysisResult, diff: Option<&DiffResult>, source_opt
     }
     lines.push(format!("Warnings: {}", current.warnings.len()));
     lines.push(format!("Errors: {}", current.warnings.iter().filter(|item| item.level == WarningLevel::Error).count()));
+    if let Some(git) = current.git.as_ref() {
+        lines.push(format!(
+            "Git: {}{}{}",
+            git.short_commit_hash,
+            git.branch_name
+                .as_deref()
+                .map(|value| format!(" ({value})"))
+                .unwrap_or_else(|| " (detached)".to_string()),
+            if git.is_dirty { " dirty" } else { "" }
+        ));
+    }
     lines.push(format!("Toolchain: {}", current.toolchain.resolved));
     lines.push(format!(
         "Map: {} / {} (parser warnings: {})",
@@ -471,6 +498,17 @@ fn build_ci_markdown(current: &AnalysisResult, diff: Option<&DiffResult>, source
         out.push(format!("| RAM | {} |", format_bytes(current.memory.ram_bytes)));
     }
     out.push(format!("| Warnings | {} |", current.warnings.len()));
+    if let Some(git) = current.git.as_ref() {
+        out.push(format!(
+            "| Git | `{}`{}{} |",
+            git.short_commit_hash,
+            git.branch_name
+                .as_deref()
+                .map(|value| format!(" ({value})"))
+                .unwrap_or_else(|| " (detached)".to_string()),
+            if git.is_dirty { " dirty" } else { "" }
+        ));
+    }
     out.push(format!(
         "| Errors | {} |",
         current.warnings.iter().filter(|item| item.level == WarningLevel::Error).count()
@@ -587,6 +625,7 @@ fn build_ci_json(
             "parser_warnings_count": current.toolchain.parser_warnings_count,
             "dwarf_used": current.debug_info.dwarf_used,
             "unknown_source_ratio": current.debug_info.unknown_source_ratio,
+            "git": &current.git,
         },
         "debug_info": &current.debug_info,
         "policy": &current.policy,
@@ -618,9 +657,30 @@ fn script_block() -> &'static str {
 }
 
 fn header(current: &AnalysisResult) -> String {
+    let git = current
+        .git
+        .as_ref()
+        .map(|git| {
+            format!(
+                "<div class=\"muted\">Git: <span class=\"mono\">{}</span>{}{}{}</div>",
+                escape(&git.commit_hash),
+                git.branch_name
+                    .as_deref()
+                    .map(|value| format!(" | branch {}", escape(value)))
+                    .unwrap_or_else(|| " | detached HEAD".to_string()),
+                git.describe
+                    .as_deref()
+                    .map(|value| format!(" | {}", escape(value)))
+                    .unwrap_or_default(),
+                if git.is_dirty { " | dirty" } else { "" }
+            )
+        })
+        .unwrap_or_default();
     format!(
-        "<section><h1>fwmap report</h1><div class=\"muted mono\">{}</div></section>",
+        "<section><h1>fwmap report</h1><div class=\"muted mono\">{}</div>{}</section>",
         escape(&current.binary.path)
+        ,
+        git
     )
 }
 
@@ -636,8 +696,31 @@ fn overview(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
             )
         })
         .unwrap_or_default();
+    let git_html = current
+        .git
+        .as_ref()
+        .map(|git| {
+            format!(
+                "<div class=\"card\"><strong>Git</strong><div><span class=\"mono\">{}</span>{}{}{}</div></div>",
+                escape(&git.short_commit_hash),
+                git.branch_name
+                    .as_deref()
+                    .map(|value| format!(" <span class=\"muted\">{}</span>", escape(value)))
+                    .unwrap_or_else(|| " <span class=\"muted\">detached</span>".to_string()),
+                git.commit_subject
+                    .as_deref()
+                    .map(|value| format!("<div class=\"muted\">{}</div>", escape(value)))
+                    .unwrap_or_default(),
+                if git.is_dirty {
+                    "<div class=\"muted\">dirty working tree</div>".to_string()
+                } else {
+                    String::new()
+                }
+            )
+        })
+        .unwrap_or_default();
     format!(
-        "<section><h2>Overview</h2><div class=\"grid\"><div class=\"card\"><strong>Binary</strong><div>{}</div></div><div class=\"card\"><strong>Format</strong><div>{} / {}</div></div><div class=\"card\"><strong>Toolchain</strong><div>{} <span class=\"muted\">(requested: {})</span></div></div><div class=\"card\"><strong>Map</strong><div>{} / {} <span class=\"muted\">({} parser warnings)</span></div></div><div class=\"card\"><strong>DWARF</strong><div>{} <span class=\"muted\">({:.1}% unknown)</span></div></div><div class=\"card\"><strong>Debug Artifact</strong><div>{}</div></div><div class=\"card\"><strong>Sections</strong><div>{}</div></div><div class=\"card\"><strong>ROM</strong><div>{}</div></div><div class=\"card\"><strong>RAM</strong><div>{}</div></div><div class=\"card\"><strong>Warnings</strong><div>{}</div></div>{}</div></section>",
+        "<section><h2>Overview</h2><div class=\"grid\"><div class=\"card\"><strong>Binary</strong><div>{}</div></div><div class=\"card\"><strong>Format</strong><div>{} / {}</div></div><div class=\"card\"><strong>Toolchain</strong><div>{} <span class=\"muted\">(requested: {})</span></div></div><div class=\"card\"><strong>Map</strong><div>{} / {} <span class=\"muted\">({} parser warnings)</span></div></div><div class=\"card\"><strong>DWARF</strong><div>{} <span class=\"muted\">({:.1}% unknown)</span></div></div><div class=\"card\"><strong>Debug Artifact</strong><div>{}</div></div><div class=\"card\"><strong>Sections</strong><div>{}</div></div><div class=\"card\"><strong>ROM</strong><div>{}</div></div><div class=\"card\"><strong>RAM</strong><div>{}</div></div><div class=\"card\"><strong>Warnings</strong><div>{}</div></div>{}{} </div></section>",
         escape(&current.binary.arch),
         escape(&current.binary.elf_class),
         escape(&current.binary.endian),
@@ -653,6 +736,7 @@ fn overview(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
         format_bytes(current.memory.rom_bytes),
         format_bytes(current.memory.ram_bytes),
         current.warnings.len(),
+        git_html,
         diff_html
     )
 }
@@ -1941,6 +2025,7 @@ mod tests {
                 elf_class: "ELF32".to_string(),
                 endian: "little-endian".to_string(),
             },
+            git: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: Some(ToolchainKind::Gnu),

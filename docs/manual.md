@@ -311,14 +311,14 @@ fwmap history record \
   --db history.db \
   --elf build/app.elf \
   --map build/app.map \
-  --meta commit=abc123 \
-  --meta branch=main
+  --git-repo .
 ```
 
 ### 履歴一覧を表示する
 
 ```bash
-fwmap history list --db history.db
+fwmap history list --db history.db --limit 20
+fwmap history list --db history.db --limit 20 --json
 ```
 
 ### 特定ビルドの履歴詳細を表示する
@@ -831,16 +831,47 @@ fwmap history record \
   --db history.db \
   --elf build/app.elf \
   --map build/app.map \
-  --meta commit=abc123 \
-  --meta branch=main
+  --git-repo .
 ```
 
 これで 1 回分の解析結果を SQLite に保存できます。
 
+`analyze` から直接 history を保存する場合:
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --save-history \
+  --history-db history.db
+```
+
+Git リポジトリを明示する場合:
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --save-history \
+  --history-db history.db \
+  --git-repo .
+```
+
+Git メタデータを無効化する場合:
+
+```bash
+fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --save-history \
+  --no-git
+```
+
 一覧確認:
 
 ```bash
-fwmap history list --db history.db
+fwmap history list --db history.db --limit 20
+fwmap history list --db history.db --limit 20 --json
 ```
 
 特定ビルドの詳細確認:
@@ -882,6 +913,7 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 - 上位 source files
 - 上位 functions
 - 上位 object の why linked 要約
+- Git short hash / branch / describe / dirty flag / subject
 
 ## 6. CLI オプション
 
@@ -935,8 +967,8 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 
 | コマンド | 説明 |
 | --- | --- |
-| `history record --db <path> --elf <path>` | 履歴を 1 件保存 |
-| `history list --db <path>` | 保存済み履歴の一覧表示 |
+| `history record --db <path> --elf <path>` | 履歴を 1 件保存。`--git-repo <path>` / `--no-git` を指定可能 |
+| `history list --db <path> [--limit <n>] [--json]` | 保存済み履歴の一覧表示。Git 情報を含む JSON 出力にも対応 |
 | `history show --db <path> --build <id>` | 特定 build の詳細表示 |
 | `history trend --db <path> --metric <metric>` | 推移表示 |
 
@@ -1004,6 +1036,7 @@ JSON は固定 schema で出力されます。
 
 - `schema_version`
 - `binary`
+- `git`
 - `linker_script`
 - `section_summary`
 - `memory_summary`
@@ -1024,6 +1057,8 @@ JSON は固定 schema で出力されます。
 - `diff`
 
 `top_symbols` の各要素は、raw 名の `name` と表示用の `demangled_name` を両方持ちます。
+
+`git` には `repo_root`, `commit_hash`, `short_commit_hash`, `branch_name`, `detached_head`, `tag_names`, `commit_subject`, `author_name`, `author_email`, `commit_timestamp`, `describe`, `is_dirty` が入ります。Git が使えない場合や `--no-git` 指定時は `null` です。
 
 `toolchain` には、ユーザ指定、検出結果、実際に使った parser family が入ります。
 
@@ -1062,6 +1097,7 @@ HTML は以下の順で構成されます。
 - RAM 合計
 - warning 件数
 - diff がある場合は ROM/RAM 差分
+- Git short hash / branch / describe / dirty state
 
 ### 8.2 Warnings
 

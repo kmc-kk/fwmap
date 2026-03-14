@@ -2,6 +2,7 @@ pub mod analyze;
 pub mod cpp;
 pub mod demangle;
 pub mod diff;
+pub mod git;
 pub mod history;
 pub mod linkage;
 pub mod model;

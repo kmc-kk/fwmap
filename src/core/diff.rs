@@ -385,6 +385,7 @@ mod tests {
                 elf_class: "ELF32".to_string(),
                 endian: "little-endian".to_string(),
             },
+            git: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: None,

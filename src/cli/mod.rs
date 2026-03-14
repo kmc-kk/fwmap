@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::analyze::{analyze_paths, evaluate_warnings, AnalyzeOptions};
 use crate::diff::{diff_results, top_increases};
 use crate::demangle::display_name;
+use crate::git::GitOptions;
 use crate::history::{
     list_builds, print_build_detail, print_build_list, print_trend, record_build, show_build, trend_metric,
     HistoryRecordInput,
@@ -48,6 +49,8 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             dwarf_mode,
             debug_file_dirs,
             debug_trace,
+            git_enabled,
+            git_repo,
             debuginfod,
             debuginfod_urls,
             debuginfod_cache_dir,
@@ -67,6 +70,10 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 dwarf_mode,
                 debug_file_dirs,
                 debug_trace,
+                git: GitOptions {
+                    enabled: git_enabled,
+                    repo_path: git_repo,
+                },
                 debuginfod,
                 debuginfod_urls,
                 debuginfod_cache_dir,
@@ -95,9 +102,17 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             println!("Recorded build #{id} into {}", db.display());
             Ok(0)
         }
-        Command::HistoryList { db } => {
-            let items = list_builds(&db)?;
-            print_build_list(&items);
+        Command::HistoryList { db, limit, json } => {
+            let mut items = list_builds(&db)?;
+            items.truncate(limit);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&items).map_err(|err| format!("failed to serialize history list: {err}"))?
+                );
+            } else {
+                print_build_list(&items);
+            }
             Ok(0)
         }
         Command::HistoryShow { db, build } => {
@@ -124,6 +139,8 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             dwarf_mode,
             debug_file_dirs,
             debug_trace,
+            git_enabled,
+            git_repo,
             debuginfod,
             debuginfod_urls,
             debuginfod_cache_dir,
@@ -144,6 +161,10 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 dwarf_mode,
                 debug_file_dirs,
                 debug_trace,
+                git: GitOptions {
+                    enabled: git_enabled,
+                    repo_path: git_repo.clone(),
+                },
                 debuginfod,
                 debuginfod_urls,
                 debuginfod_cache_dir,
@@ -200,6 +221,8 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             dwarf_mode,
             debug_file_dirs,
             debug_trace,
+            git_enabled,
+            git_repo,
             debuginfod,
             debuginfod_urls,
             debuginfod_cache_dir,
@@ -211,6 +234,8 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             verbose,
             cpp_view,
             group_by,
+            save_history,
+            history_db,
         } => {
             let mut options = AnalyzeOptions {
                 thresholds,
@@ -221,6 +246,10 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 dwarf_mode,
                 debug_file_dirs,
                 debug_trace,
+                git: GitOptions {
+                    enabled: git_enabled,
+                    repo_path: git_repo.clone(),
+                },
                 debuginfod,
                 debuginfod_urls,
                 debuginfod_cache_dir,
@@ -264,6 +293,19 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 }
                 current.warnings.extend(policy_warnings(&evaluation));
                 current.policy = Some(evaluation);
+            }
+            if save_history {
+                let db = history_db.clone().unwrap_or_else(|| PathBuf::from("history.db"));
+                let build_id = record_build(
+                    &db,
+                    HistoryRecordInput {
+                        analysis: current.clone(),
+                        metadata: std::collections::BTreeMap::new(),
+                    },
+                )?;
+                if !ci_summary {
+                    println!("History: recorded build #{build_id} into {}", db.display());
+                }
             }
             let ci_format = ci_format.or(if ci_summary { Some(CiFormat::Text) } else { None });
             if let Some(format) = ci_format {
@@ -368,6 +410,8 @@ enum Command {
         dwarf_mode: DwarfMode,
         debug_file_dirs: Vec<PathBuf>,
         debug_trace: bool,
+        git_enabled: bool,
+        git_repo: Option<PathBuf>,
         debuginfod: DebuginfodMode,
         debuginfod_urls: Vec<String>,
         debuginfod_cache_dir: Option<PathBuf>,
@@ -378,9 +422,7 @@ enum Command {
         policy_dump_effective: bool,
         metadata: std::collections::BTreeMap<String, String>,
     },
-    HistoryList {
-        db: PathBuf,
-    },
+    HistoryList { db: PathBuf, limit: usize, json: bool },
     HistoryShow {
         db: PathBuf,
         build: i64,
@@ -400,6 +442,8 @@ enum Command {
         dwarf_mode: DwarfMode,
         debug_file_dirs: Vec<PathBuf>,
         debug_trace: bool,
+        git_enabled: bool,
+        git_repo: Option<PathBuf>,
         debuginfod: DebuginfodMode,
         debuginfod_urls: Vec<String>,
         debuginfod_cache_dir: Option<PathBuf>,
@@ -443,6 +487,8 @@ enum Command {
         dwarf_mode: DwarfMode,
         debug_file_dirs: Vec<PathBuf>,
         debug_trace: bool,
+        git_enabled: bool,
+        git_repo: Option<PathBuf>,
         debuginfod: DebuginfodMode,
         debuginfod_urls: Vec<String>,
         debuginfod_cache_dir: Option<PathBuf>,
@@ -454,6 +500,8 @@ enum Command {
         verbose: bool,
         cpp_view: bool,
         group_by: CppGroupBy,
+        save_history: bool,
+        history_db: Option<PathBuf>,
     },
 }
 
@@ -505,6 +553,8 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut dwarf_mode = DwarfMode::Auto;
     let mut debug_file_dirs = Vec::new();
     let mut debug_trace = false;
+    let mut git_enabled = true;
+    let mut git_repo = None;
     let mut debuginfod = DebuginfodMode::Off;
     let mut debuginfod_urls = Vec::new();
     let mut debuginfod_cache_dir = None;
@@ -516,6 +566,8 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut verbose = false;
     let mut cpp_view = false;
     let mut group_by = CppGroupBy::Symbol;
+    let mut save_history = false;
+    let mut history_db = None;
     let mut index = 2usize;
     while index < args.len() {
         let key = &args[index];
@@ -538,6 +590,16 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
             }
             "--ci-summary" => {
                 ci_summary = true;
+                index += 1;
+                continue;
+            }
+            "--save-history" => {
+                save_history = true;
+                index += 1;
+                continue;
+            }
+            "--no-git" => {
+                git_enabled = false;
                 index += 1;
                 continue;
             }
@@ -669,7 +731,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                 index += 2;
                 continue;
             }
-            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--sarif" | "--sarif-base-uri" | "--rules" | "--policy" | "--profile" | "--ci-out" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" => {
+            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--sarif" | "--sarif-base-uri" | "--rules" | "--policy" | "--profile" | "--ci-out" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" | "--git-repo" | "--history-db" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--elf" => elf = Some(PathBuf::from(value)),
@@ -689,6 +751,8 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                     "--debug-file-dir" => debug_file_dirs.push(PathBuf::from(value)),
                     "--debuginfod-url" => debuginfod_urls.push(value.to_string()),
                     "--debuginfod-cache-dir" => debuginfod_cache_dir = Some(PathBuf::from(value)),
+                    "--git-repo" => git_repo = Some(PathBuf::from(value)),
+                    "--history-db" => history_db = Some(PathBuf::from(value)),
                     _ => {}
                 }
                 index += 2;
@@ -751,6 +815,8 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         dwarf_mode,
         debug_file_dirs,
         debug_trace,
+        git_enabled,
+        git_repo,
         debuginfod,
         debuginfod_urls,
         debuginfod_cache_dir,
@@ -762,6 +828,8 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         verbose,
         cpp_view,
         group_by,
+        save_history,
+        history_db,
     })
 }
 
@@ -806,10 +874,10 @@ fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--why-linked-top <n>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--policy <path>] [--profile <name>] [--policy-dump-effective] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--cpp-view] [--group-by <mode>] [--verbose]
-fwmap explain --elf <path> [--map <path>] [--lds <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] (--symbol <name> | --object <name> | --section <name>)
-fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--policy <path>] [--profile <name>] [--policy-dump-effective] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
-fwmap history list --db <path>
+fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--why-linked-top <n>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--policy <path>] [--profile <name>] [--policy-dump-effective] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--git-repo <path>] [--no-git] [--save-history] [--history-db <path>] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--cpp-view] [--group-by <mode>] [--verbose]
+fwmap explain --elf <path> [--map <path>] [--lds <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--git-repo <path>] [--no-git] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] (--symbol <name> | --object <name> | --section <name>)
+fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--policy <path>] [--profile <name>] [--policy-dump-effective] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--git-repo <path>] [--no-git] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
+fwmap history list --db <path> [--limit <n>] [--json]
 fwmap history show --db <path> --build <id>
 fwmap history trend --db <path> --metric <rom|ram|warnings|unknown_source|region:NAME|section:NAME|source:PATH|function:KEY|object:PATH|archive-member:ARCHIVE(MEMBER)|directory:PATH> [--last <n>]
 
@@ -837,6 +905,10 @@ Options:
   --dwarf=auto|on|off Control DWARF line-table usage
   --debug-file-dir Search this directory for separate debug files (repeatable)
   --debug-trace Print debug artifact resolution steps
+  --git-repo  Probe Git metadata from the given repository path
+  --no-git    Disable Git metadata collection
+  --save-history Save analyze output into a history database
+  --history-db Override the history database path used with --save-history
   --debuginfod=auto|on|off Control debuginfod fallback behavior
   --debuginfod-url Add a debuginfod base URL (repeatable)
   --debuginfod-cache-dir Directory used for debuginfod cache metadata
@@ -893,6 +965,8 @@ fn parse_explain_args(args: Vec<String>) -> Result<Command, String> {
     let mut dwarf_mode = DwarfMode::Auto;
     let mut debug_file_dirs = Vec::new();
     let mut debug_trace = false;
+    let mut git_enabled = true;
+    let mut git_repo = None;
     let mut debuginfod = DebuginfodMode::Off;
     let mut debuginfod_urls = Vec::new();
     let mut debuginfod_cache_dir = None;
@@ -914,6 +988,7 @@ fn parse_explain_args(args: Vec<String>) -> Result<Command, String> {
             "--dwarf=on" => dwarf_mode = DwarfMode::On,
             "--dwarf=off" => dwarf_mode = DwarfMode::Off,
             "--debug-trace" => debug_trace = true,
+            "--no-git" => git_enabled = false,
             "--debuginfod=auto" => debuginfod = DebuginfodMode::Auto,
             "--debuginfod=on" => debuginfod = DebuginfodMode::On,
             "--debuginfod=off" => debuginfod = DebuginfodMode::Off,
@@ -942,7 +1017,7 @@ fn parse_explain_args(args: Vec<String>) -> Result<Command, String> {
                 index += 2;
                 continue;
             }
-            "--elf" | "--map" | "--lds" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" | "--symbol" | "--object" | "--section" => {
+            "--elf" | "--map" | "--lds" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" | "--git-repo" | "--symbol" | "--object" | "--section" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--elf" => elf = Some(PathBuf::from(value)),
@@ -952,6 +1027,7 @@ fn parse_explain_args(args: Vec<String>) -> Result<Command, String> {
                     "--debug-file-dir" => debug_file_dirs.push(PathBuf::from(value)),
                     "--debuginfod-url" => debuginfod_urls.push(value.to_string()),
                     "--debuginfod-cache-dir" => debuginfod_cache_dir = Some(PathBuf::from(value)),
+                    "--git-repo" => git_repo = Some(PathBuf::from(value)),
                     "--symbol" => symbol = Some(value.to_string()),
                     "--object" => object = Some(value.to_string()),
                     "--section" => section = Some(value.to_string()),
@@ -990,6 +1066,8 @@ fn parse_explain_args(args: Vec<String>) -> Result<Command, String> {
         dwarf_mode,
         debug_file_dirs,
         debug_trace,
+        git_enabled,
+        git_repo,
         debuginfod,
         debuginfod_urls,
         debuginfod_cache_dir,
@@ -1018,6 +1096,8 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
     let mut dwarf_mode = DwarfMode::Auto;
     let mut debug_file_dirs = Vec::new();
     let mut debug_trace = false;
+    let mut git_enabled = true;
+    let mut git_repo = None;
     let mut debuginfod = DebuginfodMode::Off;
     let mut debuginfod_urls = Vec::new();
     let mut debuginfod_cache_dir = None;
@@ -1073,6 +1153,10 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
                 debug_trace = true;
                 index += 1;
             }
+            "--no-git" => {
+                git_enabled = false;
+                index += 1;
+            }
             "--debuginfod=auto" => {
                 debuginfod = DebuginfodMode::Auto;
                 index += 1;
@@ -1121,7 +1205,7 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
                 metadata.insert(k.to_string(), v.to_string());
                 index += 2;
             }
-            "--db" | "--elf" | "--map" | "--lds" | "--rules" | "--policy" | "--profile" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" => {
+            "--db" | "--elf" | "--map" | "--lds" | "--rules" | "--policy" | "--profile" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" | "--git-repo" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--db" => db = Some(PathBuf::from(value)),
@@ -1135,6 +1219,7 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
                     "--debug-file-dir" => debug_file_dirs.push(PathBuf::from(value)),
                     "--debuginfod-url" => debuginfod_urls.push(value.to_string()),
                     "--debuginfod-cache-dir" => debuginfod_cache_dir = Some(PathBuf::from(value)),
+                    "--git-repo" => git_repo = Some(PathBuf::from(value)),
                     _ => {}
                 }
                 index += 2;
@@ -1172,6 +1257,8 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
         dwarf_mode,
         debug_file_dirs,
         debug_trace,
+        git_enabled,
+        git_repo,
         debuginfod,
         debuginfod_urls,
         debuginfod_cache_dir,
@@ -1186,7 +1273,9 @@ fn parse_history_record_args(args: Vec<String>) -> Result<Command, String> {
 
 fn parse_history_list_args(args: Vec<String>) -> Result<Command, String> {
     let db = parse_required_path_arg(&args[3..], "--db")?;
-    Ok(Command::HistoryList { db })
+    let limit = parse_optional_usize_arg(&args[3..], "--limit")?.unwrap_or(20);
+    let json = args[3..].iter().any(|item| item == "--json");
+    Ok(Command::HistoryList { db, limit, json })
 }
 
 fn parse_history_show_args(args: Vec<String>) -> Result<Command, String> {

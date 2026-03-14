@@ -233,11 +233,11 @@
   --db history.db \
   --elf build/app.elf \
   --map build/app.map \
-  --meta commit=abc123 \
-  --meta branch=main
+  --git-repo .
 </code></pre>
 <h3>履歴一覧を表示する</h3>
-<pre><code class="language-bash">fwmap history list --db history.db
+<pre><code class="language-bash">fwmap history list --db history.db --limit 20
+fwmap history list --db history.db --limit 20 --json
 </code></pre>
 <h3>特定ビルドの履歴詳細を表示する</h3>
 <pre><code class="language-bash">fwmap history show --db history.db --build 1
@@ -600,12 +600,34 @@ fwmap analyze --elf build/app.elf --map build/app.map --prev-elf prev/app.elf --
   --db history.db \
   --elf build/app.elf \
   --map build/app.map \
-  --meta commit=abc123 \
-  --meta branch=main
+  --git-repo .
 </code></pre>
 <p>これで 1 回分の解析結果を SQLite に保存できます。</p>
+<p><code>analyze</code> から直接 history を保存する場合:</p>
+<pre><code class="language-bash">fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --save-history \
+  --history-db history.db
+</code></pre>
+<p>Git リポジトリを明示する場合:</p>
+<pre><code class="language-bash">fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --save-history \
+  --history-db history.db \
+  --git-repo .
+</code></pre>
+<p>Git メタデータを無効化する場合:</p>
+<pre><code class="language-bash">fwmap analyze \
+  --elf build/app.elf \
+  --map build/app.map \
+  --save-history \
+  --no-git
+</code></pre>
 <p>一覧確認:</p>
-<pre><code class="language-bash">fwmap history list --db history.db
+<pre><code class="language-bash">fwmap history list --db history.db --limit 20
+fwmap history list --db history.db --limit 20 --json
 </code></pre>
 <p>特定ビルドの詳細確認:</p>
 <pre><code class="language-bash">fwmap history show --db history.db --build 3
@@ -640,6 +662,7 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 <li>上位 source files</li>
 <li>上位 functions</li>
 <li>上位 object の why linked 要約</li>
+<li>Git short hash / branch / describe / dirty flag / subject</li>
 </ul>
 <h2>6. CLI オプション</h2>
 <table>
@@ -864,11 +887,11 @@ fwmap history trend --db history.db --metric directory:src/app --last 20
 <tbody>
 <tr>
 <td><code>history record --db &lt;path&gt; --elf &lt;path&gt;</code></td>
-<td>履歴を 1 件保存</td>
+<td>履歴を 1 件保存。<code>--git-repo &lt;path&gt;</code> / <code>--no-git</code> を指定可能</td>
 </tr>
 <tr>
-<td><code>history list --db &lt;path&gt;</code></td>
-<td>保存済み履歴の一覧表示</td>
+<td><code>history list --db &lt;path&gt; [--limit &lt;n&gt;] [--json]</code></td>
+<td>保存済み履歴の一覧表示。Git 情報を含む JSON 出力にも対応</td>
 </tr>
 <tr>
 <td><code>history show --db &lt;path&gt; --build &lt;id&gt;</code></td>
@@ -928,6 +951,7 @@ Top symbol growth: g_rx_ring (+4096)
 <ul>
 <li><code>schema_version</code></li>
 <li><code>binary</code></li>
+<li><code>git</code></li>
 <li><code>linker_script</code></li>
 <li><code>section_summary</code></li>
 <li><code>memory_summary</code></li>
@@ -948,6 +972,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li><code>diff</code></li>
 </ul>
 <p><code>top_symbols</code> の各要素は、raw 名の <code>name</code> と表示用の <code>demangled_name</code> を両方持ちます。</p>
+<p><code>git</code> には <code>repo_root</code>, <code>commit_hash</code>, <code>short_commit_hash</code>, <code>branch_name</code>, <code>detached_head</code>, <code>tag_names</code>, <code>commit_subject</code>, <code>author_name</code>, <code>author_email</code>, <code>commit_timestamp</code>, <code>describe</code>, <code>is_dirty</code> が入ります。Git が使えない場合や <code>--no-git</code> 指定時は <code>null</code> です。</p>
 <p><code>toolchain</code> には、ユーザ指定、検出結果、実際に使った parser family が入ります。</p>
 <h2>8. HTML レポートの見方</h2>
 <p>HTML は以下の順で構成されます。</p>
@@ -982,6 +1007,7 @@ Top symbol growth: g_rx_ring (+4096)
 <li>RAM 合計</li>
 <li>warning 件数</li>
 <li>diff がある場合は ROM/RAM 差分</li>
+<li>Git short hash / branch / describe / dirty state</li>
 </ul>
 <h3>8.2 Warnings</h3>
 <p>warning は source と関連対象付きで表示されます。</p>

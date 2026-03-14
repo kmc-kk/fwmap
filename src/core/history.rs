@@ -3,9 +3,10 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
 
 use crate::linkage::explain_object;
-use crate::model::{AnalysisResult, WarningLevel};
+use crate::model::{AnalysisResult, GitMetadata, WarningLevel};
 
 #[derive(Debug, Clone)]
 pub struct HistoryRecordInput {
@@ -13,7 +14,7 @@ pub struct HistoryRecordInput {
     pub metadata: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct BuildRecord {
     pub id: i64,
     pub created_at: i64,
@@ -26,6 +27,7 @@ pub struct BuildRecord {
     pub warning_count: u64,
     pub error_count: u64,
     pub metadata: BTreeMap<String, String>,
+    pub git: Option<GitMetadata>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -123,6 +125,33 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
     )
     .map_err(|err| format!("failed to insert build history: {err}"))?;
     let build_id = tx.last_insert_rowid();
+
+    if let Some(git) = input.analysis.git.as_ref() {
+        let tag_names_json =
+            serde_json::to_string(&git.tag_names).map_err(|err| format!("failed to serialize git tags: {err}"))?;
+        tx.execute(
+            "INSERT INTO git_metadata (
+                build_id, repo_root, commit_hash, short_commit_hash, branch_name, detached_head, tag_names_json,
+                commit_subject, author_name, author_email, commit_timestamp, describe, is_dirty
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                build_id,
+                git.repo_root,
+                git.commit_hash,
+                git.short_commit_hash,
+                git.branch_name,
+                git.detached_head as i64,
+                tag_names_json,
+                git.commit_subject,
+                git.author_name,
+                git.author_email,
+                git.commit_timestamp,
+                git.describe,
+                git.is_dirty as i64
+            ],
+        )
+        .map_err(|err| format!("failed to insert git metadata: {err}"))?;
+    }
 
     {
         // Keep source aggregates in separate tables so existing history databases can
@@ -278,8 +307,13 @@ pub fn list_builds(db_path: &Path) -> Result<Vec<BuildRecord>, String> {
     init_schema(&conn)?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, created_at, elf_path, arch, rom_bytes, ram_bytes, warning_count, error_count, metadata_json, linker_family, map_format
-             FROM builds ORDER BY id DESC",
+            "SELECT b.id, b.created_at, b.elf_path, b.arch, b.rom_bytes, b.ram_bytes, b.warning_count, b.error_count,
+                    b.metadata_json, b.linker_family, b.map_format,
+                    g.repo_root, g.commit_hash, g.short_commit_hash, g.branch_name, g.detached_head, g.tag_names_json,
+                    g.commit_subject, g.author_name, g.author_email, g.commit_timestamp, g.describe, g.is_dirty
+             FROM builds b
+             LEFT JOIN git_metadata g ON g.build_id = b.id
+             ORDER BY b.id DESC",
         )
         .map_err(|err| format!("failed to query build history: {err}"))?;
     let rows = stmt
@@ -296,6 +330,7 @@ pub fn list_builds(db_path: &Path) -> Result<Vec<BuildRecord>, String> {
                 warning_count: row.get::<_, i64>(6)? as u64,
                 error_count: row.get::<_, i64>(7)? as u64,
                 metadata: parse_metadata(row.get::<_, String>(8)?),
+                git: parse_git_metadata(row)?,
             })
         })
         .map_err(|err| format!("failed to map build history rows: {err}"))?;
@@ -309,8 +344,13 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
     init_schema(&conn)?;
     let build = conn
         .query_row(
-            "SELECT id, created_at, elf_path, arch, rom_bytes, ram_bytes, warning_count, error_count, metadata_json, linker_family, map_format
-             FROM builds WHERE id = ?1",
+            "SELECT b.id, b.created_at, b.elf_path, b.arch, b.rom_bytes, b.ram_bytes, b.warning_count, b.error_count,
+                    b.metadata_json, b.linker_family, b.map_format,
+                    g.repo_root, g.commit_hash, g.short_commit_hash, g.branch_name, g.detached_head, g.tag_names_json,
+                    g.commit_subject, g.author_name, g.author_email, g.commit_timestamp, g.describe, g.is_dirty
+             FROM builds b
+             LEFT JOIN git_metadata g ON g.build_id = b.id
+             WHERE b.id = ?1",
             params![build_id],
             |row| {
                 Ok(BuildRecord {
@@ -325,6 +365,7 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
                     warning_count: row.get::<_, i64>(6)? as u64,
                     error_count: row.get::<_, i64>(7)? as u64,
                     metadata: parse_metadata(row.get::<_, String>(8)?),
+                    git: parse_git_metadata(row)?,
                 })
             },
         )
@@ -680,7 +721,7 @@ pub fn print_build_list(items: &[BuildRecord]) {
     }
     for item in items {
         println!(
-            "#{} {} ROM={} RAM={} warnings={} errors={} {} [{} / {}]",
+            "#{} {} ROM={} RAM={} warnings={} errors={} {} [{} / {}]{}",
             item.id,
             item.created_at,
             item.rom_bytes,
@@ -689,7 +730,8 @@ pub fn print_build_list(items: &[BuildRecord]) {
             item.error_count,
             item.elf_path,
             item.linker_family,
-            item.map_format
+            item.map_format,
+            format_git_summary(item.git.as_ref())
         );
     }
 }
@@ -710,6 +752,24 @@ pub fn print_build_detail(detail: &BuildDetail) {
         detail.build.warning_count,
         detail.build.error_count
     );
+    if let Some(git) = detail.build.git.as_ref() {
+        println!(
+            "Git: {}{}{}{}",
+            git.short_commit_hash,
+            git.branch_name
+                .as_deref()
+                .map(|value| format!(" | branch={value}"))
+                .unwrap_or_else(|| " | detached".to_string()),
+            git.describe
+                .as_deref()
+                .map(|value| format!(" | describe={value}"))
+                .unwrap_or_default(),
+            if git.is_dirty { " | dirty" } else { "" }
+        );
+        if let Some(subject) = git.commit_subject.as_deref() {
+            println!("Git subject: {subject}");
+        }
+    }
     println!(
         "DWARF: {} | Unknown ratio: {:.1}% | CUs: {} | Source files: {} | Functions: {}",
         if detail.debug_info.dwarf_used { "used" } else { "not used" },
@@ -896,11 +956,26 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             summary TEXT NOT NULL,
             current_size INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS git_metadata (
+            build_id INTEGER PRIMARY KEY REFERENCES builds(id) ON DELETE CASCADE,
+            repo_root TEXT NOT NULL,
+            commit_hash TEXT NOT NULL,
+            short_commit_hash TEXT NOT NULL,
+            branch_name TEXT,
+            detached_head INTEGER NOT NULL,
+            tag_names_json TEXT NOT NULL,
+            commit_subject TEXT,
+            author_name TEXT,
+            author_email TEXT,
+            commit_timestamp TEXT,
+            describe TEXT,
+            is_dirty INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS schema_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-        INSERT INTO schema_meta(key, value) VALUES ('history_schema_version', '3')
+        INSERT INTO schema_meta(key, value) VALUES ('history_schema_version', '4')
         ON CONFLICT(key) DO UPDATE SET value = excluded.value;
         ",
     )
@@ -932,6 +1007,50 @@ fn ensure_builds_column(conn: &Connection, name: &str, definition: &str) -> Resu
 
 fn parse_metadata(raw: String) -> BTreeMap<String, String> {
     serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn parse_git_metadata(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<GitMetadata>> {
+    let repo_root = row.get::<_, Option<String>>(11)?;
+    let Some(repo_root) = repo_root else {
+        return Ok(None);
+    };
+    let tag_names = row
+        .get::<_, Option<String>>(16)?
+        .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+        .unwrap_or_default();
+    Ok(Some(GitMetadata {
+        repo_root,
+        commit_hash: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
+        short_commit_hash: row.get::<_, Option<String>>(13)?.unwrap_or_default(),
+        branch_name: row.get(14)?,
+        detached_head: row.get::<_, Option<i64>>(15)?.unwrap_or(0) != 0,
+        tag_names,
+        commit_subject: row.get(17)?,
+        author_name: row.get(18)?,
+        author_email: row.get(19)?,
+        commit_timestamp: row.get(20)?,
+        describe: row.get(21)?,
+        is_dirty: row.get::<_, Option<i64>>(22)?.unwrap_or(0) != 0,
+    }))
+}
+
+fn format_git_summary(git: Option<&GitMetadata>) -> String {
+    let Some(git) = git else {
+        return String::new();
+    };
+    let mut parts = vec![git.short_commit_hash.clone()];
+    if let Some(branch) = git.branch_name.as_deref() {
+        parts.push(branch.to_string());
+    } else if git.detached_head {
+        parts.push("detached".to_string());
+    }
+    if let Some(describe) = git.describe.as_deref() {
+        parts.push(describe.to_string());
+    }
+    if git.is_dirty {
+        parts.push("dirty".to_string());
+    }
+    format!(" | git={}", parts.join(" / "))
 }
 
 fn collect_why_linked_records(analysis: &AnalysisResult, limit: usize) -> Vec<WhyLinkedRecord> {
@@ -1101,6 +1220,7 @@ mod tests {
                 elf_class: "ELF32".to_string(),
                 endian: "little-endian".to_string(),
             },
+            git: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: None,
