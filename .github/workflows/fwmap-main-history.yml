@@ -1,0 +1,155 @@
+name: fwmap-main-history
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  schedule:
+    - cron: "17 18 * * *" # JST 03:17
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fwmap-main-history
+  cancel-in-progress: false
+
+env:
+  FWMAP_OUT_DIR: out
+  FWMAP_SITE_DIR: site
+  FWMAP_HISTORY_DB: out/history/history.db
+  FWMAP_MAP_PATH: ${{ github.workspace }}/target/release/fwmap.map
+
+jobs:
+  build-and-analyze:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build fwmap
+        env:
+          RUSTFLAGS: -C link-arg=-Wl,-Map=${{ env.FWMAP_MAP_PATH }}
+        run: |
+          cargo build --release
+          mkdir -p bin build "$FWMAP_OUT_DIR/history" "$FWMAP_SITE_DIR"
+          cp target/release/fwmap bin/fwmap
+          cp target/release/fwmap build/fwmap.elf
+          cp "${FWMAP_MAP_PATH}" build/fwmap.map
+
+      - name: Run fwmap analyze and save history
+        run: |
+          ./bin/fwmap analyze \
+            --elf build/fwmap.elf \
+            --map build/fwmap.map \
+            --out "$FWMAP_OUT_DIR/report.html" \
+            --report-json "$FWMAP_OUT_DIR/report.json" \
+            --sarif "$FWMAP_OUT_DIR/fwmap.sarif" \
+            --save-history \
+            --history-db "$FWMAP_HISTORY_DB" \
+            --git-repo . \
+            --profile release
+
+      - name: Render history pages
+        run: |
+          BASE="$(git rev-list --max-count=21 HEAD | tail -n 1)"
+          ./bin/fwmap history commits \
+            --db "$FWMAP_HISTORY_DB" \
+            --repo . \
+            --limit 100 \
+            --order ancestry \
+            --html "$FWMAP_SITE_DIR/history-commits.html"
+          ./bin/fwmap history range "${BASE}..HEAD" \
+            --db "$FWMAP_HISTORY_DB" \
+            --repo . \
+            --order ancestry \
+            --include-changed-files \
+            --html "$FWMAP_SITE_DIR/history-range.html"
+          ./bin/fwmap history regression \
+            --db "$FWMAP_HISTORY_DB" \
+            --repo . \
+            "${BASE}..HEAD" \
+            --metric rom_total \
+            --threshold +1 \
+            --include-evidence \
+            --html "$FWMAP_SITE_DIR/regression-rom.html"
+          cp "$FWMAP_OUT_DIR/report.html" "$FWMAP_SITE_DIR/report.html"
+          cp "$FWMAP_OUT_DIR/report.json" "$FWMAP_SITE_DIR/report.json"
+          cp "$FWMAP_OUT_DIR/fwmap.sarif" "$FWMAP_SITE_DIR/fwmap.sarif"
+          printf '%s\n' \
+            '<!doctype html>' \
+            '<html><head><meta charset="utf-8"><title>fwmap history</title></head><body>' \
+            '<h1>fwmap history</h1>' \
+            '<ul>' \
+            '<li><a href="report.html">Latest report</a></li>' \
+            '<li><a href="history-commits.html">Commit timeline</a></li>' \
+            '<li><a href="history-range.html">Range diff</a></li>' \
+            '<li><a href="regression-rom.html">ROM regression origin</a></li>' \
+            '</ul>' \
+            '</body></html>' \
+            > "$FWMAP_SITE_DIR/index.html"
+
+      - name: Write job summary
+        run: |
+          echo "## fwmap main history" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- commit: \`${GITHUB_SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- report json: \`${FWMAP_OUT_DIR}/report.json\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- report html: \`${FWMAP_OUT_DIR}/report.html\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- sarif: \`${FWMAP_OUT_DIR}/fwmap.sarif\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- history db: \`${FWMAP_HISTORY_DB}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- site dir: \`${FWMAP_SITE_DIR}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload analysis artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fwmap-main-history-${{ github.sha }}
+          path: |
+            out/
+            site/
+          retention-days: 30
+
+  deploy-pages:
+    if: github.ref == 'refs/heads/main'
+    needs: build-and-analyze
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Download site artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: fwmap-main-history-${{ github.sha }}
+          path: artifact
+
+      - name: Prepare Pages payload
+        run: |
+          mkdir -p pages
+          cp -r artifact/site/* pages/
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: pages
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

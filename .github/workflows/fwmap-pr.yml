@@ -1,0 +1,63 @@
+name: fwmap-pr
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    env:
+      FWMAP_MAP_PATH: ${{ github.workspace }}/target/release/fwmap.map
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build fwmap
+        env:
+          RUSTFLAGS: -C link-arg=-Wl,-Map=${{ env.FWMAP_MAP_PATH }}
+        run: |
+          cargo build --release
+
+      - name: Build target artifacts
+        run: |
+          mkdir -p bin out
+          cp target/release/fwmap bin/fwmap
+          cp target/release/fwmap bin/fwmap.elf
+          cp "${FWMAP_MAP_PATH}" bin/fwmap.map
+
+      - name: Run fwmap
+        run: |
+          ./bin/fwmap analyze \
+            --elf bin/fwmap.elf \
+            --map bin/fwmap.map \
+            --out out/report.html \
+            --report-json out/report.json \
+            --sarif out/fwmap.sarif
+
+      - name: Write job summary
+        run: |
+          echo "## fwmap result" >> "$GITHUB_STEP_SUMMARY"
+          echo "- HTML report: artifact を参照" >> "$GITHUB_STEP_SUMMARY"
+          echo "- SARIF: code scanning に反映" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: fwmap-pr-${{ github.sha }}
+          path: out/
+          retention-days: 14
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: out/fwmap.sarif

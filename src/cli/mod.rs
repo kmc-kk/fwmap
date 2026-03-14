@@ -1539,10 +1539,7 @@ fn parse_history_commits_args(args: Vec<String>) -> Result<Command, String> {
 fn parse_history_range_args(args: Vec<String>) -> Result<Command, String> {
     let db = parse_optional_path_arg(&args[3..], "--db")?.unwrap_or_else(|| PathBuf::from("history.db"));
     let repo = parse_optional_path_arg(&args[3..], "--repo")?;
-    let spec = args
-        .get(3)
-        .filter(|item| !item.starts_with("--"))
-        .cloned()
+    let spec = parse_first_free_arg(&args[3..])
         .or_else(|| {
             let base = parse_optional_string_arg(&args[3..], "--base").ok().flatten()?;
             let head = parse_optional_string_arg(&args[3..], "--head").ok().flatten()?;
@@ -1600,10 +1597,7 @@ fn parse_history_regression_args(args: Vec<String>) -> Result<Command, String> {
             RegressionMode::FirstPresence,
         )
     };
-    let spec = args
-        .get(3)
-        .filter(|item| !item.starts_with("--"))
-        .cloned()
+    let spec = parse_first_free_arg(&args[3..])
         .or_else(|| {
             let base = parse_optional_string_arg(&args[3..], "--base").ok().flatten()?;
             let head = parse_optional_string_arg(&args[3..], "--head").ok().flatten()?;
@@ -1688,6 +1682,50 @@ fn parse_optional_string_arg(args: &[String], key: &str) -> Result<Option<String
 
 fn parse_optional_path_arg(args: &[String], key: &str) -> Result<Option<PathBuf>, String> {
     parse_optional_string_arg(args, key).map(|item| item.map(PathBuf::from))
+}
+
+fn parse_first_free_arg(args: &[String]) -> Option<String> {
+    let mut index = 0usize;
+    while index < args.len() {
+        let item = &args[index];
+        if item.starts_with("--") {
+            index += 1;
+            if option_takes_value(item) {
+                index += 1;
+            }
+            continue;
+        }
+        return Some(item.clone());
+    }
+    None
+}
+
+fn option_takes_value(key: &str) -> bool {
+    matches!(
+        key,
+        "--db"
+            | "--repo"
+            | "--base"
+            | "--head"
+            | "--from"
+            | "--to"
+            | "--profile"
+            | "--toolchain"
+            | "--target"
+            | "--order"
+            | "--html"
+            | "--metric"
+            | "--rule"
+            | "--entity"
+            | "--mode"
+            | "--threshold"
+            | "--threshold-percent"
+            | "--jump-threshold"
+            | "--max-steps"
+            | "--limit-commits"
+            | "--branch"
+            | "--limit"
+    )
 }
 
 fn parse_required_i64_arg(args: &[String], key: &str) -> Result<i64, String> {
@@ -2147,6 +2185,29 @@ mod tests {
     }
 
     #[test]
+    fn parses_history_range_command_with_positional_after_options() {
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "history".to_string(),
+            "range".to_string(),
+            "--db".to_string(),
+            "history.db".to_string(),
+            "--repo".to_string(),
+            ".".to_string(),
+            "main..HEAD".to_string(),
+            "--json".to_string(),
+        ])
+        .unwrap();
+        match cmd {
+            Command::HistoryRange { spec, json, .. } => {
+                assert_eq!(spec, "main..HEAD");
+                assert!(json);
+            }
+            _ => panic!("expected history range command"),
+        }
+    }
+
+    #[test]
     fn parses_history_regression_command() {
         let cmd = parse_args(vec![
             "fwmap".to_string(),
@@ -2181,6 +2242,40 @@ mod tests {
                 assert_eq!(jump_threshold, Some(4096));
                 assert!(include_evidence);
                 assert!(json);
+            }
+            _ => panic!("expected history regression command"),
+        }
+    }
+
+    #[test]
+    fn parses_history_regression_command_with_positional_after_options() {
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "history".to_string(),
+            "regression".to_string(),
+            "--db".to_string(),
+            "history.db".to_string(),
+            "--repo".to_string(),
+            ".".to_string(),
+            "main~20..main".to_string(),
+            "--metric".to_string(),
+            "rom_total".to_string(),
+            "--threshold".to_string(),
+            "+8192".to_string(),
+        ])
+        .unwrap();
+        match cmd {
+            Command::HistoryRegression {
+                spec,
+                detector_type,
+                key,
+                threshold,
+                ..
+            } => {
+                assert_eq!(spec, "main~20..main");
+                assert_eq!(detector_type, RegressionDetector::Metric);
+                assert_eq!(key, "rom_total");
+                assert_eq!(threshold, Some(8192));
             }
             _ => panic!("expected history regression command"),
         }
