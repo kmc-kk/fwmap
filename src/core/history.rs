@@ -844,8 +844,7 @@ pub fn commit_timeline(
     let commits = list_commits(repo, revision, limit, order)?;
     let all_builds = list_builds(db_path)?;
     let build_map = latest_build_by_commit(&all_builds, &repo_root);
-    let mut rows = Vec::new();
-    let mut previous_by_variant = HashMap::<String, BuildRecord>::new();
+    let mut timeline_items = Vec::<(GitCommit, BuildRecord)>::new();
     for commit in commits {
         let Some(build) = build_map.get(&commit.commit).cloned() else {
             continue;
@@ -853,13 +852,20 @@ pub fn commit_timeline(
         if !matches_filters(&build, profile, toolchain, target, branch) {
             continue;
         }
-        let variant = variant_key(&build);
-        let previous = previous_by_variant.get(&variant);
-        let metric_diff = previous.map(|prev| build_metric_diff(db_path, build.id, prev.id)).transpose()?;
-        let row = build_timeline_row(&repo_root, &commit, &build, metric_diff.as_ref());
-        previous_by_variant.insert(variant, build);
-        rows.push(row);
+        timeline_items.push((commit, build));
     }
+    let mut rows = Vec::with_capacity(timeline_items.len());
+    let mut next_older_by_variant = HashMap::<String, BuildRecord>::new();
+    for (commit, build) in timeline_items.into_iter().rev() {
+        let variant = variant_key(&build);
+        let diff = next_older_by_variant
+            .get(&variant)
+            .map(|older| build_metric_diff(db_path, build.id, older.id))
+            .transpose()?;
+        rows.push(build_timeline_row(&repo_root, &commit, &build, diff.as_ref()));
+        next_older_by_variant.insert(variant, build);
+    }
+    rows.reverse();
     Ok(CommitTimelineReport {
         repo_id: repo_root,
         order: commit_order_name(order).to_string(),
@@ -1774,6 +1780,14 @@ pub fn print_commit_timeline(report: &CommitTimelineReport) {
         return;
     }
     for row in &report.rows {
+        let rom_delta = row
+            .rom_delta_vs_previous
+            .map(|delta| format!(" | ROM delta {delta:+}"))
+            .unwrap_or_default();
+        let ram_delta = row
+            .ram_delta_vs_previous
+            .map(|delta| format!(" | RAM delta {delta:+}"))
+            .unwrap_or_default();
         println!(
             "{} {} ROM={} RAM={} warnings={}{}{}",
             row.short_commit,
@@ -1781,12 +1795,8 @@ pub fn print_commit_timeline(report: &CommitTimelineReport) {
             row.rom_total,
             row.ram_total,
             row.rule_violations_count,
-            row.rom_delta_vs_previous
-                .map(|delta| format!(" | ROM delta {delta:+}"))
-                .unwrap_or_default(),
-            row.ram_delta_vs_previous
-                .map(|delta| format!(" | RAM delta {delta:+}"))
-                .unwrap_or_default()
+            rom_delta,
+            ram_delta
         );
     }
 }
@@ -1847,15 +1857,23 @@ pub fn write_commit_timeline_html(path: &Path, report: &CommitTimelineReport) ->
         .rows
         .iter()
         .map(|row| {
+            let rom_delta = row
+                .rom_delta_vs_previous
+                .map(|value| format!("{value:+}"))
+                .unwrap_or_else(|| "-".to_string());
+            let ram_delta = row
+                .ram_delta_vs_previous
+                .map(|value| format!("{value:+}"))
+                .unwrap_or_else(|| "-".to_string());
             format!(
-                "<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{:+}</td><td>{:+}</td><td>{}</td></tr>",
+                "<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                 escape_html(&row.short_commit),
                 escape_html(&row.commit_time),
                 escape_html(&row.subject),
                 row.rom_total,
                 row.ram_total,
-                row.rom_delta_vs_previous.unwrap_or(0),
-                row.ram_delta_vs_previous.unwrap_or(0),
+                rom_delta,
+                ram_delta,
                 row.rule_violations_count
             )
         })
@@ -2637,7 +2655,8 @@ mod tests {
         assert_eq!(report.rows.len(), 2);
         assert_eq!(report.rows[0].subject, "second commit");
         assert_eq!(report.rows[1].subject, "initial commit");
-        assert_eq!(report.rows[1].rom_delta_vs_previous, Some(-40));
+        assert_eq!(report.rows[0].rom_delta_vs_previous, Some(40));
+        assert_eq!(report.rows[1].rom_delta_vs_previous, None);
         let _ = fs::remove_file(db);
         let _ = fs::remove_dir_all(repo);
     }
