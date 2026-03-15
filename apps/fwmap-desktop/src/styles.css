@@ -656,3 +656,38 @@ label {
     grid-template-columns: 1fr;
   }
 }
+
+.plugin-layout,
+.package-layout,
+.package-view-grid {
+  display: grid;
+  grid-template-columns: 0.95fr 1.05fr;
+  gap: 0.9rem;
+}
+
+.plugin-cap-grid,
+.package-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.plugin-slab {
+  border-radius: 16px;
+  background: rgba(20, 27, 38, 0.75);
+}
+
+.active-chip {
+  background: rgba(217, 164, 91, 0.18);
+  border-color: rgba(217, 164, 91, 0.35);
+}
+
+@media (max-width: 1400px) {
+  .plugin-layout,
+  .package-layout,
+  .package-view-grid,
+  .plugin-cap-grid,
+  .package-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}

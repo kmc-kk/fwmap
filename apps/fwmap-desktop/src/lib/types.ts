@@ -535,3 +535,155 @@ export type SourceContext = {
   relatedRegions: string[];
   availabilityReason: string | null;
 };
+
+
+export type PluginCapability = {
+  capabilityId: string;
+  label: string;
+  description: string;
+};
+
+export type ExtensionPoint = {
+  extensionPointId: string;
+  displayName: string;
+  description: string;
+  layer: string;
+  supportedContexts: string[];
+};
+
+export type PluginSummary = {
+  pluginId: string;
+  displayName: string;
+  version: string;
+  description: string;
+  layer: string;
+  capabilities: PluginCapability[];
+  extensionPoints: string[];
+  supportedInputKinds: string[];
+  outputKinds: string[];
+  safetyLevel: string;
+  stabilityLevel: string;
+  enabled: boolean;
+  status: string;
+  lastError: string | null;
+};
+
+export type PluginDetail = {
+  summary: PluginSummary;
+  executionModel: string;
+  failureBehavior: string;
+  notes: string[];
+};
+
+export type PluginExecutionRequest = {
+  contextKind: string;
+  runId?: number | null;
+  leftRunId?: number | null;
+  rightRunId?: number | null;
+  buildId?: number | null;
+  historyQuery?: HistoryQuery | null;
+  rangeQuery?: RangeDiffQuery | null;
+  regressionQuery?: RegressionQuery | null;
+  inspectorQuery?: InspectorQuery | null;
+  inspectorSelection?: InspectorSelection | null;
+  packagePath?: string | null;
+};
+
+export type PluginOutputItem = {
+  kind: string;
+  title: string;
+  summary: string;
+  detail: string | null;
+};
+
+export type PluginExecutionResult = {
+  pluginId: string;
+  status: string;
+  summary: string;
+  warnings: string[];
+  outputItems: PluginOutputItem[];
+};
+
+export type InvestigationPackageItem = {
+  relativePath: string;
+  kind: string;
+  title: string;
+  included: boolean;
+  description: string;
+  missingReason: string | null;
+};
+
+export type CreateInvestigationPackageRequest = {
+  projectId?: number | null;
+  packageName: string;
+  destinationPath: string;
+  sourceContext: string;
+  includeSections: string[];
+  includeChartsSnapshot: boolean;
+  includePolicySnapshot: boolean;
+  includePluginResults: boolean;
+  includeNotes: boolean;
+  notes?: string | null;
+  runId?: number | null;
+  compare?: RunCompareRequest | null;
+  historyQuery?: HistoryQuery | null;
+  rangeQuery?: RangeDiffQuery | null;
+  regressionQuery?: RegressionQuery | null;
+  dashboardQuery?: DashboardQuery | null;
+  inspectorQuery?: InspectorQuery | null;
+  inspectorSelection?: InspectorSelection | null;
+};
+
+export type InvestigationPackageManifest = {
+  schemaVersion: number;
+  packageVersion: string;
+  packageName: string;
+  createdAt: string;
+  fwmapVersion: string;
+  projectId: number | null;
+  projectName: string | null;
+  sourceContext: string;
+  sourceLabel: string;
+  relatedRunIds: number[];
+  relatedCommitRefs: string[];
+  gitRepoPath: string | null;
+  gitBranch: string | null;
+  gitRevision: string | null;
+  includedItems: InvestigationPackageItem[];
+  omittedItems: InvestigationPackageItem[];
+  exportProvenance: Array<[string, string]>;
+  notes: string | null;
+  pluginResults: PluginExecutionResult[];
+  missingResources: string[];
+};
+
+export type InvestigationPackageSummary = {
+  packageId: number | null;
+  packageName: string;
+  packagePath: string;
+  createdAt: string;
+  sourceContext: string;
+  projectId: number | null;
+  projectName: string | null;
+  fwmapVersion: string;
+  schemaVersion: number;
+  includedCount: number;
+  omittedCount: number;
+  notes: string | null;
+  warnings: string[];
+};
+
+export type OpenInvestigationPackageResult = {
+  summary: InvestigationPackageSummary;
+  manifest: InvestigationPackageManifest;
+  dashboardSummary: DashboardSummary | null;
+  runDetail: RunDetail | null;
+  diffResult: RunCompareResult | null;
+  timeline: TimelineResult | null;
+  rangeDiff: RangeDiffResult | null;
+  regressionResult: RegressionResult | null;
+  inspectorSummary: InspectorSummary | null;
+  inspectorDetail: InspectorDetail | null;
+  inspectorSourceContext: SourceContext | null;
+  policyDocument: PolicyDocument | null;
+};

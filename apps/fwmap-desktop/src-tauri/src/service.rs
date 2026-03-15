@@ -19,14 +19,14 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::dto::{
-    ActiveProjectStateDto, AnalysisRequestDto, ChangedFilesSummaryDto, CreateProjectRequestDto, DashboardQueryDto, DashboardSummaryDto, DeltaEntryDto, DesktopAppInfo,
-    DesktopSettingsDto, ExportRequestDto, ExportResultDto, FirstRuleViolationSummaryDto, GitRefDto, HistoryItemDto, HistoryQueryDto, InspectorBreakdownDto, InspectorDetailDto, InspectorHierarchyNodeDto, InspectorItemDto, InspectorQueryDto, InspectorSelectionDto, InspectorSummaryDto, JobEventDto, JobStatusDto,
-    MetricSummaryDto, OverviewCardDto, PolicyDocumentDto, PolicyValidationIssueDto, PolicyValidationResultDto, ProjectDetailDto, ProjectSummaryDto, RangeDiffQueryDto, RangeDiffResultDto, RecentExportDto, RecentRegressionDto, RegionUsageDto,
+    ActiveProjectStateDto, AnalysisRequestDto, ChangedFilesSummaryDto, CreateInvestigationPackageRequestDto, CreateProjectRequestDto, DashboardQueryDto, DashboardSummaryDto, DeltaEntryDto, DesktopAppInfo,
+    DesktopSettingsDto, ExportRequestDto, ExportResultDto, ExtensionPointDto, FirstRuleViolationSummaryDto, GitRefDto, HistoryItemDto, HistoryQueryDto, InspectorBreakdownDto, InspectorDetailDto, InspectorHierarchyNodeDto, InspectorItemDto, InspectorQueryDto, InspectorSelectionDto, InspectorSummaryDto, InvestigationPackageItemDto, InvestigationPackageManifestDto, InvestigationPackageSummaryDto, JobEventDto, JobStatusDto,
+    MetricSummaryDto, OpenInvestigationPackageResultDto, OverviewCardDto, PluginCapabilityDto, PluginDetailDto, PluginExecutionRequestDto, PluginExecutionResultDto, PluginOutputItemDto, PluginSummaryDto, PolicyDocumentDto, PolicyValidationIssueDto, PolicyValidationResultDto, ProjectDetailDto, ProjectSummaryDto, RangeDiffQueryDto, RangeDiffResultDto, RecentExportDto, RecentRegressionDto, RegionUsageDto,
     RegressionOriginPointDto, RegressionQueryDto, RegressionResultDto, RegressionWindowRowDto, RunCompareRequestDto,
     RunCompareResultDto, RunDetailDto, RunSummaryDto, SourceContextDto, TimelineEntryDto, TimelineResultDto, TopGrowthEntryDto,
     TrendPointDto, TrendSeriesDto, UpdateProjectRequestDto, WorstCommitSummaryDto,
 };
-use crate::storage::{DesktopStorage, InsertExportRecord, InsertProjectRecord, InsertRunRecord, StoredProjectRecord, StoredRunRecord, UpdateProjectRecord};
+use crate::storage::{DesktopStorage, InsertExportRecord, InsertPackageRecord, InsertPluginStateRecord, InsertProjectRecord, InsertRunRecord, StoredPackageRecord, StoredProjectRecord, StoredRunRecord, UpdateProjectRecord};
 
 #[derive(Debug, Clone)]
 struct JobRecord {
@@ -39,6 +39,8 @@ struct JobRecord {
     error_message: Option<String>,
     run_id: Option<i64>,
 }
+
+const INVESTIGATION_PACKAGE_SCHEMA_VERSION: i64 = 1;
 
 #[derive(Clone)]
 pub struct DesktopState {
@@ -296,6 +298,77 @@ impl DesktopState {
         }).collect())
     }
 
+    pub fn list_extension_points(&self) -> Result<Vec<ExtensionPointDto>, String> {
+        Ok(built_in_extension_points())
+    }
+
+    pub fn list_plugins(&self) -> Result<Vec<PluginSummaryDto>, String> {
+        let stored = self.storage.list_plugin_states()?;
+        Ok(built_in_plugin_summaries(&stored))
+    }
+
+    pub fn get_plugin_detail(&self, plugin_id: &str) -> Result<PluginDetailDto, String> {
+        let stored = self.storage.get_plugin_state(plugin_id)?;
+        plugin_detail(plugin_id, stored.as_ref()).ok_or_else(|| format!("plugin '{plugin_id}' was not found"))
+    }
+
+    pub fn set_plugin_enabled(&self, plugin_id: &str, enabled: bool) -> Result<PluginSummaryDto, String> {
+        let detail = self.get_plugin_detail(plugin_id)?;
+        self.storage.save_plugin_state(&InsertPluginStateRecord {
+            plugin_id: plugin_id.to_string(),
+            enabled,
+            updated_at: now_rfc3339(),
+        })?;
+        Ok(PluginSummaryDto { enabled, ..detail.summary })
+    }
+
+    pub fn run_plugin(&self, plugin_id: &str, request: PluginExecutionRequestDto) -> Result<PluginExecutionResultDto, String> {
+        let detail = self.get_plugin_detail(plugin_id)?;
+        if !detail.summary.enabled {
+            return Err(format!("plugin '{plugin_id}' is disabled"));
+        }
+        execute_built_in_plugin(self, plugin_id, request)
+    }
+
+    pub fn create_investigation_package(&self, request: CreateInvestigationPackageRequestDto) -> Result<InvestigationPackageSummaryDto, String> {
+        let bundle = self.build_investigation_package(&request)?;
+        write_investigation_package_bundle(&bundle)?;
+        let summary = summarize_package_manifest(None, &bundle.package_path, &bundle.manifest);
+        self.storage.insert_recent_package(&InsertPackageRecord {
+            project_id: summary.project_id,
+            created_at: summary.created_at.clone(),
+            package_name: summary.package_name.clone(),
+            package_path: summary.package_path.clone(),
+            source_context: summary.source_context.clone(),
+            schema_version: summary.schema_version,
+            fwmap_version: summary.fwmap_version.clone(),
+            note: summary.notes.clone(),
+        })?;
+        Ok(summary)
+    }
+
+    pub fn export_package(&self, request: CreateInvestigationPackageRequestDto) -> Result<InvestigationPackageSummaryDto, String> {
+        self.create_investigation_package(request)
+    }
+
+    pub fn open_investigation_package(&self, path: &str) -> Result<OpenInvestigationPackageResultDto, String> {
+        load_investigation_package(path)
+    }
+
+    pub fn get_investigation_package_summary(&self, path: &str) -> Result<InvestigationPackageSummaryDto, String> {
+        let package = load_investigation_package(path)?;
+        Ok(package.summary)
+    }
+
+    pub fn list_recent_packages(&self, project_id: Option<i64>, limit: usize) -> Result<Vec<InvestigationPackageSummaryDto>, String> {
+        Ok(self
+            .storage
+            .list_recent_packages(project_id, limit)?
+            .into_iter()
+            .map(map_recent_package_summary)
+            .collect())
+    }
+
     pub fn list_recent_runs(&self, limit: usize, offset: usize) -> Result<Vec<RunSummaryDto>, String> {
         self.storage.list_recent_runs(limit, offset)
     }
@@ -394,6 +467,203 @@ impl DesktopState {
                 serde_json::to_value(result).map_err(|err| format!("failed to serialize dashboard export: {err}"))
             }
         }
+    }
+
+    fn build_investigation_package(&self, request: &CreateInvestigationPackageRequestDto) -> Result<InvestigationPackageBundle, String> {
+        if request.package_name.trim().is_empty() {
+            return Err("package name must not be empty".to_string());
+        }
+        if request.destination_path.trim().is_empty() {
+            return Err("package destination path must not be empty".to_string());
+        }
+        let package_path = PathBuf::from(&request.destination_path);
+        let active_project = self.get_active_project()?.active_project;
+        let project = match request.project_id {
+            Some(project_id) => self.storage.get_project(project_id)?.map(map_project_detail),
+            None => active_project,
+        };
+        let project_id = project.as_ref().map(|item| item.project_id);
+        let project_name = project.as_ref().map(|item| item.name.clone());
+        let created_at = now_rfc3339();
+        let mut files: Vec<PackageFileEntry> = Vec::new();
+        let mut included_items = Vec::new();
+        let mut omitted_items = default_omitted_package_items();
+        let mut related_run_ids = Vec::new();
+        let mut related_commit_refs = Vec::new();
+        let include_sections = normalize_package_sections(&request.include_sections, &request.source_context);
+        let include_section = |name: &str| include_sections.iter().any(|item| item == name);
+
+        let mut dashboard_summary = None;
+        if include_section("dashboard") {
+            let query = request.dashboard_query.clone().unwrap_or_else(|| DashboardQueryDto {
+                repo_path: project.as_ref().and_then(|item| item.git_repo_path.clone()),
+                branch: None,
+                profile: project.as_ref().and_then(|item| item.default_profile.clone()),
+                toolchain: None,
+                target: project.as_ref().and_then(|item| item.default_target.clone()),
+                limit: Some(20),
+            });
+            let summary = self.dashboard_summary(query)?;
+            if let Some(item) = summary.latest_run.as_ref() {
+                related_run_ids.push(item.run_id);
+            }
+            if let Some(item) = summary.latest_history_item.as_ref().and_then(|item| item.git_revision.clone()) {
+                related_commit_refs.push(item);
+            }
+            add_package_json(&mut files, &mut included_items, "dashboard-summary.json", "dashboard", "Dashboard summary", &summary)?;
+            dashboard_summary = Some(summary);
+        }
+
+        let mut run_detail = None;
+        if include_section("run") {
+            if let Some(run_id) = request.run_id {
+                let detail = self.run_detail(run_id)?.ok_or_else(|| format!("run {run_id} was not found"))?;
+                related_run_ids.push(detail.run.run_id);
+                if let Some(commit) = detail.run.git_revision.clone() {
+                    related_commit_refs.push(commit);
+                }
+                add_package_json(&mut files, &mut included_items, "run-detail.json", "run", "Run detail", &detail)?;
+                run_detail = Some(detail);
+            } else {
+                omitted_items.push(omitted_package_item("run-detail.json", "run", "Run detail", "No run id was supplied for this package."));
+            }
+        }
+
+        if include_section("diff") {
+            if let Some(compare) = request.compare.clone() {
+                let diff = self.compare_runs(compare.clone())?;
+                related_run_ids.push(diff.left_run.run_id);
+                related_run_ids.push(diff.right_run.run_id);
+                if let Some(commit) = diff.left_run.git_revision.clone() {
+                    related_commit_refs.push(commit);
+                }
+                if let Some(commit) = diff.right_run.git_revision.clone() {
+                    related_commit_refs.push(commit);
+                }
+                add_package_json(&mut files, &mut included_items, "diff-result.json", "diff", "Diff result", &diff)?;
+            } else {
+                omitted_items.push(omitted_package_item("diff-result.json", "diff", "Diff result", "No compare request was supplied for this package."));
+            }
+        }
+
+        let mut timeline = None;
+        if include_section("history") {
+            let query = request.history_query.clone().unwrap_or_else(|| HistoryQueryDto {
+                repo_path: project.as_ref().and_then(|item| item.git_repo_path.clone()),
+                branch: None,
+                profile: project.as_ref().and_then(|item| item.default_profile.clone()),
+                toolchain: None,
+                target: project.as_ref().and_then(|item| item.default_target.clone()),
+                limit: Some(20),
+                order: Some("ancestry".to_string()),
+            });
+            let result = self.timeline(query)?;
+            related_commit_refs.extend(result.rows.iter().take(8).map(|item| item.commit.clone()));
+            add_package_json(&mut files, &mut included_items, "timeline.json", "history", "Commit timeline", &result)?;
+            timeline = Some(result);
+        }
+
+        let mut range_diff = None;
+        if include_section("range") {
+            if let Some(query) = request.range_query.clone() {
+                let result = self.get_range_diff(query)?;
+                related_commit_refs.push(result.resolved_base.clone());
+                related_commit_refs.push(result.resolved_head.clone());
+                add_package_json(&mut files, &mut included_items, "range-diff.json", "range", "Range diff", &result)?;
+                range_diff = Some(result);
+            } else {
+                omitted_items.push(omitted_package_item("range-diff.json", "range", "Range diff", "No range query was supplied for this package."));
+            }
+        }
+
+        if include_section("regression") {
+            if let Some(query) = request.regression_query.clone() {
+                let result = self.detect_regression(query)?;
+                if let Some(item) = result.first_observed_bad.as_ref() {
+                    related_commit_refs.push(item.commit.clone());
+                }
+                add_package_json(&mut files, &mut included_items, "regression-result.json", "regression", "Regression result", &result)?;
+            } else {
+                omitted_items.push(omitted_package_item("regression-result.json", "regression", "Regression result", "No regression query was supplied for this package."));
+            }
+        }
+
+        if include_section("inspector") {
+            if let Some(query) = request.inspector_query.clone() {
+                let summary = self.get_inspector_summary(query.clone())?;
+                add_package_json(&mut files, &mut included_items, "inspector-summary.json", "inspector", "Inspector summary", &summary)?;
+                if let Some(selection) = request.inspector_selection.clone() {
+                    let detail = self.get_inspector_detail(query.clone(), selection.clone())?;
+                    let source = self.get_source_context(query, selection)?;
+                    add_package_json(&mut files, &mut included_items, "inspector-detail.json", "inspector", "Inspector detail", &detail)?;
+                    add_package_json(&mut files, &mut included_items, "inspector-source-context.json", "inspector", "Inspector source context", &source)?;
+                }
+            } else {
+                omitted_items.push(omitted_package_item("inspector-summary.json", "inspector", "Inspector summary", "No inspector query was supplied for this package."));
+            }
+        }
+
+        if request.include_policy_snapshot {
+            let policy = self.load_policy(project_id, None)?;
+            if !policy.content.trim().is_empty() {
+                add_package_json(&mut files, &mut included_items, "policy-document.json", "policy", "Policy snapshot", &policy)?;
+            } else {
+                omitted_items.push(omitted_package_item("policy-document.json", "policy", "Policy snapshot", "No policy file was available for the current project."));
+            }
+        }
+
+        if request.include_charts_snapshot {
+            let charts = serde_json::json!({
+                "dashboard": dashboard_summary,
+                "timeline": timeline,
+                "rangeDiff": range_diff,
+            });
+            add_package_json(&mut files, &mut included_items, "charts-snapshot.json", "chart", "Charts snapshot", &charts)?;
+        }
+
+        let mut manifest = InvestigationPackageManifestDto {
+            schema_version: INVESTIGATION_PACKAGE_SCHEMA_VERSION,
+            package_version: "1.0.0".to_string(),
+            package_name: request.package_name.clone(),
+            created_at: created_at.clone(),
+            fwmap_version: env!("CARGO_PKG_VERSION").to_string(),
+            project_id,
+            project_name,
+            source_context: request.source_context.clone(),
+            source_label: build_package_source_label(request),
+            related_run_ids: unique_i64s(related_run_ids),
+            related_commit_refs: unique_strings(related_commit_refs),
+            git_repo_path: project.as_ref().and_then(|item| item.git_repo_path.clone()),
+            git_branch: timeline.as_ref().and_then(|item| item.branch.clone()).or_else(|| run_detail.as_ref().and_then(|item| item.git_branch.clone())),
+            git_revision: run_detail.as_ref().and_then(|item| item.run.git_revision.clone()).or_else(|| timeline.as_ref().and_then(|item| item.rows.first().map(|row| row.commit.clone()))),
+            included_items,
+            omitted_items,
+            export_provenance: vec![
+                ("desktop_version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+                ("source_context".to_string(), request.source_context.clone()),
+                ("history_db_path".to_string(), self.storage.load_settings()?.history_db_path),
+            ],
+            notes: request.notes.clone().filter(|value| request.include_notes && !value.trim().is_empty()),
+            plugin_results: Vec::new(),
+            missing_resources: Vec::new(),
+        };
+
+        if request.include_plugin_results {
+            manifest.plugin_results = collect_package_plugin_results(self, request, &manifest)?;
+        }
+
+        let manifest_json = serde_json::to_vec_pretty(&manifest)
+            .map_err(|err| format!("failed to serialize package manifest: {err}"))?;
+        files.push(PackageFileEntry {
+            relative_path: "manifest.json".to_string(),
+            bytes: manifest_json,
+        });
+
+        Ok(InvestigationPackageBundle {
+            package_path,
+            manifest,
+            files,
+        })
     }
 
     pub fn list_history(&self, query: HistoryQueryDto) -> Result<Vec<HistoryItemDto>, String> {
@@ -2117,7 +2387,13 @@ fn format_time_short(value: &str) -> String {
     value.chars().take(16).collect()
 }
 
+fn signed(value: i64) -> String {
+    format!("{:+}", value)
+}
 
+fn signed_or_dash(value: Option<i64>) -> String {
+    value.map(signed).unwrap_or_else(|| "-".to_string())
+}
 
 fn map_project_detail(item: StoredProjectRecord) -> ProjectDetailDto {
     ProjectDetailDto {
@@ -2185,6 +2461,574 @@ fn html_escape(input: &str) -> String {
     input.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
+#[derive(Debug, Clone)]
+struct PackageFileEntry {
+    relative_path: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+struct InvestigationPackageBundle {
+    package_path: PathBuf,
+    manifest: InvestigationPackageManifestDto,
+    files: Vec<PackageFileEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct BuiltInPluginDefinition {
+    plugin_id: &'static str,
+    display_name: &'static str,
+    version: &'static str,
+    description: &'static str,
+    layer: &'static str,
+    capabilities: &'static [(&'static str, &'static str, &'static str)],
+    extension_points: &'static [&'static str],
+    supported_input_kinds: &'static [&'static str],
+    output_kinds: &'static [&'static str],
+    safety_level: &'static str,
+    stability_level: &'static str,
+    enabled_by_default: bool,
+    execution_model: &'static str,
+    failure_behavior: &'static str,
+    notes: &'static [&'static str],
+}
+
+const BUILT_IN_PLUGINS: &[BuiltInPluginDefinition] = &[
+    BuiltInPluginDefinition {
+        plugin_id: "size-posture-analyzer",
+        display_name: "Size Posture Analyzer",
+        version: "1.0.0",
+        description: "Adds supplementary size posture summaries for run, diff, and dashboard contexts.",
+        layer: "app-service",
+        capabilities: &[
+            ("analyzer.summary", "Analyzer summary", "Summarizes the current size posture without altering core analysis results."),
+            ("investigation.annotation", "Investigation annotation", "Produces short annotations that can be embedded into packages."),
+        ],
+        extension_points: &["analyzer.summary"],
+        supported_input_kinds: &["dashboard", "run", "diff", "history", "regression"],
+        output_kinds: &["summary-card", "annotation"],
+        safety_level: "internal-only",
+        stability_level: "preview",
+        enabled_by_default: true,
+        execution_model: "Synchronous, in-process, built-in execution against existing desktop service queries.",
+        failure_behavior: "Plugin failures are returned as supplementary errors and do not replace core results.",
+        notes: &[
+            "Uses the same desktop service APIs as the visible screens.",
+            "Never mutates recorded history or analysis outputs.",
+        ],
+    },
+    BuiltInPluginDefinition {
+        plugin_id: "package-provenance-exporter",
+        display_name: "Package Provenance Exporter",
+        version: "1.0.0",
+        description: "Contributes package-focused metadata and inclusion summaries for shareable investigation bundles.",
+        layer: "app-service",
+        capabilities: &[
+            ("report.package", "Package report", "Adds package provenance and inclusion notes for exported investigation bundles."),
+            ("export.metadata", "Export metadata", "Attaches explicit included/omitted resource summaries."),
+        ],
+        extension_points: &["report.package-section"],
+        supported_input_kinds: &["package"],
+        output_kinds: &["package-note", "provenance"],
+        safety_level: "internal-only",
+        stability_level: "preview",
+        enabled_by_default: true,
+        execution_model: "Synchronous manifest augmentation during package creation or package inspection.",
+        failure_behavior: "Package creation continues even if this plugin cannot emit extra notes.",
+        notes: &[
+            "Designed to keep package/export responsibilities explicit.",
+            "Does not bundle arbitrary external files automatically.",
+        ],
+    },
+    BuiltInPluginDefinition {
+        plugin_id: "timeline-signal-adapter",
+        display_name: "Timeline Signal Adapter",
+        version: "1.0.0",
+        description: "Provides visualization-ready signal summaries from timeline and range contexts.",
+        layer: "ui-adapter",
+        capabilities: &[
+            ("visualization.adapter", "Visualization adapter", "Shapes history results into concise signal blocks for dashboard or package viewers."),
+        ],
+        extension_points: &["visualization.adapter"],
+        supported_input_kinds: &["dashboard", "history", "range", "package"],
+        output_kinds: &["signal-list"],
+        safety_level: "internal-only",
+        stability_level: "experimental",
+        enabled_by_default: true,
+        execution_model: "Synchronous adapter over existing timeline/range summaries.",
+        failure_behavior: "If unavailable, the UI falls back to built-in cards and tables.",
+        notes: &[
+            "This is the first visualization adapter extension point, not a general chart plugin host.",
+        ],
+    },
+];
+
+fn built_in_extension_points() -> Vec<ExtensionPointDto> {
+    vec![
+        ExtensionPointDto {
+            extension_point_id: "analyzer.summary".to_string(),
+            display_name: "Analyzer Summary".to_string(),
+            description: "Read-only supplementary summaries derived from runs, diffs, or regressions.".to_string(),
+            layer: "app-service".to_string(),
+            supported_contexts: vec!["dashboard".to_string(), "run".to_string(), "diff".to_string(), "history".to_string(), "regression".to_string()],
+        },
+        ExtensionPointDto {
+            extension_point_id: "report.package-section".to_string(),
+            display_name: "Package Report Section".to_string(),
+            description: "Adds supplementary manifest notes and package inclusion summaries during export.".to_string(),
+            layer: "app-service".to_string(),
+            supported_contexts: vec!["package".to_string(), "export".to_string()],
+        },
+        ExtensionPointDto {
+            extension_point_id: "visualization.adapter".to_string(),
+            display_name: "Visualization Adapter".to_string(),
+            description: "Produces view-model summaries for dashboard, timeline, and package viewers.".to_string(),
+            layer: "ui-adapter".to_string(),
+            supported_contexts: vec!["dashboard".to_string(), "history".to_string(), "range".to_string(), "package".to_string()],
+        },
+    ]
+}
+
+fn built_in_plugin_summaries(states: &[crate::storage::StoredPluginStateRecord]) -> Vec<PluginSummaryDto> {
+    BUILT_IN_PLUGINS
+        .iter()
+        .map(|definition| {
+            let enabled = states
+                .iter()
+                .find(|item| item.plugin_id == definition.plugin_id)
+                .map(|item| item.enabled)
+                .unwrap_or(definition.enabled_by_default);
+            map_plugin_summary(definition, enabled)
+        })
+        .collect()
+}
+
+fn plugin_detail(plugin_id: &str, state: Option<&crate::storage::StoredPluginStateRecord>) -> Option<PluginDetailDto> {
+    let definition = BUILT_IN_PLUGINS.iter().find(|item| item.plugin_id == plugin_id)?;
+    let enabled = state.map(|item| item.enabled).unwrap_or(definition.enabled_by_default);
+    Some(PluginDetailDto {
+        summary: map_plugin_summary(definition, enabled),
+        execution_model: definition.execution_model.to_string(),
+        failure_behavior: definition.failure_behavior.to_string(),
+        notes: definition.notes.iter().map(|item| (*item).to_string()).collect(),
+    })
+}
+
+fn map_plugin_summary(definition: &BuiltInPluginDefinition, enabled: bool) -> PluginSummaryDto {
+    PluginSummaryDto {
+        plugin_id: definition.plugin_id.to_string(),
+        display_name: definition.display_name.to_string(),
+        version: definition.version.to_string(),
+        description: definition.description.to_string(),
+        layer: definition.layer.to_string(),
+        capabilities: definition
+            .capabilities
+            .iter()
+            .map(|(capability_id, label, description)| PluginCapabilityDto {
+                capability_id: (*capability_id).to_string(),
+                label: (*label).to_string(),
+                description: (*description).to_string(),
+            })
+            .collect(),
+        extension_points: definition.extension_points.iter().map(|item| (*item).to_string()).collect(),
+        supported_input_kinds: definition.supported_input_kinds.iter().map(|item| (*item).to_string()).collect(),
+        output_kinds: definition.output_kinds.iter().map(|item| (*item).to_string()).collect(),
+        safety_level: definition.safety_level.to_string(),
+        stability_level: definition.stability_level.to_string(),
+        enabled,
+        status: if enabled { "ready".to_string() } else { "disabled".to_string() },
+        last_error: None,
+    }
+}
+
+fn execute_built_in_plugin(state: &DesktopState, plugin_id: &str, request: PluginExecutionRequestDto) -> Result<PluginExecutionResultDto, String> {
+    match plugin_id {
+        "size-posture-analyzer" => execute_size_posture_plugin(state, request),
+        "package-provenance-exporter" => execute_package_provenance_plugin(request),
+        "timeline-signal-adapter" => execute_timeline_signal_plugin(state, request),
+        _ => Err(format!("plugin '{plugin_id}' was not found")),
+    }
+}
+
+fn execute_size_posture_plugin(state: &DesktopState, request: PluginExecutionRequestDto) -> Result<PluginExecutionResultDto, String> {
+    let mut output_items = Vec::new();
+    let summary = match request.context_kind.as_str() {
+        "run" => {
+            let run_id = request.run_id.ok_or_else(|| "run plugin execution requires run_id".to_string())?;
+            let detail = state.run_detail(run_id)?.ok_or_else(|| format!("run {run_id} was not found"))?;
+            output_items.push(PluginOutputItemDto {
+                kind: "size".to_string(),
+                title: "Footprint".to_string(),
+                summary: format!("ROM {} / RAM {}", format_bytes_compact(detail.run.rom_bytes), format_bytes_compact(detail.run.ram_bytes)),
+                detail: Some(format!("{} warnings, top section {}", detail.warnings.len(), detail.top_sections.first().map(|item| item.0.as_str()).unwrap_or("-"))),
+            });
+            format!("Run #{} is carrying {} ROM and {} RAM.", detail.run.run_id, format_bytes_compact(detail.run.rom_bytes), format_bytes_compact(detail.run.ram_bytes))
+        }
+        "diff" => {
+            let left = request.left_run_id.ok_or_else(|| "diff plugin execution requires left_run_id".to_string())?;
+            let right = request.right_run_id.ok_or_else(|| "diff plugin execution requires right_run_id".to_string())?;
+            let diff = state.compare_runs(RunCompareRequestDto { left_run_id: left, right_run_id: right })?;
+            output_items.push(PluginOutputItemDto {
+                kind: "delta".to_string(),
+                title: "ROM / RAM delta".to_string(),
+                summary: format!("ROM {} / RAM {}", signed(diff.summary.rom_delta), signed(diff.summary.ram_delta)),
+                detail: Some(format!("Warning delta {}", signed(diff.summary.warning_delta))),
+            });
+            format!("Diff #{} -> #{} changed ROM by {} and RAM by {}.", left, right, signed(diff.summary.rom_delta), signed(diff.summary.ram_delta))
+        }
+        _ => {
+            let history_query = request.history_query.unwrap_or_default();
+            let summary = state.dashboard_summary(DashboardQueryDto {
+                repo_path: history_query.repo_path,
+                branch: history_query.branch,
+                profile: history_query.profile,
+                toolchain: history_query.toolchain,
+                target: history_query.target,
+                limit: history_query.limit,
+            })?;
+            output_items.push(PluginOutputItemDto {
+                kind: "signal".to_string(),
+                title: "Recent regressions".to_string(),
+                summary: format!("{} recent regression signals", summary.recent_regressions.len()),
+                detail: summary.recent_regressions.first().map(|item| item.reasoning.clone()),
+            });
+            format!("Dashboard currently exposes {} recent regression signals and {} overview cards.", summary.recent_regressions.len(), summary.overview_cards.len())
+        }
+    };
+    Ok(PluginExecutionResultDto {
+        plugin_id: "size-posture-analyzer".to_string(),
+        status: "ok".to_string(),
+        summary,
+        warnings: Vec::new(),
+        output_items,
+    })
+}
+
+fn execute_package_provenance_plugin(request: PluginExecutionRequestDto) -> Result<PluginExecutionResultDto, String> {
+    let package_path = request.package_path.ok_or_else(|| "package provenance plugin requires package_path".to_string())?;
+    let opened = load_investigation_package(&package_path)?;
+    Ok(PluginExecutionResultDto {
+        plugin_id: "package-provenance-exporter".to_string(),
+        status: "ok".to_string(),
+        summary: format!("Package '{}' includes {} items and omits {} items.", opened.summary.package_name, opened.summary.included_count, opened.summary.omitted_count),
+        warnings: opened.summary.warnings.clone(),
+        output_items: vec![
+            PluginOutputItemDto {
+                kind: "provenance".to_string(),
+                title: "Source context".to_string(),
+                summary: opened.manifest.source_context.clone(),
+                detail: Some(opened.manifest.source_label.clone()),
+            },
+            PluginOutputItemDto {
+                kind: "coverage".to_string(),
+                title: "Included resources".to_string(),
+                summary: format!("{} included / {} omitted", opened.summary.included_count, opened.summary.omitted_count),
+                detail: Some(opened.manifest.missing_resources.join(", ")),
+            },
+        ],
+    })
+}
+
+fn execute_timeline_signal_plugin(state: &DesktopState, request: PluginExecutionRequestDto) -> Result<PluginExecutionResultDto, String> {
+    let result = if let Some(query) = request.range_query {
+        let range = state.get_range_diff(query)?;
+        PluginExecutionResultDto {
+            plugin_id: "timeline-signal-adapter".to_string(),
+            status: "ok".to_string(),
+            summary: format!("Range {} -> {} spans {} analyzed commits.", range.resolved_base, range.resolved_head, range.analyzed_commits_count),
+            warnings: Vec::new(),
+            output_items: vec![
+                PluginOutputItemDto {
+                    kind: "signal".to_string(),
+                    title: "Largest ROM movement".to_string(),
+                    summary: range.worst_commit_by_rom.as_ref().map(|item| format!("{} ({})", item.commit, signed(item.delta))).unwrap_or_else(|| "No ROM signal".to_string()),
+                    detail: range.worst_commit_by_rom.as_ref().map(|item| item.subject.clone()),
+                },
+            ],
+        }
+    } else if let Some(history_query) = request.history_query {
+        let timeline = state.timeline(history_query)?;
+        PluginExecutionResultDto {
+            plugin_id: "timeline-signal-adapter".to_string(),
+            status: "ok".to_string(),
+            summary: format!("Timeline has {} visible rows.", timeline.rows.len()),
+            warnings: Vec::new(),
+            output_items: timeline.rows.iter().take(3).map(|row| PluginOutputItemDto {
+                kind: "commit".to_string(),
+                title: row.short_commit.clone(),
+                summary: row.subject.clone(),
+                detail: Some(format!("ROM {} / delta {}", format_bytes_compact(row.rom_total), signed_or_dash(row.rom_delta_vs_previous))),
+            }).collect(),
+        }
+    } else {
+        return Err("timeline signal adapter requires history_query or range_query".to_string());
+    };
+    Ok(result)
+}
+
+fn normalize_package_sections(include_sections: &[String], source_context: &str) -> Vec<String> {
+    let mut sections = if include_sections.is_empty() {
+        vec![source_context.to_string()]
+    } else {
+        include_sections.to_vec()
+    };
+    if !sections.iter().any(|item| item == source_context) {
+        sections.push(source_context.to_string());
+    }
+    if !sections.iter().any(|item| item == "dashboard") {
+        sections.push("dashboard".to_string());
+    }
+    unique_strings(sections)
+}
+
+fn add_package_json<T: serde::Serialize>(
+    files: &mut Vec<PackageFileEntry>,
+    included_items: &mut Vec<InvestigationPackageItemDto>,
+    relative_path: &str,
+    kind: &str,
+    title: &str,
+    value: &T,
+) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(value).map_err(|err| format!("failed to serialize package item '{relative_path}': {err}"))?;
+    files.push(PackageFileEntry { relative_path: relative_path.to_string(), bytes });
+    included_items.push(InvestigationPackageItemDto {
+        relative_path: relative_path.to_string(),
+        kind: kind.to_string(),
+        title: title.to_string(),
+        included: true,
+        description: format!("Included {} content.", kind),
+        missing_reason: None,
+    });
+    Ok(())
+}
+
+fn default_omitted_package_items() -> Vec<InvestigationPackageItemDto> {
+    vec![
+        omitted_package_item("source-tree", "resource", "Source tree", "Source files are referenced by metadata only and are not bundled automatically."),
+        omitted_package_item("binary-artifact", "resource", "Binary artifact", "The full ELF/MAP artifacts are omitted unless exported separately."),
+        omitted_package_item("history-db", "resource", "History database", "The live history database is not copied into the package bundle."),
+    ]
+}
+
+fn omitted_package_item(relative_path: &str, kind: &str, title: &str, reason: &str) -> InvestigationPackageItemDto {
+    InvestigationPackageItemDto {
+        relative_path: relative_path.to_string(),
+        kind: kind.to_string(),
+        title: title.to_string(),
+        included: false,
+        description: title.to_string(),
+        missing_reason: Some(reason.to_string()),
+    }
+}
+
+fn build_package_source_label(request: &CreateInvestigationPackageRequestDto) -> String {
+    match request.source_context.as_str() {
+        "run" => request.run_id.map(|item| format!("Run #{item}")),
+        "diff" => request.compare.as_ref().map(|item| format!("Diff #{} -> #{}", item.left_run_id, item.right_run_id)),
+        "range" => request.range_query.as_ref().map(|item| item.spec.clone()),
+        "regression" => request.regression_query.as_ref().map(|item| format!("{} / {}", item.spec, item.key)),
+        "inspector" => request.inspector_selection.as_ref().map(|item| item.stable_id.clone()),
+        _ => Some("Dashboard snapshot".to_string()),
+    }
+    .unwrap_or_else(|| request.source_context.clone())
+}
+
+fn unique_strings(values: Vec<String>) -> Vec<String> {
+    let mut ordered = Vec::new();
+    for value in values {
+        if !value.trim().is_empty() && !ordered.iter().any(|item| item == &value) {
+            ordered.push(value);
+        }
+    }
+    ordered
+}
+
+fn unique_i64s(values: Vec<i64>) -> Vec<i64> {
+    let mut ordered = Vec::new();
+    for value in values {
+        if !ordered.iter().any(|item| item == &value) {
+            ordered.push(value);
+        }
+    }
+    ordered
+}
+
+fn collect_package_plugin_results(
+    state: &DesktopState,
+    request: &CreateInvestigationPackageRequestDto,
+    manifest: &InvestigationPackageManifestDto,
+) -> Result<Vec<PluginExecutionResultDto>, String> {
+    let plugin_states = state.list_plugins()?;
+    let mut results = Vec::new();
+    for plugin in plugin_states.into_iter().filter(|item| item.enabled) {
+        match plugin.plugin_id.as_str() {
+            "size-posture-analyzer" => {
+                let result = execute_built_in_plugin(
+                    state,
+                    &plugin.plugin_id,
+                    PluginExecutionRequestDto {
+                        context_kind: request.source_context.clone(),
+                        run_id: request.run_id,
+                        left_run_id: request.compare.as_ref().map(|item| item.left_run_id),
+                        right_run_id: request.compare.as_ref().map(|item| item.right_run_id),
+                        build_id: None,
+                        history_query: request.history_query.clone(),
+                        range_query: request.range_query.clone(),
+                        regression_query: request.regression_query.clone(),
+                        inspector_query: request.inspector_query.clone(),
+                        inspector_selection: request.inspector_selection.clone(),
+                        package_path: None,
+                    },
+                );
+                if let Ok(result) = result {
+                    results.push(result);
+                }
+            }
+            "package-provenance-exporter" => {
+                results.push(PluginExecutionResultDto {
+                    plugin_id: plugin.plugin_id.clone(),
+                    status: "ok".to_string(),
+                    summary: format!("Package will include {} items and omit {} items.", manifest.included_items.len(), manifest.omitted_items.len()),
+                    warnings: manifest.missing_resources.clone(),
+                    output_items: vec![
+                        PluginOutputItemDto {
+                            kind: "package".to_string(),
+                            title: "Included items".to_string(),
+                            summary: manifest.included_items.iter().map(|item| item.title.clone()).take(4).collect::<Vec<_>>().join(", "),
+                            detail: Some(format!("{} included entries", manifest.included_items.len())),
+                        },
+                    ],
+                });
+            }
+            "timeline-signal-adapter" => {
+                let request = if let Some(range_query) = request.range_query.clone() {
+                    Some(PluginExecutionRequestDto {
+                        context_kind: "range".to_string(),
+                        range_query: Some(range_query),
+                        ..PluginExecutionRequestDto::default()
+                    })
+                } else {
+                    request.history_query.clone().map(|history_query| PluginExecutionRequestDto {
+                        context_kind: "history".to_string(),
+                        history_query: Some(history_query),
+                        ..PluginExecutionRequestDto::default()
+                    })
+                };
+                if let Some(request) = request {
+                    if let Ok(result) = execute_built_in_plugin(state, &plugin.plugin_id, request) {
+                        results.push(result);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(results)
+}
+
+fn write_investigation_package_bundle(bundle: &InvestigationPackageBundle) -> Result<(), String> {
+    fs::create_dir_all(&bundle.package_path)
+        .map_err(|err| format!("failed to create package directory '{}': {err}", bundle.package_path.display()))?;
+    for file in &bundle.files {
+        let path = bundle.package_path.join(&file.relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("failed to create package directory '{}': {err}", parent.display()))?;
+        }
+        fs::write(&path, &file.bytes).map_err(|err| format!("failed to write package item '{}': {err}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn load_investigation_package(path: &str) -> Result<OpenInvestigationPackageResultDto, String> {
+    let root = resolve_package_root(path);
+    let manifest_path = root.join("manifest.json");
+    let manifest_raw = fs::read_to_string(&manifest_path)
+        .map_err(|err| format!("failed to read package manifest '{}': {err}", manifest_path.display()))?;
+    let manifest: InvestigationPackageManifestDto = serde_json::from_str(&manifest_raw)
+        .map_err(|err| format!("invalid package manifest '{}': {err}", manifest_path.display()))?;
+    if manifest.schema_version != INVESTIGATION_PACKAGE_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported package schema version {} (expected {})",
+            manifest.schema_version, INVESTIGATION_PACKAGE_SCHEMA_VERSION
+        ));
+    }
+    let summary = summarize_package_manifest(None, &root, &manifest);
+    Ok(OpenInvestigationPackageResultDto {
+        summary,
+        manifest: manifest.clone(),
+        dashboard_summary: read_optional_json(root.join("dashboard-summary.json"))?,
+        run_detail: read_optional_json(root.join("run-detail.json"))?,
+        diff_result: read_optional_json(root.join("diff-result.json"))?,
+        timeline: read_optional_json(root.join("timeline.json"))?,
+        range_diff: read_optional_json(root.join("range-diff.json"))?,
+        regression_result: read_optional_json(root.join("regression-result.json"))?,
+        inspector_summary: read_optional_json(root.join("inspector-summary.json"))?,
+        inspector_detail: read_optional_json(root.join("inspector-detail.json"))?,
+        inspector_source_context: read_optional_json(root.join("inspector-source-context.json"))?,
+        policy_document: read_optional_json(root.join("policy-document.json"))?,
+    })
+}
+
+fn summarize_package_manifest(
+    package_id: Option<i64>,
+    package_path: &Path,
+    manifest: &InvestigationPackageManifestDto,
+) -> InvestigationPackageSummaryDto {
+    InvestigationPackageSummaryDto {
+        package_id,
+        package_name: manifest.package_name.clone(),
+        package_path: package_path.to_string_lossy().to_string(),
+        created_at: manifest.created_at.clone(),
+        source_context: manifest.source_context.clone(),
+        project_id: manifest.project_id,
+        project_name: manifest.project_name.clone(),
+        fwmap_version: manifest.fwmap_version.clone(),
+        schema_version: manifest.schema_version,
+        included_count: manifest.included_items.len(),
+        omitted_count: manifest.omitted_items.len(),
+        notes: manifest.notes.clone(),
+        warnings: manifest.missing_resources.clone(),
+    }
+}
+
+fn map_recent_package_summary(item: StoredPackageRecord) -> InvestigationPackageSummaryDto {
+    InvestigationPackageSummaryDto {
+        package_id: Some(item.package_id),
+        package_name: item.package_name,
+        package_path: item.package_path,
+        created_at: item.created_at,
+        source_context: item.source_context,
+        project_id: item.project_id,
+        project_name: None,
+        fwmap_version: item.fwmap_version,
+        schema_version: item.schema_version,
+        included_count: 0,
+        omitted_count: 0,
+        notes: item.note,
+        warnings: Vec::new(),
+    }
+}
+
+fn resolve_package_root(path: &str) -> PathBuf {
+    let path = PathBuf::from(path);
+    if path.is_file() && path.file_name().and_then(|item| item.to_str()) == Some("manifest.json") {
+        path.parent().map(Path::to_path_buf).unwrap_or(path)
+    } else {
+        path
+    }
+}
+
+fn read_optional_json<T: for<'de> serde::Deserialize<'de>>(path: PathBuf) -> Result<Option<T>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&path)
+        .map_err(|err| format!("failed to read package item '{}': {err}", path.display()))?;
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|err| format!("failed to parse package item '{}': {err}", path.display()))
+}
 
 #[cfg(test)]
 mod tests {
@@ -2339,6 +3183,114 @@ mod tests {
         assert_eq!(source_deltas[0].delta, 80);
         assert_eq!(symbol_deltas[0].name, "_Z4mainv");
         assert_eq!(symbol_deltas[0].delta, 80);
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn plugin_registry_lists_builtin_plugins_and_extension_points() {
+        let base = temp_test_dir("desktop-plugins");
+        let state = DesktopState::new(&base).unwrap();
+
+        let plugins = state.list_plugins().unwrap();
+        let extension_points = state.list_extension_points().unwrap();
+
+        assert!(plugins.len() >= 2);
+        assert!(plugins.iter().any(|item| item.plugin_id == "size-posture-analyzer"));
+        assert!(plugins.iter().any(|item| item.plugin_id == "package-provenance-exporter"));
+        assert!(extension_points.iter().any(|item| item.extension_point_id == "analyzer.summary"));
+        assert!(extension_points.iter().any(|item| item.extension_point_id == "report.package-section"));
+
+        state.set_plugin_enabled("size-posture-analyzer", false).unwrap();
+        let detail = state.get_plugin_detail("size-posture-analyzer").unwrap();
+        assert!(!detail.summary.enabled);
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn investigation_package_roundtrip_preserves_manifest_and_payloads() {
+        let base = temp_test_dir("desktop-package-roundtrip");
+        let state = DesktopState::new(&base).unwrap();
+        let db = state.storage.paths().history_db_path.clone();
+        let build_id = record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: sample_analysis(192, 48, 2, 80, "tokio"),
+                metadata: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+        let run_id = state
+            .storage
+            .insert_recent_run(&InsertRunRecord {
+                project_id: None,
+                build_id,
+                created_at: "2026-03-15T21:00:00+09:00".to_string(),
+                label: Some("package run".to_string()),
+                status: "finished".to_string(),
+                git_revision: Some("abc1234".to_string()),
+                profile: Some("release".to_string()),
+                target: Some("x86_64-unknown-linux-gnu".to_string()),
+                rom_bytes: 192,
+                ram_bytes: 48,
+                warning_count: 2,
+                history_db_path: db.to_string_lossy().to_string(),
+                report_html_path: None,
+                report_json_path: None,
+            })
+            .unwrap();
+
+        let package_dir = base.join("shared-investigation.fwpkg");
+        let summary = state
+            .create_investigation_package(CreateInvestigationPackageRequestDto {
+                project_id: None,
+                package_name: "shared-investigation".to_string(),
+                destination_path: package_dir.to_string_lossy().to_string(),
+                source_context: "run".to_string(),
+                include_sections: vec!["run".to_string(), "dashboard".to_string()],
+                include_charts_snapshot: true,
+                include_policy_snapshot: false,
+                include_plugin_results: true,
+                include_notes: true,
+                notes: Some("Investigate ROM increase before review".to_string()),
+                run_id: Some(run_id),
+                compare: None,
+                history_query: None,
+                range_query: None,
+                regression_query: None,
+                dashboard_query: Some(DashboardQueryDto::default()),
+                inspector_query: None,
+                inspector_selection: None,
+            })
+            .unwrap();
+
+        assert_eq!(summary.package_name, "shared-investigation");
+        assert!(package_dir.join("manifest.json").exists());
+        assert!(package_dir.join("run-detail.json").exists());
+
+        let opened = state.open_investigation_package(&summary.package_path).unwrap();
+        assert_eq!(opened.summary.package_name, "shared-investigation");
+        assert_eq!(opened.manifest.source_context, "run");
+        assert!(opened.run_detail.is_some());
+        assert!(opened.manifest.included_items.iter().any(|item| item.relative_path == "run-detail.json"));
+        assert!(opened.manifest.plugin_results.iter().any(|item| item.plugin_id == "size-posture-analyzer"));
+
+        let listed = state.list_recent_packages(None, 10).unwrap();
+        assert!(listed.iter().any(|item| item.package_name == "shared-investigation"));
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn invalid_package_manifest_is_reported_gracefully() {
+        let base = temp_test_dir("desktop-invalid-package");
+        let package_dir = base.join("broken.fwpkg");
+        fs::create_dir_all(&package_dir).unwrap();
+        fs::write(package_dir.join("manifest.json"), "{not-json").unwrap();
+
+        let err = load_investigation_package(package_dir.to_string_lossy().as_ref()).unwrap_err();
+        assert!(err.contains("invalid package manifest"));
 
         let _ = fs::remove_dir_all(base);
     }

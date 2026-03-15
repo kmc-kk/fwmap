@@ -1,9 +1,9 @@
 use tauri::{AppHandle, State};
 
 use crate::dto::{
-    ActiveProjectStateDto, AnalysisRequestDto, CreateProjectRequestDto, DashboardQueryDto, DashboardSummaryDto,
-    DesktopAppInfo, DesktopSettingsDto, ExportRequestDto, ExportResultDto, GitRefDto, HistoryItemDto,
-    HistoryQueryDto, InspectorBreakdownDto, InspectorDetailDto, InspectorHierarchyNodeDto, InspectorQueryDto, InspectorSelectionDto, InspectorSummaryDto, JobStatusDto, PolicyDocumentDto, PolicyValidationResultDto, ProjectDetailDto,
+    ActiveProjectStateDto, AnalysisRequestDto, CreateInvestigationPackageRequestDto, CreateProjectRequestDto, DashboardQueryDto, DashboardSummaryDto,
+    DesktopAppInfo, DesktopSettingsDto, ExportRequestDto, ExportResultDto, ExtensionPointDto, GitRefDto, HistoryItemDto,
+    HistoryQueryDto, InspectorBreakdownDto, InspectorDetailDto, InspectorHierarchyNodeDto, InspectorQueryDto, InspectorSelectionDto, InspectorSummaryDto, InvestigationPackageSummaryDto, JobStatusDto, OpenInvestigationPackageResultDto, PluginDetailDto, PluginExecutionRequestDto, PluginExecutionResultDto, PluginSummaryDto, PolicyDocumentDto, PolicyValidationResultDto, ProjectDetailDto,
     ProjectSummaryDto, RangeDiffQueryDto, RangeDiffResultDto, RecentExportDto, RegressionQueryDto,
     RegressionResultDto, RunCompareRequestDto, RunCompareResultDto, RunDetailDto, RunSummaryDto,
     SourceContextDto, TimelineResultDto, UpdateProjectRequestDto,
@@ -177,4 +177,71 @@ pub fn desktop_get_source_context(
     selection: InspectorSelectionDto,
 ) -> Result<SourceContextDto, String> {
     state.get_source_context(query, selection)
+}
+
+
+#[tauri::command]
+pub fn desktop_list_extension_points(state: State<'_, DesktopState>) -> Result<Vec<ExtensionPointDto>, String> {
+    state.list_extension_points()
+}
+
+#[tauri::command]
+pub fn desktop_list_plugins(state: State<'_, DesktopState>) -> Result<Vec<PluginSummaryDto>, String> {
+    state.list_plugins()
+}
+
+#[tauri::command]
+pub fn desktop_get_plugin_detail(state: State<'_, DesktopState>, plugin_id: String) -> Result<PluginDetailDto, String> {
+    state.get_plugin_detail(&plugin_id)
+}
+
+#[tauri::command]
+pub fn desktop_set_plugin_enabled(state: State<'_, DesktopState>, plugin_id: String, enabled: bool) -> Result<PluginSummaryDto, String> {
+    state.set_plugin_enabled(&plugin_id, enabled)
+}
+
+#[tauri::command]
+pub fn desktop_run_plugin(state: State<'_, DesktopState>, plugin_id: String, request: PluginExecutionRequestDto) -> Result<PluginExecutionResultDto, String> {
+    state.run_plugin(&plugin_id, request)
+}
+
+#[tauri::command]
+pub fn desktop_create_investigation_package(
+    state: State<'_, DesktopState>,
+    request: CreateInvestigationPackageRequestDto,
+) -> Result<InvestigationPackageSummaryDto, String> {
+    state.create_investigation_package(request)
+}
+
+#[tauri::command]
+pub fn desktop_export_package(
+    state: State<'_, DesktopState>,
+    request: CreateInvestigationPackageRequestDto,
+) -> Result<InvestigationPackageSummaryDto, String> {
+    state.export_package(request)
+}
+
+#[tauri::command]
+pub fn desktop_open_investigation_package(
+    state: State<'_, DesktopState>,
+    path: String,
+) -> Result<OpenInvestigationPackageResultDto, String> {
+    state.open_investigation_package(&path)
+}
+
+#[tauri::command]
+pub fn desktop_get_investigation_package_summary(
+    state: State<'_, DesktopState>,
+    path: String,
+) -> Result<InvestigationPackageSummaryDto, String> {
+    state.get_investigation_package_summary(&path)
+}
+
+#[tauri::command]
+pub fn desktop_list_recent_packages(
+    state: State<'_, DesktopState>,
+    project_id: Option<i64>,
+    limit: Option<usize>,
+) -> Result<Vec<InvestigationPackageSummaryDto>, String> {
+    state.list_recent_packages(project_id, limit.unwrap_or(20))
 }

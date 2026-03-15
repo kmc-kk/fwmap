@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopAppInfo {
     pub app_name: String,
@@ -31,7 +31,7 @@ pub struct DesktopSettingsDto {
     pub last_map_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobStatusDto {
     pub job_id: String,
@@ -44,7 +44,7 @@ pub struct JobStatusDto {
     pub run_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobEventDto {
     pub job_id: String,
@@ -54,7 +54,7 @@ pub struct JobEventDto {
     pub error_message: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunSummaryDto {
     pub run_id: i64,
@@ -70,7 +70,7 @@ pub struct RunSummaryDto {
     pub warning_count: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunDetailDto {
     pub run: RunSummaryDto,
@@ -99,7 +99,7 @@ pub struct HistoryQueryDto {
     pub order: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryItemDto {
     pub build_id: i64,
@@ -122,14 +122,14 @@ pub struct HistoryItemDto {
     pub label: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaEntryDto {
     pub name: String,
     pub delta: i64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineEntryDto {
     pub commit: String,
@@ -154,7 +154,7 @@ pub struct TimelineEntryDto {
     pub top_symbols: Vec<DeltaEntryDto>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineResultDto {
     pub repo_id: String,
@@ -173,7 +173,7 @@ pub struct RunCompareRequestDto {
     pub right_run_id: i64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetricSummaryDto {
     pub rom_delta: i64,
@@ -181,7 +181,7 @@ pub struct MetricSummaryDto {
     pub warning_delta: i64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunCompareResultDto {
     pub left_run: RunSummaryDto,
@@ -196,14 +196,14 @@ pub struct RunCompareResultDto {
     pub rust_family_deltas: Vec<DeltaEntryDto>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRefDto {
     pub name: String,
     pub kind: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChangedFilesSummaryDto {
     pub git_changed_files: Vec<String>,
@@ -214,7 +214,7 @@ pub struct ChangedFilesSummaryDto {
     pub intersection_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorstCommitSummaryDto {
     pub commit: String,
@@ -223,7 +223,7 @@ pub struct WorstCommitSummaryDto {
     pub date: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FirstRuleViolationSummaryDto {
     pub commit: String,
@@ -243,7 +243,7 @@ pub struct RangeDiffQueryDto {
     pub target: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RangeDiffResultDto {
     pub repo_id: String,
@@ -293,7 +293,7 @@ pub struct RegressionQueryDto {
     pub target: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegressionOriginPointDto {
     pub commit: String,
@@ -302,7 +302,7 @@ pub struct RegressionOriginPointDto {
     pub value: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegressionWindowRowDto {
     pub commit: String,
@@ -312,7 +312,7 @@ pub struct RegressionWindowRowDto {
     pub value: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegressionResultDto {
     pub repo_id: String,
@@ -350,7 +350,7 @@ pub struct DashboardQueryDto {
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverviewCardDto {
     pub key: String,
@@ -360,7 +360,7 @@ pub struct OverviewCardDto {
     pub tone: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrendPointDto {
     pub label: String,
@@ -368,7 +368,7 @@ pub struct TrendPointDto {
     pub secondary_value: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrendSeriesDto {
     pub key: String,
@@ -377,7 +377,7 @@ pub struct TrendSeriesDto {
     pub points: Vec<TrendPointDto>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TopGrowthEntryDto {
     pub scope: String,
@@ -386,7 +386,7 @@ pub struct TopGrowthEntryDto {
     pub detail: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentRegressionDto {
     pub detector_type: String,
@@ -397,7 +397,7 @@ pub struct RecentRegressionDto {
     pub reasoning: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegionUsageDto {
     pub region_name: String,
@@ -406,7 +406,7 @@ pub struct RegionUsageDto {
     pub usage_ratio: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardSummaryDto {
     pub overview_cards: Vec<OverviewCardDto>,
@@ -419,7 +419,7 @@ pub struct DashboardSummaryDto {
 }
 
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSummaryDto {
     pub project_id: i64,
@@ -433,7 +433,7 @@ pub struct ProjectSummaryDto {
     pub last_export_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectDetailDto {
     pub project_id: i64,
@@ -487,7 +487,7 @@ pub struct UpdateProjectRequestDto {
     pub last_opened_filters_json: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveProjectStateDto {
     pub active_project_id: Option<i64>,
@@ -503,7 +503,7 @@ pub struct PolicyDocumentDto {
     pub project_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PolicyValidationIssueDto {
     pub level: String,
@@ -511,14 +511,14 @@ pub struct PolicyValidationIssueDto {
     pub line: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PolicyValidationResultDto {
     pub ok: bool,
     pub issues: Vec<PolicyValidationIssueDto>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentExportDto {
     pub export_id: i64,
@@ -546,7 +546,7 @@ pub struct ExportRequestDto {
     pub title: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportResultDto {
     pub destination_path: String,
@@ -581,7 +581,7 @@ pub struct InspectorSelectionDto {
     pub kind: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InspectorSummaryDto {
     pub context_label: String,
@@ -594,7 +594,7 @@ pub struct InspectorSummaryDto {
     pub available_visualizations: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InspectorItemDto {
     pub stable_id: String,
@@ -610,14 +610,14 @@ pub struct InspectorItemDto {
     pub metadata: std::collections::BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InspectorBreakdownDto {
     pub query: InspectorQueryDto,
     pub items: Vec<InspectorItemDto>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InspectorHierarchyNodeDto {
     pub stable_id: String,
@@ -630,7 +630,7 @@ pub struct InspectorHierarchyNodeDto {
     pub children: Vec<InspectorHierarchyNodeDto>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InspectorDetailDto {
     pub stable_id: String,
@@ -645,7 +645,7 @@ pub struct InspectorDetailDto {
     pub related_regression_evidence: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceContextDto {
     pub path: Option<String>,
@@ -658,4 +658,180 @@ pub struct SourceContextDto {
     pub related_sections: Vec<String>,
     pub related_regions: Vec<String>,
     pub availability_reason: Option<String>,
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCapabilityDto {
+    pub capability_id: String,
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionPointDto {
+    pub extension_point_id: String,
+    pub display_name: String,
+    pub description: String,
+    pub layer: String,
+    pub supported_contexts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSummaryDto {
+    pub plugin_id: String,
+    pub display_name: String,
+    pub version: String,
+    pub description: String,
+    pub layer: String,
+    pub capabilities: Vec<PluginCapabilityDto>,
+    pub extension_points: Vec<String>,
+    pub supported_input_kinds: Vec<String>,
+    pub output_kinds: Vec<String>,
+    pub safety_level: String,
+    pub stability_level: String,
+    pub enabled: bool,
+    pub status: String,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginDetailDto {
+    pub summary: PluginSummaryDto,
+    pub execution_model: String,
+    pub failure_behavior: String,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginExecutionRequestDto {
+    pub context_kind: String,
+    pub run_id: Option<i64>,
+    pub left_run_id: Option<i64>,
+    pub right_run_id: Option<i64>,
+    pub build_id: Option<i64>,
+    pub history_query: Option<HistoryQueryDto>,
+    pub range_query: Option<RangeDiffQueryDto>,
+    pub regression_query: Option<RegressionQueryDto>,
+    pub inspector_query: Option<InspectorQueryDto>,
+    pub inspector_selection: Option<InspectorSelectionDto>,
+    pub package_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginOutputItemDto {
+    pub kind: String,
+    pub title: String,
+    pub summary: String,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginExecutionResultDto {
+    pub plugin_id: String,
+    pub status: String,
+    pub summary: String,
+    pub warnings: Vec<String>,
+    pub output_items: Vec<PluginOutputItemDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvestigationPackageItemDto {
+    pub relative_path: String,
+    pub kind: String,
+    pub title: String,
+    pub included: bool,
+    pub description: String,
+    pub missing_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateInvestigationPackageRequestDto {
+    pub project_id: Option<i64>,
+    pub package_name: String,
+    pub destination_path: String,
+    pub source_context: String,
+    pub include_sections: Vec<String>,
+    pub include_charts_snapshot: bool,
+    pub include_policy_snapshot: bool,
+    pub include_plugin_results: bool,
+    pub include_notes: bool,
+    pub notes: Option<String>,
+    pub run_id: Option<i64>,
+    pub compare: Option<RunCompareRequestDto>,
+    pub history_query: Option<HistoryQueryDto>,
+    pub range_query: Option<RangeDiffQueryDto>,
+    pub regression_query: Option<RegressionQueryDto>,
+    pub dashboard_query: Option<DashboardQueryDto>,
+    pub inspector_query: Option<InspectorQueryDto>,
+    pub inspector_selection: Option<InspectorSelectionDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvestigationPackageManifestDto {
+    pub schema_version: i64,
+    pub package_version: String,
+    pub package_name: String,
+    pub created_at: String,
+    pub fwmap_version: String,
+    pub project_id: Option<i64>,
+    pub project_name: Option<String>,
+    pub source_context: String,
+    pub source_label: String,
+    pub related_run_ids: Vec<i64>,
+    pub related_commit_refs: Vec<String>,
+    pub git_repo_path: Option<String>,
+    pub git_branch: Option<String>,
+    pub git_revision: Option<String>,
+    pub included_items: Vec<InvestigationPackageItemDto>,
+    pub omitted_items: Vec<InvestigationPackageItemDto>,
+    pub export_provenance: Vec<(String, String)>,
+    pub notes: Option<String>,
+    pub plugin_results: Vec<PluginExecutionResultDto>,
+    pub missing_resources: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvestigationPackageSummaryDto {
+    pub package_id: Option<i64>,
+    pub package_name: String,
+    pub package_path: String,
+    pub created_at: String,
+    pub source_context: String,
+    pub project_id: Option<i64>,
+    pub project_name: Option<String>,
+    pub fwmap_version: String,
+    pub schema_version: i64,
+    pub included_count: usize,
+    pub omitted_count: usize,
+    pub notes: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenInvestigationPackageResultDto {
+    pub summary: InvestigationPackageSummaryDto,
+    pub manifest: InvestigationPackageManifestDto,
+    pub dashboard_summary: Option<DashboardSummaryDto>,
+    pub run_detail: Option<RunDetailDto>,
+    pub diff_result: Option<RunCompareResultDto>,
+    pub timeline: Option<TimelineResultDto>,
+    pub range_diff: Option<RangeDiffResultDto>,
+    pub regression_result: Option<RegressionResultDto>,
+    pub inspector_summary: Option<InspectorSummaryDto>,
+    pub inspector_detail: Option<InspectorDetailDto>,
+    pub inspector_source_context: Option<SourceContextDto>,
+    pub policy_document: Option<PolicyDocumentDto>,
 }

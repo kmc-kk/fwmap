@@ -47,7 +47,7 @@ cargo test
 
 ## Desktop App
 
-A first Tauri desktop shell now lives under `apps/fwmap-desktop/`. It keeps the existing Rust core as the analysis source of truth and adds a local GUI for file picking, job status, recent runs, run detail, and desktop settings.
+`apps/fwmap-desktop/` contains a Tauri 2 desktop shell that reuses the existing `fwmap` Rust core. The desktop app is aimed at local investigation workflows where we want file picking, recent runs, visual history, drill-down inspection, reusable projects, and shareable investigation bundles in one place.
 
 Install desktop dependencies:
 
@@ -76,34 +76,40 @@ cd apps/fwmap-desktop
 npm run build
 ```
 
-The desktop app now covers the full local workflow:
+The desktop app currently covers these workflows:
 
 - start analysis jobs, track progress, and review recent runs
-- inspect commit timelines, compare recorded runs, and query git-aware history
-- monitor ROM/RAM and warning trends in a visual dashboard
-- manage reusable projects, policy files, and export destinations
+- compare two recorded runs and inspect section / object / source / symbol / Rust deltas
+- explore commit timelines, Git-aware range diffs, regressions, and dashboard trends
 - drill into regions, files, functions, symbols, crates, and dependencies from the Inspector
+- manage reusable projects, policy files, history locations, and export destinations
+- review built-in plugins and create shareable investigation packages that can be reopened later
 
 Desktop capabilities currently available:
 
 - Start analysis from local ELF / map / rule / Git repo paths
 - Track one-shot analysis jobs with Tauri events
-- Persist desktop settings and recent runs in a local SQLite app database
-- Record actual analysis history into the existing fwmap history database
-- Browse recent runs and a compact run detail view
+- Persist desktop settings, recent runs, plugin state, and recent packages in a local SQLite app database
+- Record analysis history into the existing fwmap history database
+- Browse recent runs and compact run detail views
 - Load commit timelines with branch / profile / target filters
 - Compare two recorded runs with section / object / source / symbol / Rust delta lists
 - Query git-aware range diffs and regression-origin summaries from the desktop UI
-- Visualize recent ROM/RAM history, warning pressure, region usage, and top growth contributors in the dashboard
+- Visualize recent ROM/RAM history, warning pressure, region usage, top growth contributors, and recent regressions in the dashboard
 - Manage workspace-style projects with default paths, policy files, and export destinations
 - Load, validate, save, and reuse desktop policy documents from the GUI
-- Export dashboard/run/diff/history/regression snapshots as HTML, print-friendly HTML, or JSON
+- Export dashboard / run / diff / history / regression snapshots as HTML, print-friendly HTML, or JSON
+- Inspect built-in plugin capabilities, enable or disable them, and run safe supplementary outputs on demand
+- Create `.fwpkg` investigation bundles from dashboard, run, diff, history, range, regression, or inspector context
+- Reopen saved investigation bundles, review included and omitted resources, and inspect manifest-tracked plugin results
 
 Current limitations:
 
 - Job cancellation is a placeholder and does not interrupt the analysis thread
 - Desktop navigation uses lightweight in-app state rather than a full router
-- Deep charts, rich editors, and dense drill-down visualization are still future work
+- The plugin system is intentionally built-in and manifest-driven; external shared-library plugins are not loaded yet
+- Investigation packages are directory bundles with `manifest.json`, not compressed archive packages yet
+- Package reopening focuses on manifest and captured JSON summaries rather than a full embedded artifact browser
 - The desktop app reuses existing fwmap core/history logic instead of replacing the CLI
 
 ## Usage

@@ -131,6 +131,45 @@ pub struct InsertExportRecord {
     pub title: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct StoredPluginStateRecord {
+    pub plugin_id: String,
+    pub enabled: bool,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct InsertPluginStateRecord {
+    pub plugin_id: String,
+    pub enabled: bool,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredPackageRecord {
+    pub package_id: i64,
+    pub project_id: Option<i64>,
+    pub created_at: String,
+    pub package_name: String,
+    pub package_path: String,
+    pub source_context: String,
+    pub schema_version: i64,
+    pub fwmap_version: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InsertPackageRecord {
+    pub project_id: Option<i64>,
+    pub created_at: String,
+    pub package_name: String,
+    pub package_path: String,
+    pub source_context: String,
+    pub schema_version: i64,
+    pub fwmap_version: String,
+    pub note: Option<String>,
+}
+
 impl DesktopStorage {
     pub fn new(base_dir: impl AsRef<Path>) -> Result<Self, String> {
         let base_dir = base_dir.as_ref().to_path_buf();
@@ -220,6 +259,24 @@ impl DesktopStorage {
                 format TEXT NOT NULL,
                 destination_path TEXT NOT NULL,
                 title TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS plugin_states (
+                plugin_id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS recent_packages (
+                package_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER,
+                created_at TEXT NOT NULL,
+                package_name TEXT NOT NULL,
+                package_path TEXT NOT NULL,
+                source_context TEXT NOT NULL,
+                schema_version INTEGER NOT NULL,
+                fwmap_version TEXT NOT NULL,
+                note TEXT
             );
             ",
         )
@@ -559,6 +616,110 @@ impl DesktopStorage {
             }).map_err(|err| format!("failed to query recent exports: {err}"))?;
             rows.collect::<Result<Vec<_>, _>>().map_err(|err| format!("failed to collect recent exports: {err}"))
         }
+    }
+
+    pub fn save_plugin_state(&self, record: &InsertPluginStateRecord) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "INSERT INTO plugin_states (plugin_id, enabled, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(plugin_id) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at",
+            params![record.plugin_id, if record.enabled { 1 } else { 0 }, record.updated_at],
+        )
+        .map_err(|err| format!("failed to save plugin state: {err}"))?;
+        Ok(())
+    }
+
+    pub fn get_plugin_state(&self, plugin_id: &str) -> Result<Option<StoredPluginStateRecord>, String> {
+        let conn = self.open()?;
+        conn.query_row(
+            "SELECT plugin_id, enabled, updated_at FROM plugin_states WHERE plugin_id = ?1",
+            params![plugin_id],
+            |row| {
+                Ok(StoredPluginStateRecord {
+                    plugin_id: row.get(0)?,
+                    enabled: row.get::<_, i64>(1)? != 0,
+                    updated_at: row.get(2)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|err| format!("failed to load plugin state: {err}"))
+    }
+
+    pub fn list_plugin_states(&self) -> Result<Vec<StoredPluginStateRecord>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare("SELECT plugin_id, enabled, updated_at FROM plugin_states ORDER BY plugin_id ASC")
+            .map_err(|err| format!("failed to prepare plugin states query: {err}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(StoredPluginStateRecord {
+                    plugin_id: row.get(0)?,
+                    enabled: row.get::<_, i64>(1)? != 0,
+                    updated_at: row.get(2)?,
+                })
+            })
+            .map_err(|err| format!("failed to query plugin states: {err}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("failed to collect plugin states: {err}"))
+    }
+
+    pub fn insert_recent_package(&self, record: &InsertPackageRecord) -> Result<i64, String> {
+        let conn = self.open()?;
+        conn.execute(
+            "INSERT INTO recent_packages (
+                project_id, created_at, package_name, package_path, source_context, schema_version, fwmap_version, note
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                record.project_id,
+                record.created_at,
+                record.package_name,
+                record.package_path,
+                record.source_context,
+                record.schema_version,
+                record.fwmap_version,
+                record.note,
+            ],
+        )
+        .map_err(|err| format!("failed to insert recent package: {err}"))?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_recent_packages(&self, project_id: Option<i64>, limit: usize) -> Result<Vec<StoredPackageRecord>, String> {
+        let conn = self.open()?;
+        let sql = if project_id.is_some() {
+            "SELECT package_id, project_id, created_at, package_name, package_path, source_context, schema_version, fwmap_version, note
+             FROM recent_packages WHERE project_id = ?1 ORDER BY package_id DESC LIMIT ?2"
+        } else {
+            "SELECT package_id, project_id, created_at, package_name, package_path, source_context, schema_version, fwmap_version, note
+             FROM recent_packages ORDER BY package_id DESC LIMIT ?1"
+        };
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|err| format!("failed to prepare recent packages query: {err}"))?;
+        let mapper = |row: &rusqlite::Row<'_>| {
+            Ok(StoredPackageRecord {
+                package_id: row.get(0)?,
+                project_id: row.get(1)?,
+                created_at: row.get(2)?,
+                package_name: row.get(3)?,
+                package_path: row.get(4)?,
+                source_context: row.get(5)?,
+                schema_version: row.get(6)?,
+                fwmap_version: row.get(7)?,
+                note: row.get(8)?,
+            })
+        };
+        let rows = if let Some(project_id) = project_id {
+            stmt.query_map(params![project_id, limit as i64], mapper)
+                .map_err(|err| format!("failed to query recent packages: {err}"))?
+        } else {
+            stmt.query_map(params![limit as i64], mapper)
+                .map_err(|err| format!("failed to query recent packages: {err}"))?
+        };
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("failed to collect recent packages: {err}"))
     }
 }
 

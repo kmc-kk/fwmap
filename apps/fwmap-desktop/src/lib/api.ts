@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   ActiveProjectState,
   AnalysisRequest,
+  CreateInvestigationPackageRequest,
   CreateProjectRequest,
   DashboardQuery,
   ExportRequest,
@@ -10,7 +11,14 @@ import type {
   DashboardSummary,
   DesktopAppInfo,
   DesktopSettings,
+  ExtensionPoint,
   GitRef,
+  InvestigationPackageSummary,
+  OpenInvestigationPackageResult,
+  PluginDetail,
+  PluginExecutionRequest,
+  PluginExecutionResult,
+  PluginSummary,
   PolicyDocument,
   PolicyValidationResult,
   ProjectDetail,
@@ -165,4 +173,45 @@ export async function getInspectorDetail(query: InspectorQuery, selection: Inspe
 
 export async function getSourceContext(query: InspectorQuery, selection: InspectorSelection): Promise<SourceContext> {
   return invoke("desktop_get_source_context", { query, selection });
+}
+
+
+export async function listExtensionPoints(): Promise<ExtensionPoint[]> {
+  return invoke("desktop_list_extension_points");
+}
+
+export async function listPlugins(): Promise<PluginSummary[]> {
+  return invoke("desktop_list_plugins");
+}
+
+export async function getPluginDetail(pluginId: string): Promise<PluginDetail> {
+  return invoke("desktop_get_plugin_detail", { pluginId });
+}
+
+export async function setPluginEnabled(pluginId: string, enabled: boolean): Promise<PluginSummary> {
+  return invoke("desktop_set_plugin_enabled", { pluginId, enabled });
+}
+
+export async function runPlugin(pluginId: string, request: PluginExecutionRequest): Promise<PluginExecutionResult> {
+  return invoke("desktop_run_plugin", { pluginId, request });
+}
+
+export async function createInvestigationPackage(request: CreateInvestigationPackageRequest): Promise<InvestigationPackageSummary> {
+  return invoke("desktop_create_investigation_package", { request });
+}
+
+export async function exportPackage(request: CreateInvestigationPackageRequest): Promise<InvestigationPackageSummary> {
+  return invoke("desktop_export_package", { request });
+}
+
+export async function openInvestigationPackage(path: string): Promise<OpenInvestigationPackageResult> {
+  return invoke("desktop_open_investigation_package", { path });
+}
+
+export async function getInvestigationPackageSummary(path: string): Promise<InvestigationPackageSummary> {
+  return invoke("desktop_get_investigation_package_summary", { path });
+}
+
+export async function listRecentPackages(projectId?: number | null, limit = 20): Promise<InvestigationPackageSummary[]> {
+  return invoke("desktop_list_recent_packages", { projectId: projectId ?? null, limit });
 }

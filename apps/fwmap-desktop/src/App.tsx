@@ -11,22 +11,30 @@ import {
   createProject,
   deleteProject,
   detectRegression,
+  createInvestigationPackage,
   exportReport,
   getActiveProject,
   getAppInfo,
   getDashboardSummary,
   getRangeDiff,
+  getPluginDetail,
   getRunDetail,
   getSettings,
+  listExtensionPoints,
+  listPlugins,
   listProjects,
   listRecentExports,
+  listRecentPackages,
   loadPolicy,
   getTimeline,
   listBranches,
   listHistory,
   listRecentRuns,
+  openInvestigationPackage,
+  runPlugin,
   savePolicy,
   setActiveProject,
+  setPluginEnabled,
   listTags,
   saveSettings,
   startAnalysis,
@@ -38,6 +46,7 @@ import { formatBytes, formatTime, joinParts } from "./lib/format";
 import type {
   ActiveProjectState,
   AnalysisRequest,
+  CreateInvestigationPackageRequest,
   CreateProjectRequest,
   DashboardSummary,
   InspectorQuery,
@@ -45,12 +54,18 @@ import type {
   DesktopAppInfo,
   DesktopSettings,
   ExportRequest,
+  ExtensionPoint,
   ExportResult,
   GitRef,
+  InvestigationPackageSummary,
   HistoryItem,
   HistoryQuery,
   JobEvent,
   JobStatus,
+  OpenInvestigationPackageResult,
+  PluginDetail,
+  PluginExecutionResult,
+  PluginSummary,
   PolicyDocument,
   PolicyValidationResult,
   ProjectDetail,
@@ -66,7 +81,7 @@ import type {
   TimelineResult,
 } from "./lib/types";
 
-type ScreenKey = "dashboard" | "runs" | "diff" | "history" | "inspector" | "settings";
+type ScreenKey = "dashboard" | "runs" | "diff" | "history" | "inspector" | "plugins" | "packages" | "settings";
 
 const emptyRequest: AnalysisRequest = {
   elfPath: null,
@@ -139,6 +154,26 @@ const defaultExportRequest: ExportRequest = {
   title: null,
 };
 
+const defaultPackageRequest: CreateInvestigationPackageRequest = {
+  projectId: null,
+  packageName: "",
+  destinationPath: "",
+  sourceContext: "dashboard",
+  includeSections: ["dashboard"],
+  includeChartsSnapshot: true,
+  includePolicySnapshot: false,
+  includePluginResults: true,
+  includeNotes: false,
+  notes: null,
+  runId: null,
+  compare: null,
+  historyQuery: null,
+  rangeQuery: null,
+  regressionQuery: null,
+  dashboardQuery: null,
+  inspectorQuery: null,
+  inspectorSelection: null,
+};
 
 const defaultInspectorQuery: InspectorQuery = {
   runId: null,
@@ -197,6 +232,14 @@ export default function App() {
   const [policyValidation, setPolicyValidation] = useState<PolicyValidationResult | null>(null);
   const [exportDraft, setExportDraft] = useState<ExportRequest>(defaultExportRequest);
   const [recentExports, setRecentExports] = useState<RecentExport[]>([]);
+  const [plugins, setPlugins] = useState<PluginSummary[]>([]);
+  const [extensionPoints, setExtensionPoints] = useState<ExtensionPoint[]>([]);
+  const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
+  const [pluginDetail, setPluginDetail] = useState<PluginDetail | null>(null);
+  const [pluginExecution, setPluginExecution] = useState<PluginExecutionResult | null>(null);
+  const [packageDraft, setPackageDraft] = useState<CreateInvestigationPackageRequest>(defaultPackageRequest);
+  const [recentPackages, setRecentPackages] = useState<InvestigationPackageSummary[]>([]);
+  const [openedPackage, setOpenedPackage] = useState<OpenInvestigationPackageResult | null>(null);
   const [compareLeftRunId, setCompareLeftRunId] = useState<number | null>(null);
   const [compareRightRunId, setCompareRightRunId] = useState<number | null>(null);
   const [compareResult, setCompareResult] = useState<RunCompareResult | null>(null);
@@ -219,6 +262,9 @@ export default function App() {
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [loadingPolicy, setLoadingPolicy] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [loadingPlugins, setLoadingPlugins] = useState(false);
+  const [packaging, setPackaging] = useState(false);
+  const [openingPackage, setOpeningPackage] = useState(false);
   const [loadingRefs, setLoadingRefs] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -246,6 +292,10 @@ export default function App() {
       setScreen("history");
     } else if (first === "inspector") {
       setScreen("inspector");
+    } else if (first === "plugins") {
+      setScreen("plugins");
+    } else if (first === "packages") {
+      setScreen("packages");
     } else if (first === "settings") {
       setScreen("settings");
     }
@@ -266,13 +316,16 @@ export default function App() {
     async function load() {
       setBusy(true);
       try {
-        const [info, loadedSettings, loadedRuns, loadedProjects, loadedActiveProject, loadedExports] = await Promise.all([
+        const [info, loadedSettings, loadedRuns, loadedProjects, loadedActiveProject, loadedExports, loadedPlugins, loadedExtensionPoints, loadedPackages] = await Promise.all([
           getAppInfo(),
           getSettings(),
           listRecentRuns(30, 0),
           listProjects(),
           getActiveProject(),
           listRecentExports(null, 12),
+          listPlugins(),
+          listExtensionPoints(),
+          listRecentPackages(null, 12),
         ]);
         if (disposed) return;
         const projectRepoPath = loadedActiveProject.activeProject?.gitRepoPath ?? null;
@@ -296,6 +349,16 @@ export default function App() {
         setProjectDraft(projectToDraft(loadedActiveProject.activeProject));
         setExportDraft((current) => ({ ...current, projectId: loadedActiveProject.activeProjectId, dashboardQuery: initialHistoryQuery }));
         setRecentExports(loadedExports);
+        setPlugins(loadedPlugins);
+        setExtensionPoints(loadedExtensionPoints);
+        setSelectedPluginId((current) => current ?? loadedPlugins[0]?.pluginId ?? null);
+        setRecentPackages(loadedPackages);
+        setPackageDraft((current) => ({
+          ...current,
+          projectId: loadedActiveProject.activeProjectId,
+          dashboardQuery: initialHistoryQuery,
+          destinationPath: current.destinationPath || loadedActiveProject.activeProject?.defaultExportDir || "",
+        }));
         setRuns(loadedRuns);
         const fallbackRunId = loadedRuns[0]?.runId ?? null;
         setSelectedRunId((current) => current ?? fallbackRunId);
@@ -343,6 +406,27 @@ export default function App() {
       disposed = true;
     };
   }, [selectedRunId]);
+
+  useEffect(() => {
+    if (!selectedPluginId) {
+      setPluginDetail(null);
+      return;
+    }
+    const pluginId = selectedPluginId;
+    let disposed = false;
+    async function loadPluginDetail() {
+      try {
+        const detail = await getPluginDetail(pluginId);
+        if (!disposed) setPluginDetail(detail);
+      } catch (loadError) {
+        if (!disposed) setError(String(loadError));
+      }
+    }
+    void loadPluginDetail();
+    return () => {
+      disposed = true;
+    };
+  }, [selectedPluginId]);
 
   useEffect(() => {
     let unlisteners: Array<() => void> = [];
@@ -593,6 +677,151 @@ export default function App() {
     }
   }
 
+  async function refreshPluginData() {
+    setLoadingPlugins(true);
+    try {
+      const [loadedPlugins, loadedExtensionPoints] = await Promise.all([listPlugins(), listExtensionPoints()]);
+      setPlugins(loadedPlugins);
+      setExtensionPoints(loadedExtensionPoints);
+      if (selectedPluginId) {
+        setPluginDetail(await getPluginDetail(selectedPluginId));
+      }
+    } catch (loadError) {
+      setError(String(loadError));
+    } finally {
+      setLoadingPlugins(false);
+    }
+  }
+
+  async function handleSelectPlugin(pluginId: string) {
+    setSelectedPluginId(pluginId);
+    try {
+      setPluginDetail(await getPluginDetail(pluginId));
+      setPluginExecution(null);
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function handleTogglePlugin(pluginId: string, enabled: boolean) {
+    setLoadingPlugins(true);
+    try {
+      const updated = await setPluginEnabled(pluginId, enabled);
+      setPlugins((current) => current.map((item) => (item.pluginId === updated.pluginId ? updated : item)));
+      if (selectedPluginId === updated.pluginId) {
+        setPluginDetail(await getPluginDetail(updated.pluginId));
+      }
+      setNote(`${updated.displayName} ${enabled ? "enabled" : "disabled"}.`);
+    } catch (loadError) {
+      setError(String(loadError));
+    } finally {
+      setLoadingPlugins(false);
+    }
+  }
+
+  async function handleRunPlugin(pluginId: string) {
+    try {
+      const result = await runPlugin(pluginId, {
+        contextKind: packageDraft.sourceContext,
+        runId: selectedRunId,
+        leftRunId: compareLeftRunId,
+        rightRunId: compareRightRunId,
+        historyQuery: historyFilters,
+        rangeQuery: rangeResult ? rangeQuery : null,
+        regressionQuery: regressionResult ? regressionQuery : null,
+        inspectorQuery,
+        inspectorSelection,
+        packagePath: openedPackage?.summary.packagePath ?? null,
+      });
+      setPluginExecution(result);
+      setScreen("plugins");
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function choosePackageDestination() {
+    const value = await open({ directory: true, multiple: false });
+    if (typeof value === "string") {
+      setPackageDraft((current) => ({ ...current, destinationPath: value }));
+    }
+  }
+
+  async function choosePackageToOpen() {
+    const value = await open({ directory: true, multiple: false });
+    if (typeof value === "string") {
+      await handleOpenPackage(value);
+    }
+  }
+
+  async function handleCreatePackage() {
+    if (!packageDraft.packageName.trim()) {
+      setError("Package name is required.");
+      return;
+    }
+    if (!packageDraft.destinationPath.trim()) {
+      setError("Package destination is required.");
+      return;
+    }
+    setPackaging(true);
+    try {
+      const request: CreateInvestigationPackageRequest = {
+        ...packageDraft,
+        projectId: activeProjectState?.activeProjectId ?? null,
+        runId: packageDraft.sourceContext === "run" ? (packageDraft.runId ?? selectedRunId) : packageDraft.runId,
+        compare: packageDraft.sourceContext === "diff" && compareLeftRunId && compareRightRunId ? { leftRunId: compareLeftRunId, rightRunId: compareRightRunId } : packageDraft.compare,
+        historyQuery: packageDraft.sourceContext === "history" ? historyFilters : packageDraft.historyQuery,
+        rangeQuery: packageDraft.sourceContext === "range" ? rangeQuery : packageDraft.rangeQuery,
+        regressionQuery: packageDraft.sourceContext === "regression" ? regressionQuery : packageDraft.regressionQuery,
+        dashboardQuery: packageDraft.sourceContext === "dashboard" ? historyFilters : packageDraft.dashboardQuery,
+        inspectorQuery: packageDraft.sourceContext === "inspector" ? inspectorQuery : packageDraft.inspectorQuery,
+        inspectorSelection: packageDraft.sourceContext === "inspector" ? inspectorSelection : packageDraft.inspectorSelection,
+      };
+      const summary = await createInvestigationPackage(request);
+      setRecentPackages(await listRecentPackages(activeProjectState?.activeProjectId ?? null, 12));
+      setNote(`Created package ${summary.packageName}.`);
+      await handleOpenPackage(summary.packagePath);
+      setScreen("packages");
+    } catch (loadError) {
+      setError(String(loadError));
+    } finally {
+      setPackaging(false);
+    }
+  }
+
+  async function handleOpenPackage(pathValue: string) {
+    setOpeningPackage(true);
+    try {
+      setOpenedPackage(await openInvestigationPackage(pathValue));
+      setRecentPackages(await listRecentPackages(activeProjectState?.activeProjectId ?? null, 12));
+      setScreen("packages");
+    } catch (loadError) {
+      setError(String(loadError));
+    } finally {
+      setOpeningPackage(false);
+    }
+  }
+
+  function preparePackageFromContext(sourceContext: CreateInvestigationPackageRequest["sourceContext"]) {
+    setPackageDraft((current) => ({
+      ...current,
+      projectId: activeProjectState?.activeProjectId ?? null,
+      packageName: current.packageName || `${sourceContext}-investigation`,
+      destinationPath: current.destinationPath || activeProjectState?.activeProject?.defaultExportDir || "",
+      sourceContext,
+      includeSections: sourceContext === "dashboard" ? ["dashboard"] : [sourceContext, "dashboard"],
+      runId: sourceContext === "run" ? selectedRunId : null,
+      compare: sourceContext === "diff" && compareLeftRunId && compareRightRunId ? { leftRunId: compareLeftRunId, rightRunId: compareRightRunId } : null,
+      historyQuery: sourceContext === "history" ? historyFilters : null,
+      rangeQuery: sourceContext === "range" ? rangeQuery : null,
+      regressionQuery: sourceContext === "regression" ? regressionQuery : null,
+      dashboardQuery: historyFilters,
+      inspectorQuery: sourceContext === "inspector" ? inspectorQuery : null,
+      inspectorSelection: sourceContext === "inspector" ? inspectorSelection : null,
+    }));
+    setScreen("packages");
+  }
+
   async function handleRunCompare() {
     if (!compareLeftRunId || !compareRightRunId) return;
     setLoadingCompare(true);
@@ -770,6 +999,16 @@ export default function App() {
       title: "Investigate the build at source depth",
       description: "Pivot the current run or diff through region, file, function, symbol, and Rust ownership views.",
     },
+    plugins: {
+      eyebrow: "Plugins",
+      title: "Understand and control desktop extensions",
+      description: "Review built-in extension points, toggle plugins safely, and run supplementary plugin outputs on demand.",
+    },
+    packages: {
+      eyebrow: "Packages",
+      title: "Bundle investigations for someone else to reopen",
+      description: "Create a reusable investigation bundle, inspect what it contains, and reopen prior packages locally.",
+    },
     settings: {
       eyebrow: "Workspace",
       title: "Keep the desktop predictable",
@@ -808,6 +1047,18 @@ export default function App() {
           { label: "Metric", value: inspectorQuery.metric, detail: inspectorQuery.runId ? `Run #${inspectorQuery.runId}` : inspectorQuery.leftRunId && inspectorQuery.rightRunId ? `Diff #${inspectorQuery.leftRunId} -> #${inspectorQuery.rightRunId}` : "Latest run" },
           { label: "Selection", value: inspectorSelection?.kind ?? "None", detail: inspectorSelection?.stableId ?? "Choose a node from the visualization or table." },
         ];
+      case "plugins":
+        return [
+          { label: "Installed", value: String(plugins.length), detail: `${plugins.filter((item) => item.enabled).length} enabled` },
+          { label: "Selected plugin", value: pluginDetail?.summary.displayName ?? selectedPluginId ?? "None", detail: pluginDetail?.summary.layer ?? "Pick a plugin to inspect it." },
+          { label: "Extension points", value: String(extensionPoints.length), detail: extensionPoints[0]?.displayName ?? "No extension points registered." },
+        ];
+      case "packages":
+        return [
+          { label: "Recent packages", value: String(recentPackages.length), detail: recentPackages[0]?.packageName ?? "No packages created yet." },
+          { label: "Open package", value: openedPackage?.summary.packageName ?? "None", detail: openedPackage?.summary.sourceContext ?? "Open a package bundle to review it." },
+          { label: "Included items", value: String(openedPackage?.summary.includedCount ?? 0), detail: `${openedPackage?.summary.omittedCount ?? 0} omitted` },
+        ];
       case "settings":
         return [
           { label: "Active project", value: activeProjectName, detail: activeProjectState?.activeProject?.rootPath ?? "Projects keep defaults and export locations together." },
@@ -830,6 +1081,7 @@ export default function App() {
     policyValidation,
     rangeResult,
     recentExports,
+    recentPackages,
     runDetail,
     inspectorQuery.groupBy,
     inspectorQuery.metric,
@@ -840,9 +1092,15 @@ export default function App() {
     inspectorSelection,
     runs.length,
     screen,
+    selectedPluginId,
     selectedRunId,
     settings.defaultGitRepoPath,
     timeline?.rows.length,
+    extensionPoints,
+    openedPackage?.summary.includedCount,
+    openedPackage?.summary.omittedCount,
+    openedPackage?.summary.packageName,
+    openedPackage?.summary.sourceContext,
   ]);
 
   return (
@@ -874,6 +1132,8 @@ export default function App() {
             <ScreenButton active={screen === "diff"} label="Diff" detail="Compare snapshots" onPress={() => setScreen("diff")} />
             <ScreenButton active={screen === "history"} label="History" detail={`${timeline?.rows.length ?? 0} timeline rows`} onPress={() => setScreen("history")} />
             <ScreenButton active={screen === "inspector"} label="Inspector" detail="Source-level drill-down" onPress={() => setScreen("inspector")} />
+            <ScreenButton active={screen === "plugins"} label="Plugins" detail={`${plugins.filter((item) => item.enabled).length} active plugins`} onPress={() => setScreen("plugins")} />
+            <ScreenButton active={screen === "packages"} label="Packages" detail={`${recentPackages.length} recent bundles`} onPress={() => setScreen("packages")} />
             <ScreenButton active={screen === "settings"} label="Workspace" detail="Projects, policy, exports" onPress={() => setScreen("settings")} />
           </nav>
 
@@ -939,6 +1199,7 @@ export default function App() {
             <Tab key="dashboard" title="Dashboard">
               {busy ? <div className="loading-state"><Spinner label="Loading desktop state" /></div> : (
                 <div className="page-stack dashboard-dense-stack">
+                  <div className="button-row compact-wrap"><Button variant="flat" onPress={() => preparePackageFromContext("dashboard")}>Bundle dashboard</Button><Button variant="flat" onPress={() => void handleRunPlugin("timeline-signal-adapter")}>Run signal adapter</Button></div>
                   <section className="stats-grid dashboard-card-grid">
                     {dashboardSummary?.overviewCards.map((item) => <Card key={item.key} className={`stat-card metric-tone-${item.tone}`}><CardBody><div className="stat-card-content"><div className="stat-label">{item.title}</div><div className="stat-value">{item.value}</div>{item.subtitle ? <div className="stat-subtitle">{item.subtitle}</div> : null}</div></CardBody></Card>)}
                     {!dashboardSummary?.overviewCards?.length ? dashboardStats.map((item) => <Card key={item.label} className="stat-card"><CardBody><div className="stat-card-content"><div className="stat-label">{item.label}</div><div className="stat-value">{item.value}</div></div></CardBody></Card>) : null}
@@ -973,16 +1234,157 @@ export default function App() {
 
             <Tab key="history" title="History">
               <div className="page-stack">
-                <Card><CardHeader className="section-header">Timeline Filters</CardHeader><CardBody className="form-grid"><Input label="Repo path" value={historyFilters.repoPath ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, repoPath: value || null }))} /><Input label="Branch" value={historyFilters.branch ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, branch: value || null }))} /><Input label="Profile" value={historyFilters.profile ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, profile: value || null }))} /><Input label="Target" value={historyFilters.target ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, target: value || null }))} /><div><label>Order</label><select className="native-select" value={historyFilters.order ?? "ancestry"} onChange={(event) => setHistoryFilters((current) => ({ ...current, order: event.target.value as "ancestry" | "timestamp" }))}><option value="ancestry">ancestry</option><option value="timestamp">timestamp</option></select></div><div className="button-row"><Button variant="flat" onPress={() => void refreshGitRefs(historyFilters.repoPath ?? settings.defaultGitRepoPath)}>Refresh refs</Button><Button color="primary" isLoading={loadingHistory} onPress={() => void Promise.all([refreshHistory(historyFilters), refreshTimeline(historyFilters), refreshDashboard(historyFilters)])}>Load timeline</Button><Button variant="flat" onPress={() => { const buildId = historyItems[0]?.buildId; if (buildId) openHistoryInspector(buildId); }}>Inspect latest</Button></div></CardBody></Card>
+                <Card><CardHeader className="section-header">Timeline Filters</CardHeader><CardBody className="form-grid"><Input label="Repo path" value={historyFilters.repoPath ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, repoPath: value || null }))} /><Input label="Branch" value={historyFilters.branch ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, branch: value || null }))} /><Input label="Profile" value={historyFilters.profile ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, profile: value || null }))} /><Input label="Target" value={historyFilters.target ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, target: value || null }))} /><div><label>Order</label><select className="native-select" value={historyFilters.order ?? "ancestry"} onChange={(event) => setHistoryFilters((current) => ({ ...current, order: event.target.value as "ancestry" | "timestamp" }))}><option value="ancestry">ancestry</option><option value="timestamp">timestamp</option></select></div><div className="button-row"><Button variant="flat" onPress={() => void refreshGitRefs(historyFilters.repoPath ?? settings.defaultGitRepoPath)}>Refresh refs</Button><Button color="primary" isLoading={loadingHistory} onPress={() => void Promise.all([refreshHistory(historyFilters), refreshTimeline(historyFilters), refreshDashboard(historyFilters)])}>Load timeline</Button><Button variant="flat" onPress={() => { const buildId = historyItems[0]?.buildId; if (buildId) openHistoryInspector(buildId); }}>Inspect latest</Button><Button variant="flat" onPress={() => preparePackageFromContext("history")}>Bundle history</Button></div></CardBody></Card>
                 <div className="three-column"><Card><CardHeader className="section-header">Available branches</CardHeader><CardBody className="compact-text badge-column">{branches.length === 0 ? <div>-</div> : branches.map((item) => <button key={item.name} className="chip-button" type="button" onClick={() => setHistoryFilters((current) => ({ ...current, branch: item.name }))}>{item.name}</button>)}</CardBody></Card><Card><CardHeader className="section-header">Available tags</CardHeader><CardBody className="compact-text badge-column">{tags.length === 0 ? <div>-</div> : tags.map((item) => <span key={item.name} className="chip-static">{item.name}</span>)}</CardBody></Card><Card><CardHeader className="section-header">History items</CardHeader><CardBody className="compact-text"><div>{historyItems.length} builds matched</div><div>{timeline?.rows.length ?? 0} timeline rows ready</div></CardBody></Card></div>
                 <Card><CardHeader className="section-header">Commit Timeline</CardHeader><CardBody>{loadingHistory ? <div className="loading-state"><Spinner label="Loading history" /></div> : timeline && timeline.rows.length > 0 ? <table className="data-table"><thead><tr><th>Commit</th><th>Subject</th><th>ROM</th><th>RAM</th><th>ROM delta</th><th>RAM delta</th></tr></thead><tbody>{timeline.rows.slice(0, 12).map((row) => <tr key={row.commit}><td>{row.shortCommit}</td><td>{row.subject}</td><td>{formatBytes(row.romTotal)}</td><td>{formatBytes(row.ramTotal)}</td><td><span className={deltaTone(row.romDeltaVsPrevious)}>{signedOrDash(row.romDeltaVsPrevious)}</span></td><td><span className={deltaTone(row.ramDeltaVsPrevious)}>{signedOrDash(row.ramDeltaVsPrevious)}</span></td></tr>)}</tbody></table> : <div className="empty-state">Load the timeline to inspect commit history.</div>}</CardBody></Card>
-                <div className="two-column"><Card><CardHeader className="section-header">Range Diff</CardHeader><CardBody className="panel-stack"><Input label="Range spec" value={rangeQuery.spec} onValueChange={(value) => setRangeQuery((current) => ({ ...current, spec: value }))} /><div><label>Order</label><select className="native-select" value={rangeQuery.order ?? "ancestry"} onChange={(event) => setRangeQuery((current) => ({ ...current, order: event.target.value as "ancestry" | "timestamp" }))}><option value="ancestry">ancestry</option><option value="timestamp">timestamp</option></select></div><Button color="primary" isLoading={loadingRange} onPress={() => void handleRangeDiff()}>Run range diff</Button>{rangeResult ? <div className="compact-text"><div>ROM: <span className={deltaTone(rangeResult.cumulativeRomDelta)}>{signed(rangeResult.cumulativeRomDelta)}</span></div><div>RAM: <span className={deltaTone(rangeResult.cumulativeRamDelta)}>{signed(rangeResult.cumulativeRamDelta)}</span></div><div>Worst commit: {rangeResult.worstCommitByRom?.commit ?? "-"}</div><DeltaList title="Changed sections" items={rangeResult.topChangedSections} /></div> : null}</CardBody></Card><Card><CardHeader className="section-header">Regression</CardHeader><CardBody className="panel-stack"><Input label="Metric / rule / entity key" value={regressionQuery.key} onValueChange={(value) => setRegressionQuery((current) => ({ ...current, key: value }))} /><Input label="Range spec" value={regressionQuery.spec} onValueChange={(value) => setRegressionQuery((current) => ({ ...current, spec: value }))} /><div className="form-grid-inline"><div><label>Detector</label><select className="native-select" value={regressionQuery.detectorType} onChange={(event) => setRegressionQuery((current) => ({ ...current, detectorType: event.target.value as RegressionQuery["detectorType"] }))}><option value="metric">metric</option><option value="rule">rule</option><option value="entity">entity</option></select></div><div><label>Mode</label><select className="native-select" value={regressionQuery.mode} onChange={(event) => setRegressionQuery((current) => ({ ...current, mode: event.target.value as RegressionQuery["mode"] }))}><option value="first-crossing">first-crossing</option><option value="first-jump">first-jump</option><option value="first-presence">first-presence</option><option value="first-violation">first-violation</option></select></div><div><label>Threshold</label><input className="native-select" value={regressionQuery.threshold ?? ""} onChange={(event) => setRegressionQuery((current) => ({ ...current, threshold: event.target.value ? Number(event.target.value) : null }))} /></div></div><Button color="primary" isLoading={loadingRegression} onPress={() => void handleRegression()}>Detect regression</Button>{regressionResult ? <div className="compact-text"><div>Confidence: {regressionResult.confidence}</div><div>Last good: {regressionResult.lastGood?.shortCommit ?? "-"}</div><div>First bad: {regressionResult.firstObservedBad?.shortCommit ?? "-"}</div><div>{regressionResult.reasoning}</div></div> : null}</CardBody></Card></div>
+                <div className="two-column"><Card><CardHeader className="section-header">Range Diff</CardHeader><CardBody className="panel-stack"><Input label="Range spec" value={rangeQuery.spec} onValueChange={(value) => setRangeQuery((current) => ({ ...current, spec: value }))} /><div><label>Order</label><select className="native-select" value={rangeQuery.order ?? "ancestry"} onChange={(event) => setRangeQuery((current) => ({ ...current, order: event.target.value as "ancestry" | "timestamp" }))}><option value="ancestry">ancestry</option><option value="timestamp">timestamp</option></select></div><Button color="primary" isLoading={loadingRange} onPress={() => void handleRangeDiff()}>Run range diff</Button><Button variant="flat" onPress={() => preparePackageFromContext("range")}>Bundle range</Button>{rangeResult ? <div className="compact-text"><div>ROM: <span className={deltaTone(rangeResult.cumulativeRomDelta)}>{signed(rangeResult.cumulativeRomDelta)}</span></div><div>RAM: <span className={deltaTone(rangeResult.cumulativeRamDelta)}>{signed(rangeResult.cumulativeRamDelta)}</span></div><div>Worst commit: {rangeResult.worstCommitByRom?.commit ?? "-"}</div><DeltaList title="Changed sections" items={rangeResult.topChangedSections} /></div> : null}</CardBody></Card><Card><CardHeader className="section-header">Regression</CardHeader><CardBody className="panel-stack"><Input label="Metric / rule / entity key" value={regressionQuery.key} onValueChange={(value) => setRegressionQuery((current) => ({ ...current, key: value }))} /><Input label="Range spec" value={regressionQuery.spec} onValueChange={(value) => setRegressionQuery((current) => ({ ...current, spec: value }))} /><div className="form-grid-inline"><div><label>Detector</label><select className="native-select" value={regressionQuery.detectorType} onChange={(event) => setRegressionQuery((current) => ({ ...current, detectorType: event.target.value as RegressionQuery["detectorType"] }))}><option value="metric">metric</option><option value="rule">rule</option><option value="entity">entity</option></select></div><div><label>Mode</label><select className="native-select" value={regressionQuery.mode} onChange={(event) => setRegressionQuery((current) => ({ ...current, mode: event.target.value as RegressionQuery["mode"] }))}><option value="first-crossing">first-crossing</option><option value="first-jump">first-jump</option><option value="first-presence">first-presence</option><option value="first-violation">first-violation</option></select></div><div><label>Threshold</label><input className="native-select" value={regressionQuery.threshold ?? ""} onChange={(event) => setRegressionQuery((current) => ({ ...current, threshold: event.target.value ? Number(event.target.value) : null }))} /></div></div><Button color="primary" isLoading={loadingRegression} onPress={() => void handleRegression()}>Detect regression</Button><Button variant="flat" onPress={() => preparePackageFromContext("regression")}>Bundle regression</Button>{regressionResult ? <div className="compact-text"><div>Confidence: {regressionResult.confidence}</div><div>Last good: {regressionResult.lastGood?.shortCommit ?? "-"}</div><div>First bad: {regressionResult.firstObservedBad?.shortCommit ?? "-"}</div><div>{regressionResult.reasoning}</div></div> : null}</CardBody></Card></div>
               </div>
             </Tab>
 
 
             <Tab key="inspector" title="Inspector">
-              <InspectorPanel query={inspectorQuery} onQueryChange={setInspectorQuery} selection={inspectorSelection} onSelectionChange={setInspectorSelection} />
+              <div className="page-stack">
+                <div className="button-row compact-wrap">
+                  <Button variant="flat" onPress={() => preparePackageFromContext("inspector")}>Bundle this inspector context</Button>
+                </div>
+                <InspectorPanel query={inspectorQuery} onQueryChange={setInspectorQuery} selection={inspectorSelection} onSelectionChange={setInspectorSelection} />
+              </div>
+            </Tab>
+
+            <Tab key="plugins" title="Plugins">
+              <div className="page-stack">
+                <section className="plugin-layout">
+                  <Card>
+                    <CardHeader className="section-header">Installed plugins</CardHeader>
+                    <CardBody className="list-stack compact-text">
+                      <div className="button-row compact-wrap">
+                        <Button variant="flat" isLoading={loadingPlugins} onPress={() => void refreshPluginData()}>Refresh registry</Button>
+                      </div>
+                      {plugins.map((plugin) => (
+                        <button key={plugin.pluginId} className={`run-row ${selectedPluginId === plugin.pluginId ? "selected" : ""}`} onClick={() => void handleSelectPlugin(plugin.pluginId)} type="button">
+                          <div className="run-row-top"><strong>{plugin.displayName}</strong><Chip size="sm" variant="flat">{plugin.status}</Chip></div>
+                          <div>{plugin.description}</div>
+                          <div className="run-meta"><span>{plugin.layer}</span><span>{plugin.capabilities.length} capabilities</span><span>{plugin.enabled ? "enabled" : "disabled"}</span></div>
+                        </button>
+                      ))}
+                      {plugins.length === 0 ? <div className="empty-state">No plugins registered.</div> : null}
+                    </CardBody>
+                  </Card>
+                  <Card>
+                    <CardHeader className="section-header">Plugin detail</CardHeader>
+                    <CardBody className="page-stack compact-text">
+                      {pluginDetail ? (
+                        <>
+                          <div className="button-row compact-wrap">
+                            <Chip variant="flat">{pluginDetail.summary.safetyLevel}</Chip>
+                            <Chip variant="flat">{pluginDetail.summary.stabilityLevel}</Chip>
+                            <Chip variant="flat">{pluginDetail.summary.layer}</Chip>
+                          </div>
+                          <div><strong>{pluginDetail.summary.displayName}</strong> v{pluginDetail.summary.version}</div>
+                          <div>{pluginDetail.summary.description}</div>
+                          <div className="button-row compact-wrap">
+                            <Button size="sm" color={pluginDetail.summary.enabled ? "warning" : "primary"} onPress={() => void handleTogglePlugin(pluginDetail.summary.pluginId, !pluginDetail.summary.enabled)}>
+                              {pluginDetail.summary.enabled ? "Disable" : "Enable"}
+                            </Button>
+                            <Button size="sm" variant="flat" isDisabled={!pluginDetail.summary.enabled} onPress={() => void handleRunPlugin(pluginDetail.summary.pluginId)}>Run plugin</Button>
+                          </div>
+                          <div><strong>Execution model</strong><div>{pluginDetail.executionModel}</div></div>
+                          <div><strong>Failure behavior</strong><div>{pluginDetail.failureBehavior}</div></div>
+                          <div><strong>Capabilities</strong><ul className="warning-list">{pluginDetail.summary.capabilities.map((item) => <li key={item.capabilityId}><strong>{item.label}</strong>: {item.description}</li>)}</ul></div>
+                          <div><strong>Notes</strong><ul className="warning-list">{pluginDetail.notes.map((item) => <li key={item}>{item}</li>)}</ul></div>
+                          {pluginExecution ? <div className="validation-panel"><strong>{pluginExecution.summary}</strong><ul className="warning-list">{pluginExecution.outputItems.map((item) => <li key={`${item.kind}-${item.title}`}><strong>{item.title}</strong>: {item.summary}{item.detail ? ` / ${item.detail}` : ""}</li>)}</ul></div> : null}
+                        </>
+                      ) : <div className="empty-state">Select a plugin to inspect its capabilities.</div>}
+                    </CardBody>
+                  </Card>
+                </section>
+                <Card>
+                  <CardHeader className="section-header">Extension points</CardHeader>
+                  <CardBody className="page-stack compact-text">
+                    <div className="three-column plugin-cap-grid">
+                      {extensionPoints.map((point) => (
+                        <article key={point.extensionPointId} className="metric-slab plugin-slab">
+                          <div className="metric-slab-label">{point.displayName}</div>
+                          <div className="metric-slab-value">{point.layer}</div>
+                          <p>{point.description}</p>
+                        </article>
+                      ))}
+                    </div>
+                  </CardBody>
+                </Card>
+              </div>
+            </Tab>
+
+            <Tab key="packages" title="Packages">
+              <div className="page-stack">
+                <section className="package-layout">
+                  <Card>
+                    <CardHeader className="section-header">Create investigation package</CardHeader>
+                    <CardBody className="page-stack compact-text">
+                      <div className="form-grid">
+                        <Input label="Package name" value={packageDraft.packageName} onValueChange={(value) => setPackageDraft((current) => ({ ...current, packageName: value }))} />
+                        <Input label="Destination folder" value={packageDraft.destinationPath} onValueChange={(value) => setPackageDraft((current) => ({ ...current, destinationPath: value }))} />
+                        <div><label>Source context</label><select className="native-select" value={packageDraft.sourceContext} onChange={(event) => setPackageDraft((current) => ({ ...current, sourceContext: event.target.value, includeSections: [event.target.value, "dashboard"] }))}><option value="dashboard">dashboard</option><option value="run">run</option><option value="diff">diff</option><option value="history">history</option><option value="range">range</option><option value="regression">regression</option><option value="inspector">inspector</option></select></div>
+                      </div>
+                      <div className="badge-row compact-wrap">
+                        {(["dashboard", "run", "diff", "history", "range", "regression", "inspector"] as const).map((value) => <button key={value} type="button" className={`chip-button ${packageDraft.includeSections.includes(value) ? "active-chip" : ""}`} onClick={() => setPackageDraft((current) => ({ ...current, includeSections: current.includeSections.includes(value) ? current.includeSections.filter((item) => item !== value) : [...current.includeSections, value] }))}>{value}</button>)}
+                      </div>
+                      <Textarea minRows={4} label="Notes" value={packageDraft.notes ?? ""} onValueChange={(value) => setPackageDraft((current) => ({ ...current, notes: value || null, includeNotes: Boolean(value) }))} />
+                      <div className="button-row compact-wrap">
+                        <Button variant="flat" onPress={() => void choosePackageDestination()}>Choose destination</Button>
+                        <Button color="primary" isLoading={packaging} onPress={() => void handleCreatePackage()}>Create package</Button>
+                        <Button variant="flat" isLoading={openingPackage} onPress={() => void choosePackageToOpen()}>Open existing package</Button>
+                      </div>
+                    </CardBody>
+                  </Card>
+                  <Card>
+                    <CardHeader className="section-header">Recent packages</CardHeader>
+                    <CardBody className="list-stack compact-text">
+                      {recentPackages.map((item) => (
+                        <button key={`${item.packagePath}-${item.createdAt}`} className={`run-row ${openedPackage?.summary.packagePath === item.packagePath ? "selected" : ""}`} onClick={() => void handleOpenPackage(item.packagePath)} type="button">
+                          <div className="run-row-top"><strong>{item.packageName}</strong><Chip size="sm" variant="flat">{item.sourceContext}</Chip></div>
+                          <div>{item.packagePath}</div>
+                          <div className="run-meta"><span>{item.createdAt}</span><span>{item.includedCount} included</span><span>{item.omittedCount} omitted</span></div>
+                        </button>
+                      ))}
+                      {recentPackages.length === 0 ? <div className="empty-state">No packages created yet.</div> : null}
+                    </CardBody>
+                  </Card>
+                </section>
+                <Card>
+                  <CardHeader className="section-header">Package viewer</CardHeader>
+                  <CardBody className="page-stack compact-text">
+                    {openedPackage ? (
+                      <>
+                        <div className="button-row compact-wrap">
+                          <Chip variant="flat">schema {openedPackage.summary.schemaVersion}</Chip>
+                          <Chip variant="flat">{openedPackage.summary.sourceContext}</Chip>
+                          <Chip variant="flat">fwmap {openedPackage.summary.fwmapVersion}</Chip>
+                        </div>
+                        <div><strong>{openedPackage.summary.packageName}</strong></div>
+                        <div>{openedPackage.summary.packagePath}</div>
+                        <div className="three-column package-summary-grid">
+                          <article className="metric-slab plugin-slab"><div className="metric-slab-label">Included</div><div className="metric-slab-value">{openedPackage.summary.includedCount}</div><p>Manifest-tracked resources in the bundle.</p></article>
+                          <article className="metric-slab plugin-slab"><div className="metric-slab-label">Omitted</div><div className="metric-slab-value">{openedPackage.summary.omittedCount}</div><p>Resources left out deliberately for reproducibility and size.</p></article>
+                          <article className="metric-slab plugin-slab"><div className="metric-slab-label">Related runs</div><div className="metric-slab-value">{openedPackage.manifest.relatedRunIds.length}</div><p>{openedPackage.manifest.relatedCommitRefs.slice(0, 3).join(", ") || "No commits recorded."}</p></article>
+                        </div>
+                        <div className="two-column package-view-grid">
+                          <div>
+                            <strong>Contents</strong>
+                            <ul className="warning-list">{openedPackage.manifest.includedItems.map((item) => <li key={item.relativePath}>{item.title} / {item.relativePath}</li>)}</ul>
+                          </div>
+                          <div>
+                            <strong>Missing or omitted</strong>
+                            <ul className="warning-list">{openedPackage.manifest.omittedItems.map((item) => <li key={item.relativePath}>{item.title}: {item.missingReason ?? "omitted"}</li>)}</ul>
+                          </div>
+                        </div>
+                        {openedPackage.manifest.notes ? <div className="validation-panel"><strong>Notes</strong><div>{openedPackage.manifest.notes}</div></div> : null}
+                        {openedPackage.manifest.pluginResults.length > 0 ? <div><strong>Plugin results</strong><ul className="warning-list">{openedPackage.manifest.pluginResults.map((item) => <li key={item.pluginId}><strong>{item.pluginId}</strong>: {item.summary}</li>)}</ul></div> : null}
+                      </>
+                    ) : <div className="empty-state">Create or open a package to inspect its manifest and captured summaries.</div>}
+                  </CardBody>
+                </Card>
+              </div>
             </Tab>
 
             <Tab key="settings" title="Settings">
