@@ -13,7 +13,7 @@
               "id": "DWARF_LINE_ZERO",
               "name": "DWARF_LINE_ZERO",
               "shortDescription": {
-                "text": "DWARF emitted 43894 line-0 ranges; these bytes were counted as unknown source"
+                "text": "DWARF emitted 45968 line-0 ranges; these bytes were counted as unknown source"
               },
               "fullDescription": {
                 "text": "DWARF_LINE_ZERO warning from elf"
@@ -41,7 +41,7 @@
               "id": "SYMBOL_SPIKE",
               "name": "SYMBOL_SPIKE",
               "shortDescription": {
-                "text": "Symbol growth spike: _ZN5fwmap6report6render10build_html17h781bc39c939a8a53E (+30684)"
+                "text": "Symbol growth spike: _ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE (+35608)"
               },
               "fullDescription": {
                 "text": "SYMBOL_SPIKE warning from analyze"
@@ -92,7 +92,39 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: _ZN5fwmap3cli3run17h902937855dfe98b5E (34722 bytes (33.91 KiB))"
+            "text": "Large symbol detected: _ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE (35608 bytes (34.77 KiB))"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/rustc/4a4ef493e3a1488c6e321570238084b38948f6db/library/alloc/src/alloc.rs"
+                },
+                "region": {
+                  "startLine": 93,
+                  "endLine": 93,
+                  "startColumn": 9
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "fwmap/v1": "40a5f27c7b4f0174"
+          },
+          "properties": {
+            "includePass": false,
+            "logicalIdentity": "function:src/report/render.rs:_ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE",
+            "related": "_ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE",
+            "source": "analyze",
+            "symbol": "_ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE"
+          }
+        },
+        {
+          "ruleId": "LARGE_SYMBOL",
+          "level": "warning",
+          "kind": "fail",
+          "message": {
+            "text": "Large symbol detected: _ZN5fwmap3cli3run17h88aceb997519d797E (35226 bytes (34.40 KiB))"
           },
           "locations": [
             {
@@ -109,14 +141,14 @@
             }
           ],
           "partialFingerprints": {
-            "fwmap/v1": "fb2b3618207180f9"
+            "fwmap/v1": "a0d9c535ee27808a"
           },
           "properties": {
             "includePass": false,
-            "logicalIdentity": "function:src/cli/mod.rs:_ZN5fwmap3cli3run17h902937855dfe98b5E",
-            "related": "_ZN5fwmap3cli3run17h902937855dfe98b5E",
+            "logicalIdentity": "function:src/cli/mod.rs:_ZN5fwmap3cli3run17h88aceb997519d797E",
+            "related": "_ZN5fwmap3cli3run17h88aceb997519d797E",
             "source": "analyze",
-            "symbol": "_ZN5fwmap3cli3run17h902937855dfe98b5E"
+            "symbol": "_ZN5fwmap3cli3run17h88aceb997519d797E"
           }
         },
         {
@@ -124,7 +156,7 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: _ZN5fwmap6report6render10build_html17h781bc39c939a8a53E (30684 bytes (29.96 KiB))"
+            "text": "Large symbol detected: _ZN5fwmap3cli10parse_args17h80cc61949c89600aE (30181 bytes (29.47 KiB))"
           },
           "locations": [
             {
@@ -141,14 +173,14 @@
             }
           ],
           "partialFingerprints": {
-            "fwmap/v1": "bef8af06a9a3b03d"
+            "fwmap/v1": "be3b916295183d7e"
           },
           "properties": {
             "includePass": false,
-            "logicalIdentity": "function:src/report/render.rs:_ZN5fwmap6report6render10build_html17h781bc39c939a8a53E",
-            "related": "_ZN5fwmap6report6render10build_html17h781bc39c939a8a53E",
+            "logicalIdentity": "function:src/cli/mod.rs:_ZN5fwmap3cli10parse_args17h80cc61949c89600aE",
+            "related": "_ZN5fwmap3cli10parse_args17h80cc61949c89600aE",
             "source": "analyze",
-            "symbol": "_ZN5fwmap6report6render10build_html17h781bc39c939a8a53E"
+            "symbol": "_ZN5fwmap3cli10parse_args17h80cc61949c89600aE"
           }
         },
         {
@@ -156,7 +188,7 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h2fc08a94da17defcE.llvm.8184858701668755593 (29616 bytes (28.92 KiB))"
+            "text": "Large symbol detected: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12021140761502075759 (29977 bytes (29.27 KiB))"
           },
           "locations": [
             {
@@ -173,46 +205,14 @@
             }
           ],
           "partialFingerprints": {
-            "fwmap/v1": "692f36a0d34882c2"
+            "fwmap/v1": "2c5215cec987fa31"
           },
           "properties": {
             "includePass": false,
-            "logicalIdentity": "function:src/ingest/dwarf/mod.rs:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h2fc08a94da17defcE.llvm.8184858701668755593",
-            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h2fc08a94da17defcE.llvm.8184858701668755593",
+            "logicalIdentity": "function:src/ingest/dwarf/mod.rs:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12021140761502075759",
+            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12021140761502075759",
             "source": "analyze",
-            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h2fc08a94da17defcE.llvm.8184858701668755593"
-          }
-        },
-        {
-          "ruleId": "LARGE_SYMBOL",
-          "level": "warning",
-          "kind": "fail",
-          "message": {
-            "text": "Large symbol detected: _ZN5fwmap3cli10parse_args17h4baafd7f729b986cE (27920 bytes (27.27 KiB))"
-          },
-          "locations": [
-            {
-              "physicalLocation": {
-                "artifactLocation": {
-                  "uri": "/rustc/4a4ef493e3a1488c6e321570238084b38948f6db/library/alloc/src/alloc.rs"
-                },
-                "region": {
-                  "startLine": 95,
-                  "endLine": 95,
-                  "startColumn": 9
-                }
-              }
-            }
-          ],
-          "partialFingerprints": {
-            "fwmap/v1": "ee6d7bba44b3dffd"
-          },
-          "properties": {
-            "includePass": false,
-            "logicalIdentity": "function:src/cli/mod.rs:_ZN5fwmap3cli10parse_args17h4baafd7f729b986cE",
-            "related": "_ZN5fwmap3cli10parse_args17h4baafd7f729b986cE",
-            "source": "analyze",
-            "symbol": "_ZN5fwmap3cli10parse_args17h4baafd7f729b986cE"
+            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12021140761502075759"
           }
         },
         {
@@ -220,7 +220,7 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Symbol growth spike: _ZN5fwmap6report6render10build_html17h781bc39c939a8a53E (+30684)"
+            "text": "Symbol growth spike: _ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE (+35608)"
           },
           "locations": [
             {
@@ -229,22 +229,22 @@
                   "uri": "/rustc/4a4ef493e3a1488c6e321570238084b38948f6db/library/alloc/src/alloc.rs"
                 },
                 "region": {
-                  "startLine": 95,
-                  "endLine": 95,
+                  "startLine": 93,
+                  "endLine": 93,
                   "startColumn": 9
                 }
               }
             }
           ],
           "partialFingerprints": {
-            "fwmap/v1": "7af54b9297557472"
+            "fwmap/v1": "150be4732068ee1f"
           },
           "properties": {
             "includePass": false,
-            "logicalIdentity": "function:src/report/render.rs:_ZN5fwmap6report6render10build_html17h781bc39c939a8a53E",
-            "related": "_ZN5fwmap6report6render10build_html17h781bc39c939a8a53E",
+            "logicalIdentity": "function:src/report/render.rs:_ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE",
+            "related": "_ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE",
             "source": "analyze",
-            "symbol": "_ZN5fwmap6report6render10build_html17h781bc39c939a8a53E"
+            "symbol": "_ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE"
           }
         }
       ]
