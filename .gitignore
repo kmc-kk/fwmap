@@ -7,3 +7,6 @@ fwmap_report.html
 /apps/fwmap-desktop/dist
 /apps/fwmap-desktop/node_modules
 /apps/fwmap-desktop/src-tauri/gen
+/.agents
+/.windsurf/skills
+skills-lock.json

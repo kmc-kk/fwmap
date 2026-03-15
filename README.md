@@ -81,6 +81,7 @@ Desktop support now covers two layers:
 - Phase D1: start analysis jobs, track job state, persist settings, and inspect recent runs
 - Phase D2: inspect history timeline, compare two recorded runs, query git-aware range diffs, and surface regression-origin results
 - Phase D3: use a visual dashboard with trend charts, top growth contributors, region usage, and recent regression cards
+- Phase D4: manage desktop projects, edit policy files, and export dashboard/run/history snapshots
 
 Desktop capabilities currently available:
 
@@ -93,6 +94,9 @@ Desktop capabilities currently available:
 - Compare two recorded runs with section / object / source / symbol / Rust delta lists
 - Query git-aware range diffs and regression-origin summaries from the desktop UI
 - Visualize recent ROM/RAM history, warning pressure, region usage, and top growth contributors in the dashboard
+- Manage workspace-style projects with default paths, policy files, and export destinations
+- Load, validate, save, and reuse desktop policy documents from the GUI
+- Export dashboard/run/diff/history/regression snapshots as HTML, print-friendly HTML, or JSON
 
 Current limitations:
 

@@ -1,9 +1,12 @@
 use tauri::{AppHandle, State};
 
 use crate::dto::{
-    AnalysisRequestDto, DashboardQueryDto, DashboardSummaryDto, DesktopAppInfo, DesktopSettingsDto, GitRefDto, HistoryItemDto, HistoryQueryDto, JobStatusDto,
-    RangeDiffQueryDto, RangeDiffResultDto, RegressionQueryDto, RegressionResultDto, RunCompareRequestDto,
-    RunCompareResultDto, RunDetailDto, RunSummaryDto, TimelineResultDto,
+    ActiveProjectStateDto, AnalysisRequestDto, CreateProjectRequestDto, DashboardQueryDto, DashboardSummaryDto,
+    DesktopAppInfo, DesktopSettingsDto, ExportRequestDto, ExportResultDto, GitRefDto, HistoryItemDto,
+    HistoryQueryDto, JobStatusDto, PolicyDocumentDto, PolicyValidationResultDto, ProjectDetailDto,
+    ProjectSummaryDto, RangeDiffQueryDto, RangeDiffResultDto, RecentExportDto, RegressionQueryDto,
+    RegressionResultDto, RunCompareRequestDto, RunCompareResultDto, RunDetailDto, RunSummaryDto,
+    TimelineResultDto, UpdateProjectRequestDto,
 };
 use crate::service::DesktopState;
 
@@ -18,116 +21,126 @@ pub fn desktop_get_settings(state: State<'_, DesktopState>) -> Result<DesktopSet
 }
 
 #[tauri::command]
-pub fn desktop_save_settings(
-    state: State<'_, DesktopState>,
-    settings: DesktopSettingsDto,
-) -> Result<DesktopSettingsDto, String> {
+pub fn desktop_save_settings(state: State<'_, DesktopState>, settings: DesktopSettingsDto) -> Result<DesktopSettingsDto, String> {
     state.save_settings(settings)
 }
 
 #[tauri::command]
-pub fn desktop_start_analysis(
-    app: AppHandle,
-    state: State<'_, DesktopState>,
-    request: AnalysisRequestDto,
-) -> Result<JobStatusDto, String> {
+pub fn desktop_list_projects(state: State<'_, DesktopState>) -> Result<Vec<ProjectSummaryDto>, String> {
+    state.list_projects()
+}
+
+#[tauri::command]
+pub fn desktop_create_project(state: State<'_, DesktopState>, request: CreateProjectRequestDto) -> Result<ProjectDetailDto, String> {
+    state.create_project(request)
+}
+
+#[tauri::command]
+pub fn desktop_get_active_project(state: State<'_, DesktopState>) -> Result<ActiveProjectStateDto, String> {
+    state.get_active_project()
+}
+
+#[tauri::command]
+pub fn desktop_set_active_project(state: State<'_, DesktopState>, project_id: Option<i64>) -> Result<ActiveProjectStateDto, String> {
+    state.set_active_project(project_id)
+}
+
+#[tauri::command]
+pub fn desktop_update_project(state: State<'_, DesktopState>, project_id: i64, patch: UpdateProjectRequestDto) -> Result<ProjectDetailDto, String> {
+    state.update_project(project_id, patch)
+}
+
+#[tauri::command]
+pub fn desktop_delete_project(state: State<'_, DesktopState>, project_id: i64) -> Result<(), String> {
+    state.delete_project(project_id)
+}
+
+#[tauri::command]
+pub fn desktop_load_policy(state: State<'_, DesktopState>, project_id: Option<i64>, path: Option<String>) -> Result<PolicyDocumentDto, String> {
+    state.load_policy(project_id, path)
+}
+
+#[tauri::command]
+pub fn desktop_validate_policy(state: State<'_, DesktopState>, document: PolicyDocumentDto) -> Result<PolicyValidationResultDto, String> {
+    state.validate_policy(document)
+}
+
+#[tauri::command]
+pub fn desktop_save_policy(state: State<'_, DesktopState>, document: PolicyDocumentDto) -> Result<PolicyDocumentDto, String> {
+    state.save_policy(document)
+}
+
+#[tauri::command]
+pub fn desktop_export_report(state: State<'_, DesktopState>, request: ExportRequestDto) -> Result<ExportResultDto, String> {
+    state.export_report(request)
+}
+
+#[tauri::command]
+pub fn desktop_list_recent_exports(state: State<'_, DesktopState>, project_id: Option<i64>, limit: Option<usize>) -> Result<Vec<RecentExportDto>, String> {
+    state.list_recent_exports(project_id, limit.unwrap_or(20))
+}
+
+#[tauri::command]
+pub fn desktop_start_analysis(app: AppHandle, state: State<'_, DesktopState>, request: AnalysisRequestDto) -> Result<JobStatusDto, String> {
     state.start_analysis(app, request)
 }
 
 #[tauri::command]
-pub fn desktop_get_job_status(
-    state: State<'_, DesktopState>,
-    job_id: String,
-) -> Result<Option<JobStatusDto>, String> {
+pub fn desktop_get_job_status(state: State<'_, DesktopState>, job_id: String) -> Result<Option<JobStatusDto>, String> {
     state.get_job_status(&job_id)
 }
 
 #[tauri::command]
-pub fn desktop_cancel_job(
-    state: State<'_, DesktopState>,
-    job_id: String,
-) -> Result<Option<JobStatusDto>, String> {
+pub fn desktop_cancel_job(state: State<'_, DesktopState>, job_id: String) -> Result<Option<JobStatusDto>, String> {
     state.cancel_job(&job_id)
 }
 
 #[tauri::command]
-pub fn desktop_list_recent_runs(
-    state: State<'_, DesktopState>,
-    limit: Option<usize>,
-    offset: Option<usize>,
-) -> Result<Vec<RunSummaryDto>, String> {
+pub fn desktop_list_recent_runs(state: State<'_, DesktopState>, limit: Option<usize>, offset: Option<usize>) -> Result<Vec<RunSummaryDto>, String> {
     state.list_recent_runs(limit.unwrap_or(20), offset.unwrap_or(0))
 }
 
 #[tauri::command]
-pub fn desktop_get_run_detail(
-    state: State<'_, DesktopState>,
-    run_id: i64,
-) -> Result<Option<RunDetailDto>, String> {
+pub fn desktop_get_run_detail(state: State<'_, DesktopState>, run_id: i64) -> Result<Option<RunDetailDto>, String> {
     state.run_detail(run_id)
 }
 
-
 #[tauri::command]
-pub fn desktop_get_dashboard_summary(
-    state: State<'_, DesktopState>,
-    query: DashboardQueryDto,
-) -> Result<DashboardSummaryDto, String> {
+pub fn desktop_get_dashboard_summary(state: State<'_, DesktopState>, query: DashboardQueryDto) -> Result<DashboardSummaryDto, String> {
     state.dashboard_summary(query)
 }
 
 #[tauri::command]
-pub fn desktop_list_history(
-    state: State<'_, DesktopState>,
-    query: HistoryQueryDto,
-) -> Result<Vec<HistoryItemDto>, String> {
+pub fn desktop_list_history(state: State<'_, DesktopState>, query: HistoryQueryDto) -> Result<Vec<HistoryItemDto>, String> {
     state.list_history(query)
 }
 
 #[tauri::command]
-pub fn desktop_get_timeline(
-    state: State<'_, DesktopState>,
-    query: HistoryQueryDto,
-) -> Result<TimelineResultDto, String> {
+pub fn desktop_get_timeline(state: State<'_, DesktopState>, query: HistoryQueryDto) -> Result<TimelineResultDto, String> {
     state.timeline(query)
 }
 
 #[tauri::command]
-pub fn desktop_compare_runs(
-    state: State<'_, DesktopState>,
-    request: RunCompareRequestDto,
-) -> Result<RunCompareResultDto, String> {
+pub fn desktop_compare_runs(state: State<'_, DesktopState>, request: RunCompareRequestDto) -> Result<RunCompareResultDto, String> {
     state.compare_runs(request)
 }
 
 #[tauri::command]
-pub fn desktop_get_range_diff(
-    state: State<'_, DesktopState>,
-    query: RangeDiffQueryDto,
-) -> Result<RangeDiffResultDto, String> {
+pub fn desktop_get_range_diff(state: State<'_, DesktopState>, query: RangeDiffQueryDto) -> Result<RangeDiffResultDto, String> {
     state.get_range_diff(query)
 }
 
 #[tauri::command]
-pub fn desktop_detect_regression(
-    state: State<'_, DesktopState>,
-    query: RegressionQueryDto,
-) -> Result<RegressionResultDto, String> {
+pub fn desktop_detect_regression(state: State<'_, DesktopState>, query: RegressionQueryDto) -> Result<RegressionResultDto, String> {
     state.detect_regression(query)
 }
 
 #[tauri::command]
-pub fn desktop_list_branches(
-    state: State<'_, DesktopState>,
-    repo_path: Option<String>,
-) -> Result<Vec<GitRefDto>, String> {
+pub fn desktop_list_branches(state: State<'_, DesktopState>, repo_path: Option<String>) -> Result<Vec<GitRefDto>, String> {
     state.list_branches(repo_path)
 }
 
 #[tauri::command]
-pub fn desktop_list_tags(
-    state: State<'_, DesktopState>,
-    repo_path: Option<String>,
-) -> Result<Vec<GitRefDto>, String> {
+pub fn desktop_list_tags(state: State<'_, DesktopState>, repo_path: Option<String>) -> Result<Vec<GitRefDto>, String> {
     state.list_tags(repo_path)
 }

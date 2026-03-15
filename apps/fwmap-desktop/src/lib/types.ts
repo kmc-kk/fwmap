@@ -341,3 +341,108 @@ export type DashboardSummary = {
   topGrowthSources: TopGrowthEntry[];
   regionUsage: RegionUsage[];
 };
+
+
+export type ProjectSummary = {
+  projectId: number;
+  name: string;
+  rootPath: string;
+  gitRepoPath: string | null;
+  defaultRuleFilePath: string | null;
+  defaultTarget: string | null;
+  defaultProfile: string | null;
+  lastRunAt: string | null;
+  lastExportAt: string | null;
+};
+
+export type ProjectDetail = {
+  projectId: number;
+  name: string;
+  rootPath: string;
+  gitRepoPath: string | null;
+  defaultElfPath: string | null;
+  defaultMapPath: string | null;
+  defaultDebugPath: string | null;
+  defaultRuleFilePath: string | null;
+  defaultTarget: string | null;
+  defaultProfile: string | null;
+  defaultExportDir: string | null;
+  pinnedReportPath: string | null;
+  lastOpenedScreen: string | null;
+  lastOpenedFiltersJson: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateProjectRequest = {
+  name: string;
+  rootPath: string;
+  gitRepoPath: string | null;
+  defaultElfPath: string | null;
+  defaultMapPath: string | null;
+  defaultDebugPath: string | null;
+  defaultRuleFilePath: string | null;
+  defaultTarget: string | null;
+  defaultProfile: string | null;
+  defaultExportDir: string | null;
+};
+
+export type UpdateProjectRequest = Partial<CreateProjectRequest> & {
+  pinnedReportPath?: string | null;
+  lastOpenedScreen?: string | null;
+  lastOpenedFiltersJson?: string | null;
+};
+
+export type ActiveProjectState = {
+  activeProjectId: number | null;
+  activeProject: ProjectDetail | null;
+};
+
+export type PolicyDocument = {
+  path: string | null;
+  format: string;
+  content: string;
+  projectId: number | null;
+};
+
+export type PolicyValidationIssue = {
+  level: string;
+  message: string;
+  line: number | null;
+};
+
+export type PolicyValidationResult = {
+  ok: boolean;
+  issues: PolicyValidationIssue[];
+};
+
+export type ExportRequest = {
+  projectId?: number | null;
+  exportTarget: "run" | "diff" | "history" | "regression" | "dashboard";
+  format: "html" | "json" | "print-html";
+  destinationPath: string;
+  runId?: number | null;
+  compare?: RunCompareRequest | null;
+  historyQuery?: HistoryQuery | null;
+  rangeQuery?: RangeDiffQuery | null;
+  regressionQuery?: RegressionQuery | null;
+  dashboardQuery?: DashboardQuery | null;
+  title?: string | null;
+};
+
+export type ExportResult = {
+  destinationPath: string;
+  exportTarget: string;
+  format: string;
+  createdAt: string;
+};
+
+export type RecentExport = {
+  exportId: number;
+  projectId: number | null;
+  createdAt: string;
+  exportTarget: string;
+  format: string;
+  destinationPath: string;
+  title: string;
+};

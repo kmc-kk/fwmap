@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -18,14 +19,14 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::dto::{
-    AnalysisRequestDto, ChangedFilesSummaryDto, DashboardQueryDto, DashboardSummaryDto, DeltaEntryDto, DesktopAppInfo,
-    DesktopSettingsDto, FirstRuleViolationSummaryDto, GitRefDto, HistoryItemDto, HistoryQueryDto, JobEventDto, JobStatusDto,
-    MetricSummaryDto, OverviewCardDto, RangeDiffQueryDto, RangeDiffResultDto, RecentRegressionDto, RegionUsageDto,
+    ActiveProjectStateDto, AnalysisRequestDto, ChangedFilesSummaryDto, CreateProjectRequestDto, DashboardQueryDto, DashboardSummaryDto, DeltaEntryDto, DesktopAppInfo,
+    DesktopSettingsDto, ExportRequestDto, ExportResultDto, FirstRuleViolationSummaryDto, GitRefDto, HistoryItemDto, HistoryQueryDto, JobEventDto, JobStatusDto,
+    MetricSummaryDto, OverviewCardDto, PolicyDocumentDto, PolicyValidationIssueDto, PolicyValidationResultDto, ProjectDetailDto, ProjectSummaryDto, RangeDiffQueryDto, RangeDiffResultDto, RecentExportDto, RecentRegressionDto, RegionUsageDto,
     RegressionOriginPointDto, RegressionQueryDto, RegressionResultDto, RegressionWindowRowDto, RunCompareRequestDto,
     RunCompareResultDto, RunDetailDto, RunSummaryDto, TimelineEntryDto, TimelineResultDto, TopGrowthEntryDto,
-    TrendPointDto, TrendSeriesDto, WorstCommitSummaryDto,
+    TrendPointDto, TrendSeriesDto, UpdateProjectRequestDto, WorstCommitSummaryDto,
 };
-use crate::storage::{DesktopStorage, InsertRunRecord, StoredRunRecord};
+use crate::storage::{DesktopStorage, InsertExportRecord, InsertProjectRecord, InsertRunRecord, StoredProjectRecord, StoredRunRecord, UpdateProjectRecord};
 
 #[derive(Debug, Clone)]
 struct JobRecord {
@@ -70,6 +71,229 @@ impl DesktopState {
     pub fn save_settings(&self, settings: DesktopSettingsDto) -> Result<DesktopSettingsDto, String> {
         self.storage.save_settings(&settings)?;
         self.storage.load_settings()
+    }
+
+    pub fn list_projects(&self) -> Result<Vec<ProjectSummaryDto>, String> {
+        Ok(self
+            .storage
+            .list_projects()?
+            .into_iter()
+            .map(|item| ProjectSummaryDto {
+                project_id: item.project_id,
+                name: item.name,
+                root_path: item.root_path,
+                git_repo_path: item.git_repo_path,
+                default_rule_file_path: item.default_rule_file_path,
+                default_target: item.default_target,
+                default_profile: item.default_profile,
+                last_run_at: item.last_run_at,
+                last_export_at: item.last_export_at,
+            })
+            .collect())
+    }
+
+    pub fn create_project(&self, request: CreateProjectRequestDto) -> Result<ProjectDetailDto, String> {
+        if request.name.trim().is_empty() {
+            return Err("project name must not be empty".to_string());
+        }
+        if request.root_path.trim().is_empty() {
+            return Err("project root path must not be empty".to_string());
+        }
+        let now = now_rfc3339();
+        let project_id = self.storage.insert_project(&InsertProjectRecord {
+            name: request.name,
+            root_path: request.root_path,
+            git_repo_path: request.git_repo_path,
+            default_elf_path: request.default_elf_path,
+            default_map_path: request.default_map_path,
+            default_debug_path: request.default_debug_path,
+            default_rule_file_path: request.default_rule_file_path,
+            default_target: request.default_target,
+            default_profile: request.default_profile,
+            default_export_dir: request.default_export_dir,
+            created_at: now.clone(),
+            updated_at: now,
+        })?;
+        self.storage.set_active_project(Some(project_id))?;
+        let project = self.storage.get_project(project_id)?.ok_or_else(|| "created project was not found".to_string())?;
+        Ok(map_project_detail(project))
+    }
+
+    pub fn get_active_project(&self) -> Result<ActiveProjectStateDto, String> {
+        let active_project_id = self.storage.get_active_project_id()?;
+        let active_project = match active_project_id {
+            Some(project_id) => self.storage.get_project(project_id)?.map(map_project_detail),
+            None => None,
+        };
+        Ok(ActiveProjectStateDto { active_project_id, active_project })
+    }
+
+    pub fn set_active_project(&self, project_id: Option<i64>) -> Result<ActiveProjectStateDto, String> {
+        if let Some(project_id) = project_id {
+            if self.storage.get_project(project_id)?.is_none() {
+                return Err(format!("project {project_id} was not found"));
+            }
+        }
+        self.storage.set_active_project(project_id)?;
+        self.get_active_project()
+    }
+
+    pub fn update_project(&self, project_id: i64, patch: UpdateProjectRequestDto) -> Result<ProjectDetailDto, String> {
+        self.storage.update_project(project_id, &UpdateProjectRecord {
+            name: patch.name,
+            root_path: patch.root_path,
+            git_repo_path: patch.git_repo_path,
+            default_elf_path: patch.default_elf_path,
+            default_map_path: patch.default_map_path,
+            default_debug_path: patch.default_debug_path,
+            default_rule_file_path: patch.default_rule_file_path,
+            default_target: patch.default_target,
+            default_profile: patch.default_profile,
+            default_export_dir: patch.default_export_dir,
+            pinned_report_path: patch.pinned_report_path,
+            last_opened_screen: patch.last_opened_screen,
+            last_opened_filters_json: patch.last_opened_filters_json,
+            updated_at: now_rfc3339(),
+        })?;
+        let project = self.storage.get_project(project_id)?.ok_or_else(|| format!("project {project_id} was not found"))?;
+        Ok(map_project_detail(project))
+    }
+
+    pub fn delete_project(&self, project_id: i64) -> Result<(), String> {
+        self.storage.delete_project(project_id)
+    }
+
+    pub fn load_policy(&self, project_id: Option<i64>, path: Option<String>) -> Result<PolicyDocumentDto, String> {
+        let project = match project_id {
+            Some(project_id) => self.storage.get_project(project_id)?,
+            None => self.storage.get_active_project_id().and_then(|id| match id {
+                Some(project_id) => self.storage.get_project(project_id),
+                None => Ok(None),
+            })?,
+        };
+        let resolved_path = path
+            .or_else(|| project.as_ref().and_then(|item| item.default_rule_file_path.clone()))
+            .or_else(|| self.storage.load_settings().ok().and_then(|item| item.default_rule_file_path));
+        let content = match resolved_path.as_ref() {
+            Some(path) if Path::new(path).exists() => fs::read_to_string(path).map_err(|err| format!("failed to read policy '{}': {err}", path))?,
+            _ => String::new(),
+        };
+        Ok(PolicyDocumentDto {
+            path: resolved_path.clone(),
+            format: policy_format(resolved_path.as_deref()),
+            content,
+            project_id: project.as_ref().map(|item| item.project_id),
+        })
+    }
+
+    pub fn validate_policy(&self, document: PolicyDocumentDto) -> Result<PolicyValidationResultDto, String> {
+        let mut issues = Vec::new();
+        if document.content.trim().is_empty() {
+            issues.push(PolicyValidationIssueDto {
+                level: "error".to_string(),
+                message: "policy content must not be empty".to_string(),
+                line: None,
+            });
+        } else {
+            match document.format.as_str() {
+                "json" => {
+                    if let Err(err) = serde_json::from_str::<serde_json::Value>(&document.content) {
+                        issues.push(PolicyValidationIssueDto {
+                            level: "error".to_string(),
+                            message: format!("invalid JSON: {err}"),
+                            line: None,
+                        });
+                    }
+                }
+                _ => {
+                    if let Err(err) = toml::from_str::<toml::Value>(&document.content) {
+                        issues.push(PolicyValidationIssueDto {
+                            level: "error".to_string(),
+                            message: format!("invalid TOML: {err}"),
+                            line: None,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(PolicyValidationResultDto { ok: issues.is_empty(), issues })
+    }
+
+    pub fn save_policy(&self, document: PolicyDocumentDto) -> Result<PolicyDocumentDto, String> {
+        let validation = self.validate_policy(document.clone())?;
+        if !validation.ok {
+            return Err(validation.issues.first().map(|item| item.message.clone()).unwrap_or_else(|| "policy validation failed".to_string()));
+        }
+        let path = document.path.clone().ok_or_else(|| "policy path must be specified".to_string())?;
+        if let Some(parent) = Path::new(&path).parent() {
+            fs::create_dir_all(parent).map_err(|err| format!("failed to create policy directory '{}': {err}", parent.display()))?;
+        }
+        fs::write(&path, &document.content).map_err(|err| format!("failed to write policy '{}': {err}", path))?;
+        if let Some(project_id) = document.project_id {
+            self.storage.update_project(project_id, &UpdateProjectRecord {
+                name: None,
+                root_path: None,
+                git_repo_path: None,
+                default_elf_path: None,
+                default_map_path: None,
+                default_debug_path: None,
+                default_rule_file_path: Some(path.clone()),
+                default_target: None,
+                default_profile: None,
+                default_export_dir: None,
+                pinned_report_path: None,
+                last_opened_screen: Some("policy".to_string()),
+                last_opened_filters_json: None,
+                updated_at: now_rfc3339(),
+            })?;
+        }
+        Ok(document)
+    }
+
+    pub fn export_report(&self, request: ExportRequestDto) -> Result<ExportResultDto, String> {
+        if request.destination_path.trim().is_empty() {
+            return Err("destination path must not be empty".to_string());
+        }
+        let destination = PathBuf::from(&request.destination_path);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|err| format!("failed to create export directory '{}': {err}", parent.display()))?;
+        }
+        let payload = self.build_export_payload(&request)?;
+        match request.format.as_str() {
+            "json" => fs::write(&destination, serde_json::to_string_pretty(&payload).map_err(|err| format!("failed to serialize export JSON: {err}"))?)
+                .map_err(|err| format!("failed to write export '{}': {err}", destination.display()))?,
+            "print-html" => fs::write(&destination, render_export_html(&payload, true))
+                .map_err(|err| format!("failed to write export '{}': {err}", destination.display()))?,
+            _ => fs::write(&destination, render_export_html(&payload, false))
+                .map_err(|err| format!("failed to write export '{}': {err}", destination.display()))?,
+        }
+        let created_at = now_rfc3339();
+        self.storage.insert_recent_export(&InsertExportRecord {
+            project_id: request.project_id.or(self.storage.get_active_project_id()?),
+            created_at: created_at.clone(),
+            export_target: request.export_target.clone(),
+            format: request.format.clone(),
+            destination_path: request.destination_path.clone(),
+            title: request.title.clone().unwrap_or_else(|| request.export_target.clone()),
+        })?;
+        Ok(ExportResultDto {
+            destination_path: request.destination_path,
+            export_target: request.export_target,
+            format: request.format,
+            created_at,
+        })
+    }
+
+    pub fn list_recent_exports(&self, project_id: Option<i64>, limit: usize) -> Result<Vec<RecentExportDto>, String> {
+        Ok(self.storage.list_recent_exports(project_id, limit)?.into_iter().map(|item| RecentExportDto {
+            export_id: item.export_id,
+            project_id: item.project_id,
+            created_at: item.created_at,
+            export_target: item.export_target,
+            format: item.format,
+            destination_path: item.destination_path,
+            title: item.title,
+        }).collect())
     }
 
     pub fn list_recent_runs(&self, limit: usize, offset: usize) -> Result<Vec<RunSummaryDto>, String> {
@@ -135,6 +359,41 @@ impl DesktopState {
             top_growth_sources,
             region_usage,
         })
+    }
+
+    fn build_export_payload(&self, request: &ExportRequestDto) -> Result<serde_json::Value, String> {
+        match request.export_target.as_str() {
+            "run" => {
+                let run_id = request.run_id.ok_or_else(|| "run export requires run_id".to_string())?;
+                let detail = self.run_detail(run_id)?.ok_or_else(|| format!("run {run_id} was not found"))?;
+                serde_json::to_value(detail).map_err(|err| format!("failed to serialize run export: {err}"))
+            }
+            "diff" => {
+                let compare = request.compare.clone().ok_or_else(|| "diff export requires compare request".to_string())?;
+                let result = self.compare_runs(compare)?;
+                serde_json::to_value(result).map_err(|err| format!("failed to serialize diff export: {err}"))
+            }
+            "history" => {
+                if let Some(range_query) = request.range_query.clone() {
+                    let result = self.get_range_diff(range_query)?;
+                    serde_json::to_value(result).map_err(|err| format!("failed to serialize history export: {err}"))
+                } else {
+                    let query = request.history_query.clone().unwrap_or_default();
+                    let result = self.timeline(query)?;
+                    serde_json::to_value(result).map_err(|err| format!("failed to serialize history export: {err}"))
+                }
+            }
+            "regression" => {
+                let query = request.regression_query.clone().ok_or_else(|| "regression export requires regression query".to_string())?;
+                let result = self.detect_regression(query)?;
+                serde_json::to_value(result).map_err(|err| format!("failed to serialize regression export: {err}"))
+            }
+            _ => {
+                let query = request.dashboard_query.clone().unwrap_or_default();
+                let result = self.dashboard_summary(query)?;
+                serde_json::to_value(result).map_err(|err| format!("failed to serialize dashboard export: {err}"))
+            }
+        }
     }
 
     pub fn list_history(&self, query: HistoryQueryDto) -> Result<Vec<HistoryItemDto>, String> {
@@ -330,6 +589,8 @@ impl DesktopState {
 
     pub fn start_analysis(&self, app: AppHandle, request: AnalysisRequestDto) -> Result<JobStatusDto, String> {
         let settings = self.storage.load_settings()?;
+        let active_project = self.get_active_project()?.active_project;
+        let request = apply_project_defaults(request, active_project.as_ref());
         self.storage
             .remember_selected_files(request.elf_path.as_deref(), request.map_path.as_deref())?;
 
@@ -379,6 +640,7 @@ impl DesktopState {
         request: AnalysisRequestDto,
         job_id: &str,
     ) -> Result<(), String> {
+        let active_project = self.get_active_project()?.active_project;
         let elf_path = request
             .elf_path
             .as_deref()
@@ -483,6 +745,7 @@ impl DesktopState {
             .ok_or_else(|| format!("failed to load recorded build #{build_id}"))?;
 
         let run_id = self.storage.insert_recent_run(&InsertRunRecord {
+            project_id: active_project.as_ref().map(|item| item.project_id),
             build_id,
             created_at: now_rfc3339(),
             label: request.label,
@@ -1110,3 +1373,70 @@ fn format_time_short(value: &str) -> String {
     value.chars().take(16).collect()
 }
 
+
+
+fn map_project_detail(item: StoredProjectRecord) -> ProjectDetailDto {
+    ProjectDetailDto {
+        project_id: item.project_id,
+        name: item.name,
+        root_path: item.root_path,
+        git_repo_path: item.git_repo_path,
+        default_elf_path: item.default_elf_path,
+        default_map_path: item.default_map_path,
+        default_debug_path: item.default_debug_path,
+        default_rule_file_path: item.default_rule_file_path,
+        default_target: item.default_target,
+        default_profile: item.default_profile,
+        default_export_dir: item.default_export_dir,
+        pinned_report_path: item.pinned_report_path,
+        last_opened_screen: item.last_opened_screen,
+        last_opened_filters_json: item.last_opened_filters_json,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+    }
+}
+
+fn apply_project_defaults(mut request: AnalysisRequestDto, project: Option<&ProjectDetailDto>) -> AnalysisRequestDto {
+    if let Some(project) = project {
+        if request.elf_path.is_none() {
+            request.elf_path = project.default_elf_path.clone();
+        }
+        if request.map_path.is_none() {
+            request.map_path = project.default_map_path.clone();
+        }
+        if request.debug_path.is_none() {
+            request.debug_path = project.default_debug_path.clone();
+        }
+        if request.rule_file_path.is_none() {
+            request.rule_file_path = project.default_rule_file_path.clone();
+        }
+        if request.git_repo_path.is_none() {
+            request.git_repo_path = project.git_repo_path.clone();
+        }
+    }
+    request
+}
+
+fn policy_format(path: Option<&str>) -> String {
+    match path.and_then(|item| Path::new(item).extension()).and_then(|item| item.to_str()) {
+        Some("json") => "json".to_string(),
+        _ => "toml".to_string(),
+    }
+}
+
+fn render_export_html(payload: &serde_json::Value, print_friendly: bool) -> String {
+    let body = serde_json::to_string_pretty(payload).unwrap_or_else(|_| "{}".to_string());
+    let extra = if print_friendly {
+        "@media print { body { background: white; color: black; } pre { white-space: pre-wrap; } }"
+    } else {
+        ""
+    };
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>fwmap export</title><style>body{{font-family:Segoe UI,Noto Sans JP,sans-serif;background:#0f1726;color:#e5eefc;padding:24px;}}pre{{background:#111827;padding:16px;border-radius:16px;overflow:auto;}}{extra}</style></head><body><h1>fwmap export</h1><pre>{}</pre></body></html>",
+        html_escape(&body)
+    )
+}
+
+fn html_escape(input: &str) -> String {
+    input.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}

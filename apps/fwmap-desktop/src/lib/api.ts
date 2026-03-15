@@ -1,12 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  ActiveProjectState,
   AnalysisRequest,
+  CreateProjectRequest,
   DashboardQuery,
+  ExportRequest,
+  ExportResult,
   DashboardSummary,
   DesktopAppInfo,
   DesktopSettings,
   GitRef,
+  PolicyDocument,
+  PolicyValidationResult,
+  ProjectDetail,
+  ProjectSummary,
+  RecentExport,
   HistoryItem,
   HistoryQuery,
   JobStatus,
@@ -19,6 +28,7 @@ import type {
   RunDetail,
   RunSummary,
   TimelineResult,
+  UpdateProjectRequest,
 } from "./types";
 
 export async function getAppInfo(): Promise<DesktopAppInfo> {
@@ -31,6 +41,50 @@ export async function getSettings(): Promise<DesktopSettings> {
 
 export async function saveSettings(settings: DesktopSettings): Promise<DesktopSettings> {
   return invoke("desktop_save_settings", { settings });
+}
+
+export async function listProjects(): Promise<ProjectSummary[]> {
+  return invoke("desktop_list_projects");
+}
+
+export async function createProject(request: CreateProjectRequest): Promise<ProjectDetail> {
+  return invoke("desktop_create_project", { request });
+}
+
+export async function getActiveProject(): Promise<ActiveProjectState> {
+  return invoke("desktop_get_active_project");
+}
+
+export async function setActiveProject(projectId: number | null): Promise<ActiveProjectState> {
+  return invoke("desktop_set_active_project", { projectId });
+}
+
+export async function updateProject(projectId: number, patch: UpdateProjectRequest): Promise<ProjectDetail> {
+  return invoke("desktop_update_project", { projectId, patch });
+}
+
+export async function deleteProject(projectId: number): Promise<void> {
+  return invoke("desktop_delete_project", { projectId });
+}
+
+export async function loadPolicy(projectId?: number | null, path?: string | null): Promise<PolicyDocument> {
+  return invoke("desktop_load_policy", { projectId: projectId ?? null, path: path ?? null });
+}
+
+export async function validatePolicy(document: PolicyDocument): Promise<PolicyValidationResult> {
+  return invoke("desktop_validate_policy", { document });
+}
+
+export async function savePolicy(document: PolicyDocument): Promise<PolicyDocument> {
+  return invoke("desktop_save_policy", { document });
+}
+
+export async function exportReport(request: ExportRequest): Promise<ExportResult> {
+  return invoke("desktop_export_report", { request });
+}
+
+export async function listRecentExports(projectId?: number | null, limit = 20): Promise<RecentExport[]> {
+  return invoke("desktop_list_recent_exports", { projectId: projectId ?? null, limit });
 }
 
 export async function startAnalysis(request: AnalysisRequest): Promise<JobStatus> {
