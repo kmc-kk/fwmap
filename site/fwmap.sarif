@@ -10,24 +10,38 @@
           "informationUri": "",
           "rules": [
             {
-              "id": "DEBUG_ARTIFACT_NOT_FOUND",
-              "name": "DEBUG_ARTIFACT_NOT_FOUND",
+              "id": "DWARF_LINE_ZERO",
+              "name": "DWARF_LINE_ZERO",
               "shortDescription": {
-                "text": "No usable debug artifact was found for 'build/fwmap.elf'"
+                "text": "DWARF emitted 41631 line-0 ranges; these bytes were counted as unknown source"
               },
               "fullDescription": {
-                "text": "DEBUG_ARTIFACT_NOT_FOUND warning from elf"
+                "text": "DWARF_LINE_ZERO warning from elf"
               },
               "help": {
-                "text": "fwmap reported DEBUG_ARTIFACT_NOT_FOUND with severity info. Review the related entity and report context for the underlying evidence."
+                "text": "fwmap reported DWARF_LINE_ZERO with severity info. Review the related entity and report context for the underlying evidence."
               },
-              "helpUri": "/blob/main/README.md#debug_artifact_not_found"
+              "helpUri": "/blob/main/README.md#dwarf_line_zero"
+            },
+            {
+              "id": "DWARF_LINE_ZERO_RANGES",
+              "name": "DWARF_LINE_ZERO_RANGES",
+              "shortDescription": {
+                "text": "41631 DWARF ranges used line 0 and were counted as unknown source"
+              },
+              "fullDescription": {
+                "text": "DWARF_LINE_ZERO_RANGES warning from analyze"
+              },
+              "help": {
+                "text": "fwmap reported DWARF_LINE_ZERO_RANGES with severity info. Review the related entity and report context for the underlying evidence."
+              },
+              "helpUri": "/blob/main/README.md#dwarf_line_zero_ranges"
             },
             {
               "id": "LARGE_SYMBOL",
               "name": "LARGE_SYMBOL",
               "shortDescription": {
-                "text": "Large symbol detected: sqlite3VdbeExec (49115 bytes (47.96 KiB))"
+                "text": "Large symbol detected: sqlite3VdbeExec (54349 bytes (53.08 KiB))"
               },
               "fullDescription": {
                 "text": "LARGE_SYMBOL warning from analyze"
@@ -46,23 +60,28 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: sqlite3VdbeExec (49115 bytes (47.96 KiB))"
+            "text": "Large symbol detected: sqlite3VdbeExec (54349 bytes (53.08 KiB))"
           },
           "locations": [
             {
               "physicalLocation": {
                 "artifactLocation": {
-                  "uri": "sqlite3VdbeExec"
+                  "uri": "/usr/include/x86_64-linux-gnu/bits/string_fortified.h"
+                },
+                "region": {
+                  "startLine": 29,
+                  "endLine": 29,
+                  "startColumn": 10
                 }
               }
             }
           ],
           "partialFingerprints": {
-            "fwmap/v1": "ee26fe7da6953870"
+            "fwmap/v1": "d8ce27044b5276b9"
           },
           "properties": {
             "includePass": false,
-            "logicalIdentity": "related:sqlite3VdbeExec",
+            "logicalIdentity": "function:sqlite3/sqlite3.c:sqlite3VdbeExec",
             "related": "sqlite3VdbeExec",
             "source": "analyze",
             "symbol": "sqlite3VdbeExec"
@@ -73,26 +92,31 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h75e4fa34e7c912e2E.llvm.2657973373448331171 (39157 bytes (38.24 KiB))"
+            "text": "Large symbol detected: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf0c4ca3b3bfd44b1E.llvm.370660121305010300 (39157 bytes (38.24 KiB))"
           },
           "locations": [
             {
               "physicalLocation": {
                 "artifactLocation": {
-                  "uri": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h75e4fa34e7c912e2E.llvm.2657973373448331171"
+                  "uri": "/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gimli-0.31.1/src/common.rs"
+                },
+                "region": {
+                  "startLine": 43,
+                  "endLine": 43,
+                  "startColumn": 17
                 }
               }
             }
           ],
           "partialFingerprints": {
-            "fwmap/v1": "05850d38ae18df8a"
+            "fwmap/v1": "b66c6ad7c600c780"
           },
           "properties": {
             "includePass": false,
-            "logicalIdentity": "related:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h75e4fa34e7c912e2E.llvm.2657973373448331171",
-            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h75e4fa34e7c912e2E.llvm.2657973373448331171",
+            "logicalIdentity": "function:src/ingest/dwarf/mod.rs:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf0c4ca3b3bfd44b1E.llvm.370660121305010300",
+            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf0c4ca3b3bfd44b1E.llvm.370660121305010300",
             "source": "analyze",
-            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h75e4fa34e7c912e2E.llvm.2657973373448331171"
+            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf0c4ca3b3bfd44b1E.llvm.370660121305010300"
           }
         },
         {
@@ -100,26 +124,31 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: _ZN5fwmap3cli3run17h2ebea5cf0817cf1fE (32445 bytes (31.68 KiB))"
+            "text": "Large symbol detected: _ZN5fwmap3cli3run17h902937855dfe98b5E (32445 bytes (31.68 KiB))"
           },
           "locations": [
             {
               "physicalLocation": {
                 "artifactLocation": {
-                  "uri": "_ZN5fwmap3cli3run17h2ebea5cf0817cf1fE"
+                  "uri": "/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/src/lib.rs"
+                },
+                "region": {
+                  "startLine": 412,
+                  "endLine": 413,
+                  "startColumn": 9
                 }
               }
             }
           ],
           "partialFingerprints": {
-            "fwmap/v1": "730321b1c28f2971"
+            "fwmap/v1": "fb2b3618207180f9"
           },
           "properties": {
             "includePass": false,
-            "logicalIdentity": "related:_ZN5fwmap3cli3run17h2ebea5cf0817cf1fE",
-            "related": "_ZN5fwmap3cli3run17h2ebea5cf0817cf1fE",
+            "logicalIdentity": "function:src/cli/mod.rs:_ZN5fwmap3cli3run17h902937855dfe98b5E",
+            "related": "_ZN5fwmap3cli3run17h902937855dfe98b5E",
             "source": "analyze",
-            "symbol": "_ZN5fwmap3cli3run17h2ebea5cf0817cf1fE"
+            "symbol": "_ZN5fwmap3cli3run17h902937855dfe98b5E"
           }
         },
         {
@@ -127,26 +156,31 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: _ZN5fwmap6report6render10build_html17hac34121577da807fE (30684 bytes (29.96 KiB))"
+            "text": "Large symbol detected: _ZN5fwmap6report6render10build_html17h1db2a19e19b15918E (30684 bytes (29.96 KiB))"
           },
           "locations": [
             {
               "physicalLocation": {
                 "artifactLocation": {
-                  "uri": "_ZN5fwmap6report6render10build_html17hac34121577da807fE"
+                  "uri": "/rustc/4a4ef493e3a1488c6e321570238084b38948f6db/library/alloc/src/alloc.rs"
+                },
+                "region": {
+                  "startLine": 95,
+                  "endLine": 95,
+                  "startColumn": 9
                 }
               }
             }
           ],
           "partialFingerprints": {
-            "fwmap/v1": "0d7a047d27e0e0da"
+            "fwmap/v1": "b51f3288ffaca05f"
           },
           "properties": {
             "includePass": false,
-            "logicalIdentity": "related:_ZN5fwmap6report6render10build_html17hac34121577da807fE",
-            "related": "_ZN5fwmap6report6render10build_html17hac34121577da807fE",
+            "logicalIdentity": "function:src/report/render.rs:_ZN5fwmap6report6render10build_html17h1db2a19e19b15918E",
+            "related": "_ZN5fwmap6report6render10build_html17h1db2a19e19b15918E",
             "source": "analyze",
-            "symbol": "_ZN5fwmap6report6render10build_html17hac34121577da807fE"
+            "symbol": "_ZN5fwmap6report6render10build_html17h1db2a19e19b15918E"
           }
         },
         {
@@ -154,26 +188,31 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: _ZN5fwmap3cli18parse_history_args17h133d415979133042E (27391 bytes (26.75 KiB))"
+            "text": "Large symbol detected: _ZN5fwmap3cli18parse_history_args17hd96dbb732e392fa2E (27391 bytes (26.75 KiB))"
           },
           "locations": [
             {
               "physicalLocation": {
                 "artifactLocation": {
-                  "uri": "_ZN5fwmap3cli18parse_history_args17h133d415979133042E"
+                  "uri": "/rustc/4a4ef493e3a1488c6e321570238084b38948f6db/library/alloc/src/alloc.rs"
+                },
+                "region": {
+                  "startLine": 95,
+                  "endLine": 95,
+                  "startColumn": 9
                 }
               }
             }
           ],
           "partialFingerprints": {
-            "fwmap/v1": "495f28d4f565511e"
+            "fwmap/v1": "3494c71c76dcf818"
           },
           "properties": {
             "includePass": false,
-            "logicalIdentity": "related:_ZN5fwmap3cli18parse_history_args17h133d415979133042E",
-            "related": "_ZN5fwmap3cli18parse_history_args17h133d415979133042E",
+            "logicalIdentity": "function:src/cli/mod.rs:_ZN5fwmap3cli18parse_history_args17hd96dbb732e392fa2E",
+            "related": "_ZN5fwmap3cli18parse_history_args17hd96dbb732e392fa2E",
             "source": "analyze",
-            "symbol": "_ZN5fwmap3cli18parse_history_args17h133d415979133042E"
+            "symbol": "_ZN5fwmap3cli18parse_history_args17hd96dbb732e392fa2E"
           }
         }
       ]
