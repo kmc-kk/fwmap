@@ -13,7 +13,7 @@
               "id": "DWARF_LINE_ZERO",
               "name": "DWARF_LINE_ZERO",
               "shortDescription": {
-                "text": "DWARF emitted 41623 line-0 ranges; these bytes were counted as unknown source"
+                "text": "DWARF emitted 43894 line-0 ranges; these bytes were counted as unknown source"
               },
               "fullDescription": {
                 "text": "DWARF_LINE_ZERO warning from elf"
@@ -36,6 +36,20 @@
                 "text": "fwmap reported LARGE_SYMBOL with severity warn. Review the related entity and report context for the underlying evidence."
               },
               "helpUri": "/blob/main/README.md#large_symbol"
+            },
+            {
+              "id": "SYMBOL_SPIKE",
+              "name": "SYMBOL_SPIKE",
+              "shortDescription": {
+                "text": "Symbol growth spike: _ZN5fwmap6report6render10build_html17h781bc39c939a8a53E (+30684)"
+              },
+              "fullDescription": {
+                "text": "SYMBOL_SPIKE warning from analyze"
+              },
+              "help": {
+                "text": "fwmap reported SYMBOL_SPIKE with severity warn. Review the related entity and report context for the underlying evidence."
+              },
+              "helpUri": "/blob/main/README.md#symbol_spike"
             }
           ]
         }
@@ -78,39 +92,7 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf0c4ca3b3bfd44b1E.llvm.17256929961334323678 (39157 bytes (38.24 KiB))"
-          },
-          "locations": [
-            {
-              "physicalLocation": {
-                "artifactLocation": {
-                  "uri": "/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gimli-0.31.1/src/common.rs"
-                },
-                "region": {
-                  "startLine": 43,
-                  "endLine": 43,
-                  "startColumn": 17
-                }
-              }
-            }
-          ],
-          "partialFingerprints": {
-            "fwmap/v1": "b97eaaecbc69f6ee"
-          },
-          "properties": {
-            "includePass": false,
-            "logicalIdentity": "function:src/ingest/dwarf/mod.rs:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf0c4ca3b3bfd44b1E.llvm.17256929961334323678",
-            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf0c4ca3b3bfd44b1E.llvm.17256929961334323678",
-            "source": "analyze",
-            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf0c4ca3b3bfd44b1E.llvm.17256929961334323678"
-          }
-        },
-        {
-          "ruleId": "LARGE_SYMBOL",
-          "level": "warning",
-          "kind": "fail",
-          "message": {
-            "text": "Large symbol detected: _ZN5fwmap3cli3run17h902937855dfe98b5E (32445 bytes (31.68 KiB))"
+            "text": "Large symbol detected: _ZN5fwmap3cli3run17h902937855dfe98b5E (34722 bytes (33.91 KiB))"
           },
           "locations": [
             {
@@ -142,7 +124,7 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: _ZN5fwmap6report6render10build_html17h1db2a19e19b15918E (29813 bytes (29.11 KiB))"
+            "text": "Large symbol detected: _ZN5fwmap6report6render10build_html17h781bc39c939a8a53E (30684 bytes (29.96 KiB))"
           },
           "locations": [
             {
@@ -159,14 +141,14 @@
             }
           ],
           "partialFingerprints": {
-            "fwmap/v1": "b51f3288ffaca05f"
+            "fwmap/v1": "bef8af06a9a3b03d"
           },
           "properties": {
             "includePass": false,
-            "logicalIdentity": "function:src/report/render.rs:_ZN5fwmap6report6render10build_html17h1db2a19e19b15918E",
-            "related": "_ZN5fwmap6report6render10build_html17h1db2a19e19b15918E",
+            "logicalIdentity": "function:src/report/render.rs:_ZN5fwmap6report6render10build_html17h781bc39c939a8a53E",
+            "related": "_ZN5fwmap6report6render10build_html17h781bc39c939a8a53E",
             "source": "analyze",
-            "symbol": "_ZN5fwmap6report6render10build_html17h1db2a19e19b15918E"
+            "symbol": "_ZN5fwmap6report6render10build_html17h781bc39c939a8a53E"
           }
         },
         {
@@ -174,7 +156,39 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: _ZN5fwmap3cli18parse_history_args17hd96dbb732e392fa2E (27391 bytes (26.75 KiB))"
+            "text": "Large symbol detected: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h2fc08a94da17defcE.llvm.8184858701668755593 (29616 bytes (28.92 KiB))"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gimli-0.31.1/src/common.rs"
+                },
+                "region": {
+                  "startLine": 43,
+                  "endLine": 43,
+                  "startColumn": 17
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "fwmap/v1": "692f36a0d34882c2"
+          },
+          "properties": {
+            "includePass": false,
+            "logicalIdentity": "function:src/ingest/dwarf/mod.rs:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h2fc08a94da17defcE.llvm.8184858701668755593",
+            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h2fc08a94da17defcE.llvm.8184858701668755593",
+            "source": "analyze",
+            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h2fc08a94da17defcE.llvm.8184858701668755593"
+          }
+        },
+        {
+          "ruleId": "LARGE_SYMBOL",
+          "level": "warning",
+          "kind": "fail",
+          "message": {
+            "text": "Large symbol detected: _ZN5fwmap3cli10parse_args17h4baafd7f729b986cE (27920 bytes (27.27 KiB))"
           },
           "locations": [
             {
@@ -191,14 +205,46 @@
             }
           ],
           "partialFingerprints": {
-            "fwmap/v1": "3494c71c76dcf818"
+            "fwmap/v1": "ee6d7bba44b3dffd"
           },
           "properties": {
             "includePass": false,
-            "logicalIdentity": "function:src/cli/mod.rs:_ZN5fwmap3cli18parse_history_args17hd96dbb732e392fa2E",
-            "related": "_ZN5fwmap3cli18parse_history_args17hd96dbb732e392fa2E",
+            "logicalIdentity": "function:src/cli/mod.rs:_ZN5fwmap3cli10parse_args17h4baafd7f729b986cE",
+            "related": "_ZN5fwmap3cli10parse_args17h4baafd7f729b986cE",
             "source": "analyze",
-            "symbol": "_ZN5fwmap3cli18parse_history_args17hd96dbb732e392fa2E"
+            "symbol": "_ZN5fwmap3cli10parse_args17h4baafd7f729b986cE"
+          }
+        },
+        {
+          "ruleId": "SYMBOL_SPIKE",
+          "level": "warning",
+          "kind": "fail",
+          "message": {
+            "text": "Symbol growth spike: _ZN5fwmap6report6render10build_html17h781bc39c939a8a53E (+30684)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/rustc/4a4ef493e3a1488c6e321570238084b38948f6db/library/alloc/src/alloc.rs"
+                },
+                "region": {
+                  "startLine": 95,
+                  "endLine": 95,
+                  "startColumn": 9
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "fwmap/v1": "7af54b9297557472"
+          },
+          "properties": {
+            "includePass": false,
+            "logicalIdentity": "function:src/report/render.rs:_ZN5fwmap6report6render10build_html17h781bc39c939a8a53E",
+            "related": "_ZN5fwmap6report6render10build_html17h781bc39c939a8a53E",
+            "source": "analyze",
+            "symbol": "_ZN5fwmap6report6render10build_html17h781bc39c939a8a53E"
           }
         }
       ]
