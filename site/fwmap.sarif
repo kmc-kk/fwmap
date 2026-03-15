@@ -36,20 +36,6 @@
                 "text": "fwmap reported LARGE_SYMBOL with severity warn. Review the related entity and report context for the underlying evidence."
               },
               "helpUri": "/blob/main/README.md#large_symbol"
-            },
-            {
-              "id": "SYMBOL_SPIKE",
-              "name": "SYMBOL_SPIKE",
-              "shortDescription": {
-                "text": "Symbol growth spike: _ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE (+35608)"
-              },
-              "fullDescription": {
-                "text": "SYMBOL_SPIKE warning from analyze"
-              },
-              "help": {
-                "text": "fwmap reported SYMBOL_SPIKE with severity warn. Review the related entity and report context for the underlying evidence."
-              },
-              "helpUri": "/blob/main/README.md#symbol_spike"
             }
           ]
         }
@@ -213,38 +199,6 @@
             "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12021140761502075759",
             "source": "analyze",
             "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12021140761502075759"
-          }
-        },
-        {
-          "ruleId": "SYMBOL_SPIKE",
-          "level": "warning",
-          "kind": "fail",
-          "message": {
-            "text": "Symbol growth spike: _ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE (+35608)"
-          },
-          "locations": [
-            {
-              "physicalLocation": {
-                "artifactLocation": {
-                  "uri": "/rustc/4a4ef493e3a1488c6e321570238084b38948f6db/library/alloc/src/alloc.rs"
-                },
-                "region": {
-                  "startLine": 93,
-                  "endLine": 93,
-                  "startColumn": 9
-                }
-              }
-            }
-          ],
-          "partialFingerprints": {
-            "fwmap/v1": "150be4732068ee1f"
-          },
-          "properties": {
-            "includePass": false,
-            "logicalIdentity": "function:src/report/render.rs:_ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE",
-            "related": "_ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE",
-            "source": "analyze",
-            "symbol": "_ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE"
           }
         }
       ]
