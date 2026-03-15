@@ -18,6 +18,12 @@ import type {
   RecentExport,
   HistoryItem,
   HistoryQuery,
+  InspectorBreakdown,
+  InspectorDetail,
+  InspectorHierarchyNode,
+  InspectorQuery,
+  InspectorSelection,
+  InspectorSummary,
   JobStatus,
   RangeDiffQuery,
   RangeDiffResult,
@@ -27,6 +33,7 @@ import type {
   RunCompareResult,
   RunDetail,
   RunSummary,
+  SourceContext,
   TimelineResult,
   UpdateProjectRequest,
 } from "./types";
@@ -137,4 +144,25 @@ export async function listBranches(repoPath?: string | null): Promise<GitRef[]> 
 
 export async function listTags(repoPath?: string | null): Promise<GitRef[]> {
   return invoke("desktop_list_tags", { repoPath: repoPath ?? null });
+}
+
+
+export async function getInspectorSummary(query: InspectorQuery): Promise<InspectorSummary> {
+  return invoke("desktop_get_inspector_summary", { query });
+}
+
+export async function getInspectorBreakdown(query: InspectorQuery): Promise<InspectorBreakdown> {
+  return invoke("desktop_get_inspector_breakdown", { query });
+}
+
+export async function getInspectorHierarchy(query: InspectorQuery): Promise<InspectorHierarchyNode[]> {
+  return invoke("desktop_get_inspector_hierarchy", { query });
+}
+
+export async function getInspectorDetail(query: InspectorQuery, selection: InspectorSelection): Promise<InspectorDetail> {
+  return invoke("desktop_get_inspector_detail", { query, selection });
+}
+
+export async function getSourceContext(query: InspectorQuery, selection: InspectorSelection): Promise<SourceContext> {
+  return invoke("desktop_get_source_context", { query, selection });
 }

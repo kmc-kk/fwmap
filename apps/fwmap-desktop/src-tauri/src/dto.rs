@@ -554,3 +554,108 @@ pub struct ExportResultDto {
     pub format: String,
     pub created_at: String,
 }
+
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectorQueryDto {
+    pub run_id: Option<i64>,
+    pub build_id: Option<i64>,
+    pub left_run_id: Option<i64>,
+    pub right_run_id: Option<i64>,
+    pub view_mode: String,
+    pub group_by: String,
+    pub metric: String,
+    pub search: Option<String>,
+    pub top_n: Option<usize>,
+    pub threshold_min: Option<i64>,
+    pub only_increased: Option<bool>,
+    pub only_decreased: Option<bool>,
+    pub debug_info_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectorSelectionDto {
+    pub stable_id: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectorSummaryDto {
+    pub context_label: String,
+    pub source_kind: String,
+    pub entity_count: usize,
+    pub total_size_bytes: u64,
+    pub total_delta_bytes: i64,
+    pub debug_info_available: bool,
+    pub available_views: Vec<String>,
+    pub available_visualizations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectorItemDto {
+    pub stable_id: String,
+    pub display_label: String,
+    pub raw_label: String,
+    pub kind: String,
+    pub size_bytes: u64,
+    pub delta_bytes: i64,
+    pub percentage: f64,
+    pub parent_id: Option<String>,
+    pub has_children: bool,
+    pub source_available: bool,
+    pub metadata: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectorBreakdownDto {
+    pub query: InspectorQueryDto,
+    pub items: Vec<InspectorItemDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectorHierarchyNodeDto {
+    pub stable_id: String,
+    pub label: String,
+    pub kind: String,
+    pub size_bytes: u64,
+    pub delta_bytes: i64,
+    pub percentage: f64,
+    pub source_available: bool,
+    pub children: Vec<InspectorHierarchyNodeDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectorDetailDto {
+    pub stable_id: String,
+    pub label: String,
+    pub kind: String,
+    pub size_bytes: u64,
+    pub delta_bytes: i64,
+    pub parent_label: Option<String>,
+    pub source_available: bool,
+    pub metadata: std::collections::BTreeMap<String, String>,
+    pub related_rule_violations: Vec<String>,
+    pub related_regression_evidence: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceContextDto {
+    pub path: Option<String>,
+    pub function_name: Option<String>,
+    pub line_start: Option<u64>,
+    pub line_end: Option<u64>,
+    pub excerpt: Option<String>,
+    pub compile_unit: Option<String>,
+    pub crate_name: Option<String>,
+    pub related_sections: Vec<String>,
+    pub related_regions: Vec<String>,
+    pub availability_reason: Option<String>,
+}

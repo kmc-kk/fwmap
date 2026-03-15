@@ -14,16 +14,16 @@ use fwmap::core::history::{
 use fwmap::core::model::{DwarfMode, SourceLinesMode};
 use fwmap::core::rule_config::{apply_threshold_overrides, load_rule_config};
 use fwmap::report::render::{SourceRenderOptions, write_html_report, write_json_report};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::dto::{
     ActiveProjectStateDto, AnalysisRequestDto, ChangedFilesSummaryDto, CreateProjectRequestDto, DashboardQueryDto, DashboardSummaryDto, DeltaEntryDto, DesktopAppInfo,
-    DesktopSettingsDto, ExportRequestDto, ExportResultDto, FirstRuleViolationSummaryDto, GitRefDto, HistoryItemDto, HistoryQueryDto, JobEventDto, JobStatusDto,
+    DesktopSettingsDto, ExportRequestDto, ExportResultDto, FirstRuleViolationSummaryDto, GitRefDto, HistoryItemDto, HistoryQueryDto, InspectorBreakdownDto, InspectorDetailDto, InspectorHierarchyNodeDto, InspectorItemDto, InspectorQueryDto, InspectorSelectionDto, InspectorSummaryDto, JobEventDto, JobStatusDto,
     MetricSummaryDto, OverviewCardDto, PolicyDocumentDto, PolicyValidationIssueDto, PolicyValidationResultDto, ProjectDetailDto, ProjectSummaryDto, RangeDiffQueryDto, RangeDiffResultDto, RecentExportDto, RecentRegressionDto, RegionUsageDto,
     RegressionOriginPointDto, RegressionQueryDto, RegressionResultDto, RegressionWindowRowDto, RunCompareRequestDto,
-    RunCompareResultDto, RunDetailDto, RunSummaryDto, TimelineEntryDto, TimelineResultDto, TopGrowthEntryDto,
+    RunCompareResultDto, RunDetailDto, RunSummaryDto, SourceContextDto, TimelineEntryDto, TimelineResultDto, TopGrowthEntryDto,
     TrendPointDto, TrendSeriesDto, UpdateProjectRequestDto, WorstCommitSummaryDto,
 };
 use crate::storage::{DesktopStorage, InsertExportRecord, InsertProjectRecord, InsertRunRecord, StoredProjectRecord, StoredRunRecord, UpdateProjectRecord};
@@ -569,6 +569,131 @@ impl DesktopState {
         let settings = self.storage.load_settings()?;
         let repo_path = resolve_repo_path(repo_path.as_deref(), &settings);
         list_git_refs(repo_path.as_deref(), "refs/tags", "tag")
+    }
+
+    pub fn get_inspector_summary(&self, query: InspectorQueryDto) -> Result<InspectorSummaryDto, String> {
+        let context = self.resolve_inspector_context(&query)?;
+        let conn = Connection::open(&context.db_path)
+            .map_err(|err| format!("failed to open history database '{}': {err}", context.db_path.display()))?;
+        let rows = load_inspector_rows(&conn, context.current_build_id, context.previous_build_id, &normalize_inspector_query(query.clone()))?;
+        let total_size_bytes = rows.iter().map(|item| item.size_bytes).sum::<u64>();
+        let total_delta_bytes = rows.iter().map(|item| item.delta_bytes).sum::<i64>();
+        Ok(InspectorSummaryDto {
+            context_label: context.context_label,
+            source_kind: context.source_kind,
+            entity_count: rows.len(),
+            total_size_bytes,
+            total_delta_bytes,
+            debug_info_available: context.debug_info_available,
+            available_views: vec![
+                "region-section".to_string(),
+                "source-file".to_string(),
+                "function-symbol".to_string(),
+                "crate-dependency".to_string(),
+            ],
+            available_visualizations: vec!["treemap".to_string(), "icicle".to_string(), "table".to_string()],
+        })
+    }
+
+    pub fn get_inspector_breakdown(&self, query: InspectorQueryDto) -> Result<InspectorBreakdownDto, String> {
+        let query = normalize_inspector_query(query);
+        let context = self.resolve_inspector_context(&query)?;
+        let conn = Connection::open(&context.db_path)
+            .map_err(|err| format!("failed to open history database '{}': {err}", context.db_path.display()))?;
+        Ok(InspectorBreakdownDto {
+            query: query.clone(),
+            items: load_inspector_rows(&conn, context.current_build_id, context.previous_build_id, &query)?,
+        })
+    }
+
+    pub fn get_inspector_hierarchy(&self, query: InspectorQueryDto) -> Result<Vec<InspectorHierarchyNodeDto>, String> {
+        let query = normalize_inspector_query(query);
+        let context = self.resolve_inspector_context(&query)?;
+        let conn = Connection::open(&context.db_path)
+            .map_err(|err| format!("failed to open history database '{}': {err}", context.db_path.display()))?;
+        let rows = load_inspector_rows(&conn, context.current_build_id, context.previous_build_id, &query)?;
+        Ok(build_inspector_hierarchy(&rows, &query))
+    }
+
+    pub fn get_inspector_detail(&self, query: InspectorQueryDto, selection: InspectorSelectionDto) -> Result<InspectorDetailDto, String> {
+        let query = normalize_inspector_query(query);
+        let context = self.resolve_inspector_context(&query)?;
+        let conn = Connection::open(&context.db_path)
+            .map_err(|err| format!("failed to open history database '{}': {err}", context.db_path.display()))?;
+        let rows = load_inspector_rows(&conn, context.current_build_id, context.previous_build_id, &query)?;
+        let item = rows
+            .into_iter()
+            .find(|item| item.stable_id == selection.stable_id)
+            .ok_or_else(|| format!("inspector item '{}' was not found", selection.stable_id))?;
+        Ok(InspectorDetailDto {
+            stable_id: item.stable_id,
+            label: item.display_label.clone(),
+            kind: item.kind.clone(),
+            size_bytes: item.size_bytes,
+            delta_bytes: item.delta_bytes,
+            parent_label: item.parent_id.clone(),
+            source_available: item.source_available,
+            metadata: item.metadata,
+            related_rule_violations: load_related_rule_hits(&conn, context.current_build_id, &item.display_label)?,
+            related_regression_evidence: build_related_regression_evidence(&query, &context),
+        })
+    }
+
+    pub fn get_source_context(&self, query: InspectorQueryDto, selection: InspectorSelectionDto) -> Result<SourceContextDto, String> {
+        let query = normalize_inspector_query(query);
+        let context = self.resolve_inspector_context(&query)?;
+        let conn = Connection::open(&context.db_path)
+            .map_err(|err| format!("failed to open history database '{}': {err}", context.db_path.display()))?;
+        load_source_context(&conn, context.current_build_id, &selection)
+    }
+
+    fn resolve_inspector_context(&self, query: &InspectorQueryDto) -> Result<InspectorContext, String> {
+        let settings = self.storage.load_settings()?;
+        if let (Some(left_run_id), Some(right_run_id)) = (query.left_run_id, query.right_run_id) {
+            let left = self.storage.get_recent_run(left_run_id)?.ok_or_else(|| format!("run {left_run_id} was not found"))?;
+            let right = self.storage.get_recent_run(right_run_id)?.ok_or_else(|| format!("run {right_run_id} was not found"))?;
+            return Ok(InspectorContext {
+                db_path: PathBuf::from(&right.history_db_path),
+                current_build_id: right.build_id,
+                previous_build_id: Some(left.build_id),
+                context_label: format!("Diff #{left_run_id} -> #{right_run_id}"),
+                source_kind: "diff".to_string(),
+                debug_info_available: build_has_debug_info(Path::new(&right.history_db_path), right.build_id)?,
+            });
+        }
+        if let Some(run_id) = query.run_id {
+            let current = self.storage.get_recent_run(run_id)?.ok_or_else(|| format!("run {run_id} was not found"))?;
+            let previous = self.storage.list_recent_runs(50, 0)?.into_iter().find(|item| item.run_id != run_id);
+            return Ok(InspectorContext {
+                db_path: PathBuf::from(&current.history_db_path),
+                current_build_id: current.build_id,
+                previous_build_id: previous.as_ref().map(|item| item.build_id),
+                context_label: format!("Run #{run_id}"),
+                source_kind: "run".to_string(),
+                debug_info_available: build_has_debug_info(Path::new(&settings.history_db_path), current.build_id)?,
+            });
+        }
+        if let Some(build_id) = query.build_id {
+            let history_db_path = PathBuf::from(&settings.history_db_path);
+            return Ok(InspectorContext {
+                db_path: history_db_path.clone(),
+                current_build_id: build_id,
+                previous_build_id: None,
+                context_label: format!("Build #{build_id}"),
+                source_kind: "history".to_string(),
+                debug_info_available: build_has_debug_info(&history_db_path, build_id)?,
+            });
+        }
+        let current = self.storage.list_recent_runs(1, 0)?.into_iter().next().ok_or_else(|| "no runs are available yet".to_string())?;
+        let previous = self.storage.list_recent_runs(20, 0)?.into_iter().find(|item| item.run_id != current.run_id);
+        Ok(InspectorContext {
+            db_path: PathBuf::from(&settings.history_db_path),
+            current_build_id: current.build_id,
+            previous_build_id: previous.as_ref().map(|item| item.build_id),
+            context_label: format!("Run #{}", current.run_id),
+            source_kind: "run".to_string(),
+            debug_info_available: build_has_debug_info(Path::new(&settings.history_db_path), current.build_id)?,
+        })
     }
 
     pub fn get_job_status(&self, job_id: &str) -> Result<Option<JobStatusDto>, String> {
@@ -1241,6 +1366,576 @@ fn now_rfc3339() -> String {
     Utc::now().to_rfc3339()
 }
 
+
+
+#[derive(Debug, Clone)]
+struct InspectorContext {
+    db_path: PathBuf,
+    current_build_id: i64,
+    previous_build_id: Option<i64>,
+    context_label: String,
+    source_kind: String,
+    debug_info_available: bool,
+}
+
+#[derive(Debug, Clone)]
+struct InspectorRowRecord {
+    stable_id: String,
+    display_label: String,
+    raw_label: String,
+    kind: String,
+    parent_id: Option<String>,
+    size_bytes: u64,
+    source_available: bool,
+    metadata: BTreeMap<String, String>,
+}
+
+fn normalize_inspector_query(mut query: InspectorQueryDto) -> InspectorQueryDto {
+    if query.view_mode.trim().is_empty() {
+        query.view_mode = "region-section".to_string();
+    }
+    if query.group_by.trim().is_empty() {
+        query.group_by = match query.view_mode.as_str() {
+            "source-file" => "file",
+            "function-symbol" => "function",
+            "crate-dependency" => "crate",
+            _ => "section",
+        }
+        .to_string();
+    }
+    if query.metric.trim().is_empty() {
+        query.metric = "size".to_string();
+    }
+    if query.top_n.is_none() {
+        query.top_n = Some(24);
+    }
+    query
+}
+
+fn build_has_debug_info(db_path: &Path, build_id: i64) -> Result<bool, String> {
+    let conn = Connection::open(db_path)
+        .map_err(|err| format!("failed to open history database '{}': {err}", db_path.display()))?;
+    let value = conn
+        .query_row(
+            "SELECT dwarf_used FROM debug_metrics WHERE build_id = ?1 LIMIT 1",
+            params![build_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|err| format!("failed to query debug_metrics: {err}"))?;
+    Ok(value.unwrap_or_default() != 0)
+}
+
+fn load_inspector_rows(
+    conn: &Connection,
+    current_build_id: i64,
+    previous_build_id: Option<i64>,
+    query: &InspectorQueryDto,
+) -> Result<Vec<InspectorItemDto>, String> {
+    let current = match query.group_by.as_str() {
+        "region" => load_region_rows(conn, current_build_id)?,
+        "section" => load_section_rows(conn, current_build_id)?,
+        "file" => load_source_file_rows(conn, current_build_id)?,
+        "directory" => load_directory_rows(conn, current_build_id)?,
+        "function" => load_function_rows(conn, current_build_id)?,
+        "symbol" => load_symbol_rows(conn, current_build_id)?,
+        "dependency" => load_rust_scope_rows(conn, current_build_id, "dependency")?,
+        "crate" => load_rust_scope_rows(conn, current_build_id, "crate")?,
+        _ => load_section_rows(conn, current_build_id)?,
+    };
+    let previous_map = match previous_build_id {
+        Some(build_id) => load_previous_map(conn, build_id, query)?,
+        None => BTreeMap::new(),
+    };
+    let total = current.iter().map(|item| item.size_bytes).sum::<u64>().max(1);
+    let mut items = current
+        .into_iter()
+        .map(|item| {
+            let delta_bytes = item.size_bytes as i64 - previous_map.get(&item.stable_id).copied().unwrap_or_default();
+            InspectorItemDto {
+                stable_id: item.stable_id,
+                display_label: item.display_label,
+                raw_label: item.raw_label,
+                kind: item.kind,
+                size_bytes: item.size_bytes,
+                delta_bytes,
+                percentage: item.size_bytes as f64 / total as f64,
+                parent_id: item.parent_id,
+                has_children: false,
+                source_available: item.source_available,
+                metadata: item.metadata,
+            }
+        })
+        .collect::<Vec<_>>();
+    mark_hierarchy_flags(&mut items, query);
+    apply_inspector_filters(&mut items, query);
+    Ok(items)
+}
+
+fn load_previous_map(conn: &Connection, build_id: i64, query: &InspectorQueryDto) -> Result<BTreeMap<String, i64>, String> {
+    let rows = match query.group_by.as_str() {
+        "region" => load_region_rows(conn, build_id)?,
+        "section" => load_section_rows(conn, build_id)?,
+        "file" => load_source_file_rows(conn, build_id)?,
+        "directory" => load_directory_rows(conn, build_id)?,
+        "function" => load_function_rows(conn, build_id)?,
+        "symbol" => load_symbol_rows(conn, build_id)?,
+        "dependency" => load_rust_scope_rows(conn, build_id, "dependency")?,
+        "crate" => load_rust_scope_rows(conn, build_id, "crate")?,
+        _ => load_section_rows(conn, build_id)?,
+    };
+    Ok(rows.into_iter().map(|item| (item.stable_id, item.size_bytes as i64)).collect())
+}
+
+fn load_region_rows(conn: &Connection, build_id: i64) -> Result<Vec<InspectorRowRecord>, String> {
+    let mut stmt = conn
+        .prepare("SELECT region_name, used_bytes, free_bytes, usage_ratio FROM region_metrics WHERE build_id = ?1 ORDER BY used_bytes DESC, region_name ASC")
+        .map_err(|err| format!("failed to prepare region inspector query: {err}"))?;
+    let rows = stmt
+        .query_map(params![build_id], |row| {
+            let name = row.get::<_, String>(0)?;
+            let mut metadata = BTreeMap::new();
+            metadata.insert("freeBytes".to_string(), row.get::<_, i64>(2)?.to_string());
+            metadata.insert("usageRatio".to_string(), format!("{:.3}", row.get::<_, f64>(3)?));
+            Ok(InspectorRowRecord {
+                stable_id: format!("region:{name}"),
+                display_label: name.clone(),
+                raw_label: name.clone(),
+                kind: "region".to_string(),
+                parent_id: None,
+                size_bytes: row.get::<_, i64>(1)? as u64,
+                source_available: false,
+                metadata,
+            })
+        })
+        .map_err(|err| format!("failed to query region inspector rows: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|err| format!("failed to collect region inspector rows: {err}"))
+}
+
+fn load_section_rows(conn: &Connection, build_id: i64) -> Result<Vec<InspectorRowRecord>, String> {
+    let mut stmt = conn
+        .prepare("SELECT section_name, size_bytes, category FROM section_metrics WHERE build_id = ?1 ORDER BY size_bytes DESC, section_name ASC")
+        .map_err(|err| format!("failed to prepare section inspector query: {err}"))?;
+    let rows = stmt
+        .query_map(params![build_id], |row| {
+            let name = row.get::<_, String>(0)?;
+            let category = row.get::<_, String>(2)?;
+            let mut metadata = BTreeMap::new();
+            metadata.insert("category".to_string(), category.clone());
+            Ok(InspectorRowRecord {
+                stable_id: format!("section:{name}"),
+                display_label: name.clone(),
+                raw_label: name.clone(),
+                kind: "section".to_string(),
+                parent_id: Some(format!("region:{category}")),
+                size_bytes: row.get::<_, i64>(1)? as u64,
+                source_available: false,
+                metadata,
+            })
+        })
+        .map_err(|err| format!("failed to query section inspector rows: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|err| format!("failed to collect section inspector rows: {err}"))
+}
+
+fn load_source_file_rows(conn: &Connection, build_id: i64) -> Result<Vec<InspectorRowRecord>, String> {
+    let mut stmt = conn
+        .prepare("SELECT path, display_path, directory, size_bytes, function_count, line_range_count FROM source_file_metrics WHERE build_id = ?1 ORDER BY size_bytes DESC, display_path ASC")
+        .map_err(|err| format!("failed to prepare source file inspector query: {err}"))?;
+    let rows = stmt
+        .query_map(params![build_id], |row| {
+            let path = row.get::<_, String>(0)?;
+            let display_path = row.get::<_, String>(1)?;
+            let directory = row.get::<_, String>(2)?;
+            let mut metadata = BTreeMap::new();
+            metadata.insert("path".to_string(), path.clone());
+            metadata.insert("directory".to_string(), directory.clone());
+            metadata.insert("functionCount".to_string(), row.get::<_, i64>(4)?.to_string());
+            metadata.insert("lineRangeCount".to_string(), row.get::<_, i64>(5)?.to_string());
+            Ok(InspectorRowRecord {
+                stable_id: format!("file:{display_path}"),
+                display_label: display_path.clone(),
+                raw_label: path.clone(),
+                kind: "file".to_string(),
+                parent_id: Some(format!("directory:{directory}")),
+                size_bytes: row.get::<_, i64>(3)? as u64,
+                source_available: true,
+                metadata,
+            })
+        })
+        .map_err(|err| format!("failed to query source file inspector rows: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|err| format!("failed to collect source file inspector rows: {err}"))
+}
+
+fn load_directory_rows(conn: &Connection, build_id: i64) -> Result<Vec<InspectorRowRecord>, String> {
+    let mut stmt = conn
+        .prepare("SELECT directory, SUM(size_bytes), SUM(function_count), SUM(line_range_count) FROM source_file_metrics WHERE build_id = ?1 GROUP BY directory ORDER BY SUM(size_bytes) DESC, directory ASC")
+        .map_err(|err| format!("failed to prepare directory inspector query: {err}"))?;
+    let rows = stmt
+        .query_map(params![build_id], |row| {
+            let directory = row.get::<_, String>(0)?;
+            let mut metadata = BTreeMap::new();
+            metadata.insert("functionCount".to_string(), row.get::<_, i64>(2)?.to_string());
+            metadata.insert("lineRangeCount".to_string(), row.get::<_, i64>(3)?.to_string());
+            Ok(InspectorRowRecord {
+                stable_id: format!("directory:{directory}"),
+                display_label: directory.clone(),
+                raw_label: directory.clone(),
+                kind: "directory".to_string(),
+                parent_id: None,
+                size_bytes: row.get::<_, i64>(1)? as u64,
+                source_available: true,
+                metadata,
+            })
+        })
+        .map_err(|err| format!("failed to query directory inspector rows: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|err| format!("failed to collect directory inspector rows: {err}"))
+}
+
+fn load_function_rows(conn: &Connection, build_id: i64) -> Result<Vec<InspectorRowRecord>, String> {
+    let mut stmt = conn
+        .prepare("SELECT function_key, raw_name, COALESCE(demangled_name, raw_name), COALESCE(path, '-'), size_bytes FROM function_metrics WHERE build_id = ?1 ORDER BY size_bytes DESC, raw_name ASC")
+        .map_err(|err| format!("failed to prepare function inspector query: {err}"))?;
+    let rows = stmt
+        .query_map(params![build_id], |row| {
+            let key = row.get::<_, String>(0)?;
+            let raw_name = row.get::<_, String>(1)?;
+            let display = row.get::<_, String>(2)?;
+            let path_value = row.get::<_, String>(3)?;
+            let mut metadata = BTreeMap::new();
+            metadata.insert("path".to_string(), path_value.clone());
+            metadata.insert("rawName".to_string(), raw_name.clone());
+            Ok(InspectorRowRecord {
+                stable_id: format!("function:{key}"),
+                display_label: display.clone(),
+                raw_label: raw_name,
+                kind: "function".to_string(),
+                parent_id: Some(format!("file:{path_value}")),
+                size_bytes: row.get::<_, i64>(4)? as u64,
+                source_available: path_value != "-",
+                metadata,
+            })
+        })
+        .map_err(|err| format!("failed to query function inspector rows: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|err| format!("failed to collect function inspector rows: {err}"))
+}
+
+fn load_symbol_rows(conn: &Connection, build_id: i64) -> Result<Vec<InspectorRowRecord>, String> {
+    let mut stmt = conn
+        .prepare("SELECT name, COALESCE(demangled_name, name), size_bytes FROM symbol_metrics WHERE build_id = ?1 ORDER BY size_bytes DESC, name ASC")
+        .map_err(|err| format!("failed to prepare symbol inspector query: {err}"))?;
+    let rows = stmt
+        .query_map(params![build_id], |row| {
+            let raw = row.get::<_, String>(0)?;
+            let display = row.get::<_, String>(1)?;
+            let mut metadata = BTreeMap::new();
+            metadata.insert("rawName".to_string(), raw.clone());
+            Ok(InspectorRowRecord {
+                stable_id: format!("symbol:{raw}"),
+                display_label: display,
+                raw_label: raw,
+                kind: "symbol".to_string(),
+                parent_id: None,
+                size_bytes: row.get::<_, i64>(2)? as u64,
+                source_available: false,
+                metadata,
+            })
+        })
+        .map_err(|err| format!("failed to query symbol inspector rows: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|err| format!("failed to collect symbol inspector rows: {err}"))
+}
+
+fn load_rust_scope_rows(conn: &Connection, build_id: i64, scope: &str) -> Result<Vec<InspectorRowRecord>, String> {
+    let mut stmt = conn
+        .prepare("SELECT name, size_bytes, symbol_count FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = ?2 ORDER BY size_bytes DESC, name ASC")
+        .map_err(|err| format!("failed to prepare rust inspector query: {err}"))?;
+    let rows = stmt
+        .query_map(params![build_id, scope], |row| {
+            let name = row.get::<_, String>(0)?;
+            let mut metadata = BTreeMap::new();
+            metadata.insert("symbolCount".to_string(), row.get::<_, i64>(2)?.to_string());
+            Ok(InspectorRowRecord {
+                stable_id: format!("{scope}:{name}"),
+                display_label: name.clone(),
+                raw_label: name.clone(),
+                kind: scope.to_string(),
+                parent_id: None,
+                size_bytes: row.get::<_, i64>(1)? as u64,
+                source_available: scope == "crate",
+                metadata,
+            })
+        })
+        .map_err(|err| format!("failed to query rust inspector rows: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|err| format!("failed to collect rust inspector rows: {err}"))
+}
+
+fn mark_hierarchy_flags(items: &mut [InspectorItemDto], query: &InspectorQueryDto) {
+    let has_children = items.iter().filter_map(|item| item.parent_id.clone()).collect::<Vec<_>>();
+    for item in items.iter_mut() {
+        item.has_children = has_children.iter().any(|parent| parent == &item.stable_id)
+            || matches!(query.view_mode.as_str(), "region-section") && item.kind == "region"
+            || matches!(query.view_mode.as_str(), "source-file") && item.kind == "directory";
+    }
+}
+
+fn apply_inspector_filters(items: &mut Vec<InspectorItemDto>, query: &InspectorQueryDto) {
+    if let Some(search) = query.search.as_ref().map(|value| value.to_ascii_lowercase()).filter(|value| !value.is_empty()) {
+        items.retain(|item| item.display_label.to_ascii_lowercase().contains(&search) || item.raw_label.to_ascii_lowercase().contains(&search));
+    }
+    if let Some(threshold_min) = query.threshold_min {
+        items.retain(|item| item.size_bytes as i64 >= threshold_min || item.delta_bytes.unsigned_abs() as i64 >= threshold_min);
+    }
+    if query.only_increased.unwrap_or(false) {
+        items.retain(|item| item.delta_bytes > 0);
+    }
+    if query.only_decreased.unwrap_or(false) {
+        items.retain(|item| item.delta_bytes < 0);
+    }
+    if query.debug_info_only.unwrap_or(false) {
+        items.retain(|item| item.source_available);
+    }
+    if query.metric == "delta" {
+        items.sort_by(|a, b| b.delta_bytes.abs().cmp(&a.delta_bytes.abs()).then_with(|| a.display_label.cmp(&b.display_label)));
+    } else {
+        items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes).then_with(|| a.display_label.cmp(&b.display_label)));
+    }
+    items.truncate(query.top_n.unwrap_or(24));
+}
+
+fn build_inspector_hierarchy(items: &[InspectorItemDto], query: &InspectorQueryDto) -> Vec<InspectorHierarchyNodeDto> {
+    let mut grouped = BTreeMap::<String, Vec<&InspectorItemDto>>::new();
+    for item in items {
+        if let Some(parent) = item.parent_id.as_ref() {
+            grouped.entry(parent.clone()).or_default().push(item);
+        }
+    }
+    let mut roots = Vec::new();
+    if query.view_mode == "region-section" {
+        let mut section_totals = BTreeMap::<String, (u64, i64)>::new();
+        for item in items.iter().filter(|item| item.kind == "section") {
+            let parent = item.parent_id.clone().unwrap_or_else(|| "region:other".to_string());
+            let entry = section_totals.entry(parent).or_insert((0, 0));
+            entry.0 += item.size_bytes;
+            entry.1 += item.delta_bytes;
+        }
+        for (stable_id, (size_bytes, delta_bytes)) in section_totals {
+            let label = stable_id.split_once(':').map(|(_, name)| name.to_string()).unwrap_or_else(|| stable_id.clone());
+            let children = grouped.get(&stable_id).cloned().unwrap_or_default();
+            roots.push(InspectorHierarchyNodeDto {
+                stable_id: stable_id.clone(),
+                label,
+                kind: "region".to_string(),
+                size_bytes,
+                delta_bytes,
+                percentage: 0.0,
+                source_available: false,
+                children: children.into_iter().map(map_hierarchy_leaf).collect(),
+            });
+        }
+    } else if query.view_mode == "source-file" {
+        let mut directory_totals = BTreeMap::<String, (u64, i64)>::new();
+        for item in items.iter().filter(|item| item.kind == "file") {
+            let parent = item.parent_id.clone().unwrap_or_else(|| "directory:-".to_string());
+            let entry = directory_totals.entry(parent).or_insert((0, 0));
+            entry.0 += item.size_bytes;
+            entry.1 += item.delta_bytes;
+        }
+        for (stable_id, (size_bytes, delta_bytes)) in directory_totals {
+            let label = stable_id.split_once(':').map(|(_, name)| name.to_string()).unwrap_or_else(|| stable_id.clone());
+            let children = grouped.get(&stable_id).cloned().unwrap_or_default();
+            roots.push(InspectorHierarchyNodeDto {
+                stable_id: stable_id.clone(),
+                label,
+                kind: "directory".to_string(),
+                size_bytes,
+                delta_bytes,
+                percentage: 0.0,
+                source_available: true,
+                children: children.into_iter().map(map_hierarchy_leaf).collect(),
+            });
+        }
+    } else {
+        roots = items.iter().map(map_hierarchy_leaf).collect();
+    }
+    let total = roots.iter().map(|item| item.size_bytes).sum::<u64>().max(1);
+    for item in &mut roots {
+        item.percentage = item.size_bytes as f64 / total as f64;
+        let child_total = item.children.iter().map(|child| child.size_bytes).sum::<u64>().max(1);
+        for child in &mut item.children {
+            child.percentage = child.size_bytes as f64 / child_total as f64;
+        }
+    }
+    roots.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes).then_with(|| a.label.cmp(&b.label)));
+    roots.truncate(query.top_n.unwrap_or(24).min(16));
+    roots
+}
+
+fn map_hierarchy_leaf(item: &InspectorItemDto) -> InspectorHierarchyNodeDto {
+    InspectorHierarchyNodeDto {
+        stable_id: item.stable_id.clone(),
+        label: item.display_label.clone(),
+        kind: item.kind.clone(),
+        size_bytes: item.size_bytes,
+        delta_bytes: item.delta_bytes,
+        percentage: item.percentage,
+        source_available: item.source_available,
+        children: Vec::new(),
+    }
+}
+
+fn load_related_rule_hits(conn: &Connection, build_id: i64, label: &str) -> Result<Vec<String>, String> {
+    let like = format!("%{label}%");
+    let mut stmt = conn
+        .prepare("SELECT code, level, message FROM rule_results WHERE build_id = ?1 AND (related LIKE ?2 OR message LIKE ?2) ORDER BY id ASC LIMIT 8")
+        .map_err(|err| format!("failed to prepare related rule query: {err}"))?;
+    let rows = stmt
+        .query_map(params![build_id, like], |row| Ok(format!("{} / {} / {}", row.get::<_, String>(1)?, row.get::<_, String>(0)?, row.get::<_, String>(2)?)))
+        .map_err(|err| format!("failed to query related rule hits: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|err| format!("failed to collect related rule hits: {err}"))
+}
+
+fn build_related_regression_evidence(query: &InspectorQueryDto, context: &InspectorContext) -> Vec<String> {
+    let mut items = vec![format!("Context: {}", context.context_label)];
+    if let (Some(left), Some(right)) = (query.left_run_id, query.right_run_id) {
+        items.push(format!("Derived from run diff #{left} -> #{right}"));
+    }
+    if let Some(run_id) = query.run_id {
+        items.push(format!("Derived from run #{run_id}"));
+    }
+    items
+}
+
+fn load_source_context(conn: &Connection, build_id: i64, selection: &InspectorSelectionDto) -> Result<SourceContextDto, String> {
+    match selection.kind.as_str() {
+        "file" | "directory" => load_file_source_context(conn, build_id, selection),
+        "function" => load_function_source_context(conn, build_id, selection),
+        "crate" => Ok(SourceContextDto {
+            path: None,
+            function_name: None,
+            line_start: None,
+            line_end: None,
+            excerpt: None,
+            compile_unit: None,
+            crate_name: selection.stable_id.split_once(':').map(|(_, value)| value.to_string()),
+            related_sections: Vec::new(),
+            related_regions: Vec::new(),
+            availability_reason: Some("crate-level source context is not available in Phase D5 desktop yet".to_string()),
+        }),
+        _ => Ok(SourceContextDto {
+            path: None,
+            function_name: None,
+            line_start: None,
+            line_end: None,
+            excerpt: None,
+            compile_unit: None,
+            crate_name: None,
+            related_sections: Vec::new(),
+            related_regions: Vec::new(),
+            availability_reason: Some("source context is unavailable for this item kind".to_string()),
+        }),
+    }
+}
+
+fn load_file_source_context(conn: &Connection, build_id: i64, selection: &InspectorSelectionDto) -> Result<SourceContextDto, String> {
+    if selection.kind == "directory" {
+        return Ok(SourceContextDto {
+            path: selection.stable_id.split_once(':').map(|(_, value)| value.to_string()),
+            function_name: None,
+            line_start: None,
+            line_end: None,
+            excerpt: None,
+            compile_unit: selection.stable_id.split_once(':').map(|(_, value)| value.to_string()),
+            crate_name: None,
+            related_sections: Vec::new(),
+            related_regions: Vec::new(),
+            availability_reason: Some("directory view summarizes source files; select an individual file for more detail".to_string()),
+        });
+    }
+    let path_value = selection.stable_id.split_once(':').map(|(_, value)| value.to_string()).unwrap_or_else(|| selection.stable_id.clone());
+    let mut stmt = conn
+        .prepare("SELECT path, directory, function_count, line_range_count FROM source_file_metrics WHERE build_id = ?1 AND display_path = ?2 LIMIT 1")
+        .map_err(|err| format!("failed to prepare file source context query: {err}"))?;
+    let row = stmt
+        .query_row(params![build_id, path_value], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .optional()
+        .map_err(|err| format!("failed to query file source context: {err}"))?;
+    match row {
+        Some((path, directory, function_count, line_range_count)) => Ok(SourceContextDto {
+            path: Some(path),
+            function_name: None,
+            line_start: None,
+            line_end: None,
+            excerpt: Some(format!("Source file attributed in DWARF. Functions: {function_count}, line ranges: {line_range_count}.")),
+            compile_unit: Some(directory),
+            crate_name: None,
+            related_sections: Vec::new(),
+            related_regions: Vec::new(),
+            availability_reason: Some("line excerpts are not embedded; this is a metadata summary".to_string()),
+        }),
+        None => Ok(SourceContextDto {
+            path: None,
+            function_name: None,
+            line_start: None,
+            line_end: None,
+            excerpt: None,
+            compile_unit: None,
+            crate_name: None,
+            related_sections: Vec::new(),
+            related_regions: Vec::new(),
+            availability_reason: Some("source file detail was not found for the selected item".to_string()),
+        }),
+    }
+}
+
+fn load_function_source_context(conn: &Connection, build_id: i64, selection: &InspectorSelectionDto) -> Result<SourceContextDto, String> {
+    let key = selection.stable_id.split_once(':').map(|(_, value)| value.to_string()).unwrap_or_else(|| selection.stable_id.clone());
+    let mut stmt = conn
+        .prepare("SELECT COALESCE(path, '-'), COALESCE(demangled_name, raw_name), raw_name, size_bytes FROM function_metrics WHERE build_id = ?1 AND function_key = ?2 LIMIT 1")
+        .map_err(|err| format!("failed to prepare function source context query: {err}"))?;
+    let row = stmt
+        .query_row(params![build_id, key], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .optional()
+        .map_err(|err| format!("failed to query function source context: {err}"))?;
+    match row {
+        Some((path, function_name, raw_name, size_bytes)) => Ok(SourceContextDto {
+            path: (path != "-").then_some(path),
+            function_name: Some(function_name),
+            line_start: None,
+            line_end: None,
+            excerpt: Some(format!("Function '{raw_name}' accounts for {} bytes in this build.", size_bytes)),
+            compile_unit: None,
+            crate_name: None,
+            related_sections: Vec::new(),
+            related_regions: Vec::new(),
+            availability_reason: Some("exact source lines are unavailable in the current desktop inspector".to_string()),
+        }),
+        None => Ok(SourceContextDto {
+            path: None,
+            function_name: None,
+            line_start: None,
+            line_end: None,
+            excerpt: None,
+            compile_unit: None,
+            crate_name: None,
+            related_sections: Vec::new(),
+            related_regions: Vec::new(),
+            availability_reason: Some("function detail was not found for the selected item".to_string()),
+        }),
+    }
+}
 
 fn build_dashboard_cards(
     history_items: &[HistoryItemDto],
