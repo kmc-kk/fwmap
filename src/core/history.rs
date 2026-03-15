@@ -894,22 +894,30 @@ pub fn range_diff(
     let commits = list_range_commits(repo, &resolved.git_range, order)?;
     let all_builds = list_builds(db_path)?;
     let build_map = latest_build_by_commit(&all_builds, &repo_root);
-    let mut rows = Vec::new();
-    let mut previous_by_variant = HashMap::<String, BuildRecord>::new();
+    let mut timeline_items = Vec::<(GitCommit, BuildRecord)>::new();
     let mut analyzed_builds = Vec::<BuildRecord>::new();
-    for commit in &commits {
+    for commit in commits.iter() {
         let Some(build) = build_map.get(&commit.commit).cloned() else {
             continue;
         };
         if !matches_filters(&build, profile, toolchain, target, None) {
             continue;
         }
-        let variant = variant_key(&build);
-        let metric_diff = previous_by_variant.get(&variant).map(|prev| build_metric_diff(db_path, build.id, prev.id)).transpose()?;
-        rows.push(build_timeline_row(&repo_root, commit, &build, metric_diff.as_ref()));
-        previous_by_variant.insert(variant, build.clone());
+        timeline_items.push((commit.clone(), build.clone()));
         analyzed_builds.push(build);
     }
+    let mut rows = Vec::with_capacity(timeline_items.len());
+    let mut next_older_by_variant = HashMap::<String, BuildRecord>::new();
+    for (commit, build) in timeline_items.into_iter().rev() {
+        let variant = variant_key(&build);
+        let diff = next_older_by_variant
+            .get(&variant)
+            .map(|older| build_metric_diff(db_path, build.id, older.id))
+            .transpose()?;
+        rows.push(build_timeline_row(&repo_root, &commit, &build, diff.as_ref()));
+        next_older_by_variant.insert(variant, build);
+    }
+    rows.reverse();
     let mut cumulative_rom_delta = 0i64;
     let mut cumulative_ram_delta = 0i64;
     let mut worst_commit_by_rom = None;
@@ -1895,12 +1903,20 @@ pub fn write_range_diff_html(path: &Path, report: &RangeDiffReport) -> Result<()
         .timeline_rows
         .iter()
         .map(|row| {
+            let rom_delta = row
+                .rom_delta_vs_previous
+                .map(|value| format!("{value:+}"))
+                .unwrap_or_else(|| "-".to_string());
+            let ram_delta = row
+                .ram_delta_vs_previous
+                .map(|value| format!("{value:+}"))
+                .unwrap_or_else(|| "-".to_string());
             format!(
-                "<tr><td><code>{}</code></td><td>{}</td><td>{:+}</td><td>{:+}</td><td>{}</td></tr>",
+                "<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                 escape_html(&row.short_commit),
                 escape_html(&row.subject),
-                row.rom_delta_vs_previous.unwrap_or(0),
-                row.ram_delta_vs_previous.unwrap_or(0),
+                rom_delta,
+                ram_delta,
                 row.rule_violations_count
             )
         })
@@ -2694,7 +2710,10 @@ mod tests {
         assert_eq!(report.total_commits_in_git_range, 2);
         assert_eq!(report.analyzed_commits_count, 2);
         assert_eq!(report.missing_analysis_commits_count, 0);
-        assert_eq!(report.cumulative_rom_delta, -60);
+        assert_eq!(report.timeline_rows[0].subject, "third commit");
+        assert_eq!(report.timeline_rows[0].rom_delta_vs_previous, Some(60));
+        assert_eq!(report.timeline_rows[1].rom_delta_vs_previous, None);
+        assert_eq!(report.cumulative_rom_delta, 60);
         assert!(report.changed_files_summary.as_ref().unwrap().intersection_count >= 1);
         let _ = fs::remove_file(db);
         let _ = fs::remove_dir_all(repo);
