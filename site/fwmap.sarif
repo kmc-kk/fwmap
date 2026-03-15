@@ -36,20 +36,6 @@
                 "text": "fwmap reported LARGE_SYMBOL with severity warn. Review the related entity and report context for the underlying evidence."
               },
               "helpUri": "/blob/main/README.md#large_symbol"
-            },
-            {
-              "id": "SYMBOL_SPIKE",
-              "name": "SYMBOL_SPIKE",
-              "shortDescription": {
-                "text": "Symbol growth spike: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf0c4ca3b3bfd44b1E.llvm.17256929961334323678 (+39157)"
-              },
-              "fullDescription": {
-                "text": "SYMBOL_SPIKE warning from analyze"
-              },
-              "help": {
-                "text": "fwmap reported SYMBOL_SPIKE with severity warn. Review the related entity and report context for the underlying evidence."
-              },
-              "helpUri": "/blob/main/README.md#symbol_spike"
             }
           ]
         }
@@ -213,38 +199,6 @@
             "related": "_ZN5fwmap3cli18parse_history_args17hd96dbb732e392fa2E",
             "source": "analyze",
             "symbol": "_ZN5fwmap3cli18parse_history_args17hd96dbb732e392fa2E"
-          }
-        },
-        {
-          "ruleId": "SYMBOL_SPIKE",
-          "level": "warning",
-          "kind": "fail",
-          "message": {
-            "text": "Symbol growth spike: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf0c4ca3b3bfd44b1E.llvm.17256929961334323678 (+39157)"
-          },
-          "locations": [
-            {
-              "physicalLocation": {
-                "artifactLocation": {
-                  "uri": "/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gimli-0.31.1/src/common.rs"
-                },
-                "region": {
-                  "startLine": 43,
-                  "endLine": 43,
-                  "startColumn": 17
-                }
-              }
-            }
-          ],
-          "partialFingerprints": {
-            "fwmap/v1": "1269d50fbb573f87"
-          },
-          "properties": {
-            "includePass": false,
-            "logicalIdentity": "function:src/ingest/dwarf/mod.rs:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf0c4ca3b3bfd44b1E.llvm.17256929961334323678",
-            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf0c4ca3b3bfd44b1E.llvm.17256929961334323678",
-            "source": "analyze",
-            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf0c4ca3b3bfd44b1E.llvm.17256929961334323678"
           }
         }
       ]
