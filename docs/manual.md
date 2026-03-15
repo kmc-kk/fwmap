@@ -52,6 +52,18 @@
 - 外部ルール設定の高度化
 - debuginfod の実ネットワーク取得
 
+## 2.1 ROM / RAM サイズの見方
+
+`fwmap` の ROM / RAM 集計は、ELF section の属性をもとにした runtime-oriented なヒューリスティックです。
+
+- `ROM`: `.text`、`.rodata`、割り込みベクタ、その他の read-only / executable な `ALLOC` section
+- `RAM`: `.data`、`.bss`、その他の writable な `ALLOC` section
+- `ALLOC` を持たない section は、実行時メモリ使用量には含めません
+- memory region の使用率は、linker script の region 定義と ELF section address を組み合わせて別途求めます
+- `.debug_*` や `.zdebug_*` のようなデバッグ用 section は、実行時フットプリントに影響しないため、HTML の Memory Summary や Section Breakdown には含めません
+
+つまり `fwmap` は単純に section 名だけで判定しているわけではなく、ELF の属性を優先して ROM / RAM に振り分けています。linker script を併用したときは、ROM / RAM 合計に加えて、実際にどの region に配置されたかを region 表示で確認できます。
+
 ## 3. ビルドとテスト
 
 前提:

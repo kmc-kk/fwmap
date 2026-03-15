@@ -45,6 +45,18 @@ Run the full test suite:
 cargo test
 ```
 
+## How ROM/RAM Are Classified
+
+`fwmap` classifies section sizes with a runtime-oriented heuristic based on ELF section flags and common firmware conventions.
+
+- `ROM` means allocated sections that are read-only or executable, such as `.text`, `.rodata`, interrupt vectors, and similar flash-resident payloads
+- `RAM` means allocated sections that require writable memory at runtime, such as `.data`, `.bss`, stack-like writable areas, and similar RAM-resident payloads
+- sections without `ALLOC` are not counted as runtime memory usage
+- memory-region usage is derived separately from linker script regions plus ELF section addresses, so region bars and ROM/RAM totals are related but not identical views
+- HTML runtime summaries intentionally exclude non-runtime debug sections such as `.debug_*` and `.zdebug_*`, because their growth does not affect runtime footprint
+
+In practice this means `fwmap` is not simply summing section names. It uses ELF metadata first, then presents the result in the familiar ROM/RAM split used in embedded reviews. When linker scripts are present, region views provide the more concrete placement picture on top of that heuristic.
+
 ## Desktop App
 
 `apps/fwmap-desktop/` contains a Tauri 2 desktop shell that reuses the existing `fwmap` Rust core. The desktop app is aimed at local investigation workflows where we want file picking, recent runs, visual history, drill-down inspection, reusable projects, and shareable investigation bundles in one place.
