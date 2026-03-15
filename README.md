@@ -4,37 +4,50 @@
 
 ## Scope
 
-- ELF32 / ELF64 parsing
-- GNU ld and LLVM lld style map parsing
-- explicit `--map-format auto|gnu|lld-native` selection for native map text detection
-- GNU ld linker script subset parsing (`MEMORY`, `SECTIONS`, `> REGION`, `AT`, `ALIGN`, `KEEP`)
-- DWARF line-table parsing with `gimli`
-- ROM/RAM summary and section breakdown
-- Top symbols and top object contributions
-- Optional previous-build diff
-- Classified diff analysis for sections, symbols, objects, and archive members
-- Memory region overview and section-to-region placement summary
-- Fixed-threshold warnings
-- Rule-based warning evaluation
-- External TOML rule configuration
-- C++ symbol demangling control
-- Optional DWARF-backed source file, function, and line-range attribution
-- Separate debug, build-id, and split DWARF sidecar resolution
-- C++ symbol classification and aggregate summaries for classes, templates, and runtime overhead
-- JSON report output
-- SARIF 2.1.0 report output
-- Why-linked explanation for symbols, objects, archive members, and sections
-- CI summary in text / markdown / JSON formats
-- warning-based exit control
-- SQLite-backed history recording and trend inspection
-- Rust Cargo metadata / build JSON ingestion and artifact discovery
-- Rust View aggregations for packages, targets, crates, dependency crates, source files, grouped families, and symbols
-- Graceful degradation for missing symbol tables and partially broken map files
-- Toolchain auto-detection and parser-family selection
-- `--verbose` and `--version` CLI support
-- Offline HTML report generation
+- Analyze firmware `ELF` plus GNU ld / LLVM lld `map` files and emit a standalone HTML report
+- Summarize ROM/RAM usage, section layout, symbols, objects, archives, and build-to-build diffs
+- Attribute bytes back to source files, functions, and line ranges with optional DWARF support
+- Explain why symbols, objects, archive members, and sections were linked
+- Export machine-readable JSON, SARIF, and CI-oriented text / markdown / JSON summaries
+- Track history in SQLite with Git-aware timeline, range diff, regression, and trend queries
+- Support C++ demangling / grouping and Rust Cargo ingestion / Rust View aggregation
+- Degrade cleanly when map files, symbol tables, or debug artifacts are partial or missing
+
+## Quick Start
+
+Build the binary:
+
+```bash
+cargo build
+```
+
+Build an optimized release binary:
+
+```bash
+cargo build --release
+```
+
+Run the CLI directly from source:
+
+```bash
+cargo run -- analyze --elf path/to/app.elf
+```
+
+Or invoke the built binary:
+
+```bash
+./target/debug/fwmap analyze --elf path/to/app.elf
+```
+
+Run the full test suite:
+
+```bash
+cargo test
+```
 
 ## Usage
+
+Basic analysis:
 
 ```bash
 cargo run -- analyze --elf path/to/app.elf
@@ -604,9 +617,46 @@ The HTML report now includes lightweight client-side search and filtering for so
 
 ## Development
 
+Prerequisites:
+
+- Rust toolchain with `cargo`
+- A sample `ELF` and optional linker `map` file if you want to exercise the CLI manually
+
+Build commands:
+
+```bash
+cargo build
+cargo build --release
+```
+
+The debug binary is written to `target/debug/fwmap` and the release binary to `target/release/fwmap`.
+
+Common local workflows:
+
+```bash
+# basic CLI smoke check
+cargo run -- --version
+
+# analyze a local binary
+cargo run -- analyze --elf build/app.elf --map build/app.map --out fwmap_report.html
+
+# generate machine-readable output while iterating
+cargo run -- analyze --elf build/app.elf --map build/app.map --report-json fwmap_report.json
+
+# try the Rust-oriented summary
+cargo run -- analyze --elf target/release/fwmap --map target/release/fwmap.map --view rust
+```
+
+Test commands:
+
 ```bash
 cargo test
+cargo test cli::tests
+cargo test core::history::tests
+cargo test report::render::tests
 ```
+
+When working on parser, history, or report changes, it is usually worth running the narrower test group first and then finishing with a full `cargo test`.
 
 ## Current Limitations
 
