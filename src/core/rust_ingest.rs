@@ -88,6 +88,8 @@ struct RustArtifactCandidate {
 }
 
 pub fn has_rust_inputs(inputs: &RustInputs) -> bool {
+    // Centralize the "did the caller opt into Cargo-assisted resolution?" check so the
+    // CLI only needs one predicate as Rust-specific flags continue to grow.
     inputs.cargo_metadata.is_some()
         || inputs.cargo_build_json.is_some()
         || inputs.cargo_workspace.is_some()
@@ -111,6 +113,8 @@ pub fn resolve_rust_inputs(explicit_elf: Option<&Path>, inputs: &RustInputs) -> 
     let candidates = load_build_candidates(inputs)?;
 
     let selected_candidate = if let Some(path) = explicit_elf {
+        // An explicit --elf remains authoritative for the artifact path; Cargo metadata is
+        // only used here to recover matching Rust context when possible.
         select_context_candidate_for_explicit(path, &candidates, inputs)
     } else {
         resolve_candidate_without_explicit(&candidates, inputs)?
@@ -231,6 +235,8 @@ fn resolve_candidate_without_explicit(
     candidates: &[RustArtifactCandidate],
     inputs: &RustInputs,
 ) -> Result<Option<RustArtifactCandidate>, String> {
+    // Auto-resolution is intentionally conservative: we only pick a candidate when the
+    // filtered set narrows to one analyzable artifact and otherwise ask the user to choose.
     let filtered = filter_candidates(candidates, inputs);
     if filtered.is_empty() {
         return Ok(None);
@@ -407,6 +413,8 @@ fn build_rust_context(
     inputs: &RustInputs,
     used_fallback: bool,
 ) -> Result<Option<RustContext>, String> {
+    // RustContext is best-effort enrichment for reports/history; once artifact resolution
+    // succeeds, missing Cargo fields should degrade metadata quality rather than fail analysis.
     if metadata.is_none() && candidate.is_none() && artifact_path.is_none() && inputs.cargo_workspace.is_none() {
         return Ok(None);
     }

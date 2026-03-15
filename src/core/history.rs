@@ -310,6 +310,8 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
         .map_err(|err| format!("failed to start history transaction: {err}"))?;
 
     let created_at = now_unix();
+    // Persist caller-supplied metadata as a stable JSON map so CLI/desktop layers can
+    // attach lightweight labels without needing a schema migration for each new key.
     let mut stored_metadata = input.metadata.clone();
     if input.analysis.debug_artifact.kind != crate::model::DebugArtifactKind::None {
         stored_metadata.insert("debug_artifact.kind".to_string(), input.analysis.debug_artifact.kind.to_string());
@@ -411,8 +413,8 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
     }
 
     {
-        // Keep source aggregates in separate tables so existing history databases can
-        // migrate forward by simply creating the new tables on first access.
+        // Source/debug aggregates live in additive side tables so older history.db files
+        // can migrate in place without rewriting the main builds row layout.
         let mut debug_stmt = tx
             .prepare(
                 "INSERT INTO debug_metrics (
@@ -473,6 +475,8 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
             )
             .map_err(|err| format!("failed to prepare source file insert: {err}"))?;
         for source in &input.analysis.source_files {
+            // New history rows intern repeated paths into text_pool to keep the on-disk
+            // database smaller; legacy text columns are kept for backward-compatible reads.
             let path_text_id = intern_text(&tx, &source.path)?;
             let display_path_text_id = intern_text(&tx, &source.display_path)?;
             let directory_text_id = intern_text(&tx, &source.directory)?;
@@ -1870,6 +1874,8 @@ fn query_named_metric(
     format: TrendFormat,
     mode: NamedMetricMode,
 ) -> Result<Vec<TrendPoint>, String> {
+    // Named trend queries must work across both legacy rows and pooled-string rows, so
+    // callers never need to care how a particular history.db version stored text keys.
     let name_expr = resolved_text_expr(table, name_column);
     let scope_expr = resolved_text_expr("rust_aggregate_metrics", "scope");
     let sql = match mode {
@@ -2630,6 +2636,8 @@ fn build_timeline_row(repo_id: &str, commit: &GitCommit, build: &BuildRecord, di
 fn build_metric_diff(db_path: &Path, current_build_id: i64, previous_build_id: i64) -> Result<BuildMetricDiff, String> {
     let conn = open_history_db(db_path)?;
     init_schema(&conn)?;
+    // Diff reports compare materialized aggregate tables instead of rerunning analysis,
+    // which keeps timeline/range/regression queries fast even on larger histories.
     let current = load_build_record(&conn, current_build_id)?.ok_or_else(|| format!("build id {current_build_id} was not found"))?;
     let previous = load_build_record(&conn, previous_build_id)?.ok_or_else(|| format!("build id {previous_build_id} was not found"))?;
     Ok(BuildMetricDiff {
@@ -2705,6 +2713,8 @@ fn load_build_record(conn: &Connection, build_id: i64) -> Result<Option<BuildRec
 }
 
 fn load_metric_map(conn: &Connection, table: &str, name_column: &str, build_id: i64) -> Result<HashMap<String, i64>, String> {
+    // Resolve pooled text ids transparently so every read path can treat history rows as
+    // if they still stored plain text, regardless of schema generation.
     let name_expr = resolved_text_expr(table, name_column);
     let sql = format!("SELECT {name_expr}, size_bytes FROM {table} WHERE build_id = ?1");
     let mut stmt = conn
@@ -2772,6 +2782,8 @@ fn diff_metric_entries(current: HashMap<String, i64>, previous: HashMap<String, 
 }
 
 fn resolve_range_spec(repo: Option<&Path>, spec: &str) -> Result<ResolvedRange, String> {
+    // Double-dot and triple-dot ranges feed different reports. Resolve both the Git walk
+    // range and the diff baseline here so downstream code can stay mode-agnostic.
     if let Some((base, head)) = spec.split_once("...") {
         let resolved_base = resolve_revision(repo, base).ok_or_else(|| format!("failed to resolve revision '{base}'"))?;
         let resolved_head = resolve_revision(repo, head).ok_or_else(|| format!("failed to resolve revision '{head}'"))?;
@@ -2904,6 +2916,8 @@ fn open_history_db(path: &Path) -> Result<Connection, String> {
 }
 
 fn init_schema(conn: &Connection) -> Result<(), String> {
+    // History schema changes are additive on purpose: existing DBs should open and gain
+    // new capabilities without an offline migration step or data rewrite.
     conn.execute_batch(
         "
         PRAGMA foreign_keys = ON;

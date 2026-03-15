@@ -281,6 +281,8 @@ fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>, source_option
     let why_linked = diff
         .filter(|_| why_linked_top > 0)
         .map(|item| explain_top_growth(current, item, why_linked_top));
+    // Assemble the report in one place so section ordering stays predictable and feature
+    // flags can add/remove blocks without duplicating writer logic.
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>fwmap report</title><style>{}</style><script>{}</script></head><body>{}</body></html>",
         style_block(),
@@ -969,6 +971,8 @@ fn overview(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
             )
         })
         .unwrap_or_default();
+    // The overview intentionally stays compact: enough context to orient the reader
+    // before they drill into sections, symbols, sources, or diff evidence below.
     format!(
         "<section><h2>Overview</h2><div class=\"grid\"><div class=\"card\"><strong>Binary</strong><div>{}</div></div><div class=\"card\"><strong>Format</strong><div>{} / {}</div></div><div class=\"card\"><strong>Toolchain</strong><div>{} <span class=\"muted\">(requested: {})</span></div></div><div class=\"card\"><strong>Map</strong><div>{} / {} <span class=\"muted\">({} parser warnings)</span></div></div><div class=\"card\"><strong>DWARF</strong><div>{} <span class=\"muted\">({:.1}% unknown)</span></div></div><div class=\"card\"><strong>Debug Artifact</strong><div>{}</div></div><div class=\"card\"><strong>Sections</strong><div>{}</div></div><div class=\"card\"><strong>ROM</strong><div>{}</div></div><div class=\"card\"><strong>RAM</strong><div>{}</div></div><div class=\"card\"><strong>Warnings</strong><div>{}</div></div>{}{} </div></section>",
         escape(&current.binary.arch),
@@ -1127,6 +1131,8 @@ fn source_summary(current: &AnalysisResult) -> String {
     if !current.debug_info.dwarf_used {
         return "<section><h2>Source Summary</h2><p>No DWARF line information was used.</p></section>".to_string();
     }
+    // Surface attribution quality before the detailed file/function tables so readers can
+    // quickly judge whether the source-level drill-down is trustworthy enough to use.
     let rows = current
         .source_files
         .iter()
@@ -1276,6 +1282,8 @@ fn line_hotspots(current: &AnalysisResult) -> String {
 }
 
 fn memory_summary(current: &AnalysisResult) -> String {
+    // Use the pre-aggregated section totals here so the high-level memory table remains
+    // cheap to render even when the binary has a very large raw section list.
     let rows = current
         .memory
         .section_totals
@@ -1367,6 +1375,8 @@ fn region_sections(current: &AnalysisResult) -> String {
 }
 
 fn section_breakdown(current: &AnalysisResult) -> String {
+    // This table is the lightweight section drill-down companion to Memory Summary, so it
+    // reuses the same runtime-focused filter rather than dumping every raw ELF section.
     let rows = current
         .sections
         .iter()
@@ -1538,6 +1548,8 @@ fn object_source_kind_label(kind: ObjectSourceKind) -> &'static str {
 
 fn diff_section(current: &AnalysisResult, diff: Option<&DiffResult>, source_options: SourceRenderOptions) -> String {
     match diff {
+        // Keep diff blocks parallel to the current-build sections so users can scan from
+        // "what exists now" to "what changed" without mentally remapping categories.
         Some(diff) => format!(
             "<section><h2>Diff</h2>{}{}{}{}{}{}{}{}{} </section>",
             diff_summary(diff),
@@ -1944,6 +1956,8 @@ fn function_metric_key(path: Option<&str>, raw_name: &str) -> String {
 }
 
 fn include_report_section(name: &str) -> bool {
+    // The HTML report stays focused on runtime footprint; debug sections remain available
+    // in the underlying analysis model and machine-readable exports when needed.
     let lower = name.to_ascii_lowercase();
     !lower.starts_with(".debug") && !lower.starts_with(".zdebug")
 }

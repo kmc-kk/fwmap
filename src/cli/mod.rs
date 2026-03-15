@@ -27,6 +27,8 @@ const DEFAULT_OUT: &str = "fwmap_report.html";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
+    // Keep all top-level command wiring in one dispatcher so CLI behavior, exit codes, and
+    // shared option assembly stay consistent across analyze/history/explain entry points.
     let parsed = parse_args(args.into_iter().collect())?;
     match parsed {
         Command::Help => {
@@ -384,6 +386,8 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             rust_inputs,
             view,
         } => {
+            // Rust/Cargo inputs can contribute both the analyzable ELF path and report/history
+            // metadata, but an explicit --elf still takes precedence when the user supplied one.
             let rust_resolution = resolve_rust_inputs(elf.as_deref(), &rust_inputs)?;
             let elf = rust_resolution
                 .resolved_elf
@@ -732,6 +736,8 @@ enum Command {
 }
 
 fn parse_args(args: Vec<String>) -> Result<Command, String> {
+    // The parser stays hand-rolled because several subcommands accept free positional range
+    // specs after options, which is awkward to express with a simpler flag-only parser.
     if args.len() <= 1 || matches!(args.get(1).map(String::as_str), Some("--help" | "-h")) {
         return Ok(Command::Help);
     }
@@ -1769,6 +1775,8 @@ fn parse_optional_path_arg(args: &[String], key: &str) -> Result<Option<PathBuf>
 }
 
 fn parse_first_free_arg(args: &[String]) -> Option<String> {
+    // History range/regression accept a single positional spec even when options appear
+    // before it, so we scan for the first non-option token after skipping option values.
     let mut index = 0usize;
     while index < args.len() {
         let item = &args[index];

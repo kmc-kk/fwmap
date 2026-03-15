@@ -445,6 +445,8 @@ impl DesktopState {
         if left.history_db_path != right.history_db_path {
             return Err("selected runs are stored in different history databases".to_string());
         }
+        // Desktop compare is intentionally backed by persisted history metrics rather than
+        // cached UI state, so the result stays reproducible after app restarts.
         let db_path = PathBuf::from(&left.history_db_path);
         Ok(RunCompareResultDto {
             left_run: stored_run_summary(&left),
@@ -934,6 +936,8 @@ impl DesktopState {
 
     fn build_run_detail(&self, stored: StoredRunRecord) -> Result<RunDetailDto, String> {
         let summary = stored_run_summary(&stored);
+        // Recent runs only keep lightweight metadata in the app DB; the richer detail
+        // view is reconstructed on demand from history.db so storage stays normalized.
         let detail = show_build(Path::new(&stored.history_db_path), stored.build_id)?;
         let Some(detail) = detail else {
             return Ok(RunDetailDto {
@@ -1119,6 +1123,8 @@ fn load_metric_deltas(
 ) -> Result<Vec<DeltaEntryDto>, String> {
     let conn = Connection::open(db_path)
         .map_err(|err| format!("failed to open history database '{}': {err}", db_path.display()))?;
+    // Reuse the same aggregated history tables as the CLI reports so desktop diff/history
+    // views and command-line outputs stay aligned.
     let (current, previous) = match metric {
         MetricTable::Region => (
             load_metric_map(&conn, "region_metrics", "region_name", "used_bytes", right_build_id)?,
@@ -1216,6 +1222,8 @@ fn diff_metric_maps(current: BTreeMap<String, i64>, previous: BTreeMap<String, i
 }
 
 fn resolved_history_text_expr(table: &str, column: &str) -> String {
+    // Desktop reads history.db directly in a few places, so it mirrors the core layer's
+    // pooled-string resolution instead of assuming legacy plain-text columns.
     let id_column = match (table, column) {
         ("source_file_metrics", "path") => Some("path_text_id"),
         ("source_file_metrics", "display_path") => Some("display_path_text_id"),
