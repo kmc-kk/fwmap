@@ -691,3 +691,88 @@ label {
     grid-template-columns: 1fr;
   }
 }
+
+.fw-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.fw-table-shell {
+  border: 1px solid rgba(188, 196, 212, 0.08);
+  border-radius: 16px;
+  overflow: auto;
+  background: rgba(12, 17, 24, 0.4);
+}
+
+.fw-data-table thead th {
+  position: sticky;
+  top: 0;
+  background: rgba(18, 24, 33, 0.96);
+  backdrop-filter: blur(8px);
+  z-index: 1;
+}
+
+.fw-empty-state {
+  padding: 1.1rem 0.5rem;
+  color: var(--text-muted);
+}
+
+.fw-empty-state strong {
+  display: block;
+  color: var(--text-strong);
+  margin-bottom: 0.35rem;
+}
+
+.fw-empty-state p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.fw-inspector-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(188, 196, 212, 0.08);
+  border-radius: 16px;
+  background: rgba(15, 20, 28, 0.48);
+}
+
+.fw-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.investigation-layout {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.95fr) minmax(0, 1.45fr);
+  gap: 1rem;
+}
+
+.investigation-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.investigation-toolbar-grid {
+  grid-template-columns: 1.4fr 1fr 1fr;
+}
+
+.table-row-selected {
+  background: rgba(142, 180, 216, 0.1);
+}
+
+.table-row-selected td {
+  border-bottom-color: rgba(142, 180, 216, 0.18);
+}
+
+@media (max-width: 1180px) {
+  .investigation-layout,
+  .investigation-detail-grid,
+  .investigation-toolbar-grid {
+    grid-template-columns: 1fr;
+  }
+}

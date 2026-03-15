@@ -61,6 +61,18 @@ pub fn run() {
             commands::desktop_get_inspector_hierarchy,
             commands::desktop_get_inspector_detail,
             commands::desktop_get_source_context,
+            commands::investigation_create,
+            commands::investigation_list,
+            commands::investigation_get,
+            commands::investigation_update,
+            commands::investigation_delete,
+            commands::investigation_add_evidence,
+            commands::investigation_remove_evidence,
+            commands::investigation_add_note,
+            commands::investigation_update_note,
+            commands::investigation_list_timeline,
+            commands::investigation_set_verdict,
+            commands::investigation_export_package,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fwmap desktop");

@@ -95,7 +95,8 @@ The desktop app currently covers these workflows:
 - explore commit timelines, Git-aware range diffs, regressions, and dashboard trends
 - drill into regions, files, functions, symbols, crates, and dependencies from the Inspector
 - manage reusable projects, policy files, history locations, and export destinations
-- review built-in plugins and create shareable investigation packages that can be reopened later
+- organize evidence into investigations, write notes, set verdicts, and export shareable case bundles
+- review built-in plugins and reopen saved packages later
 
 Desktop capabilities currently available:
 
@@ -108,11 +109,13 @@ Desktop capabilities currently available:
 - Compare two recorded runs with section / object / source / symbol / Rust delta lists
 - Query git-aware range diffs and regression-origin summaries from the desktop UI
 - Visualize recent ROM/RAM history, warning pressure, region usage, top growth contributors, and recent regressions in the dashboard
+- Create investigations from diff, regression, history, or inspector context and keep baseline / target references together
+- Pin evidence snapshots, add notes, review an investigation timeline, and record a verdict before exporting a case package
 - Manage workspace-style projects with default paths, policy files, and export destinations
 - Load, validate, save, and reuse desktop policy documents from the GUI
 - Export dashboard / run / diff / history / regression snapshots as HTML, print-friendly HTML, or JSON
 - Inspect built-in plugin capabilities, enable or disable them, and run safe supplementary outputs on demand
-- Create `.fwpkg` investigation bundles from dashboard, run, diff, history, range, regression, or inspector context
+- Create `.fwpkg` investigation bundles from dashboard, run, diff, history, range, regression, inspector, or a saved investigation
 - Reopen saved investigation bundles, review included and omitted resources, and inspect manifest-tracked plugin results
 
 Current limitations:
@@ -121,6 +124,7 @@ Current limitations:
 - Desktop navigation uses lightweight in-app state rather than a full router
 - The plugin system is intentionally built-in and manifest-driven; external shared-library plugins are not loaded yet
 - Investigation packages are directory bundles with `manifest.json`, not compressed archive packages yet
+- Investigation notes and verdicts are stored locally in the desktop app database rather than in the core CLI history database
 - Package reopening focuses on manifest and captured JSON summaries rather than a full embedded artifact browser
 - The desktop app reuses existing fwmap core/history logic instead of replacing the CLI
 

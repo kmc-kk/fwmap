@@ -835,3 +835,165 @@ pub struct OpenInvestigationPackageResultDto {
     pub inspector_source_context: Option<SourceContextDto>,
     pub policy_document: Option<PolicyDocumentDto>,
 }
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvestigationRefDto {
+    pub kind: String,
+    pub run_id: Option<i64>,
+    pub build_id: Option<i64>,
+    pub commit: Option<String>,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvestigationSummaryDto {
+    pub investigation_id: i64,
+    pub title: String,
+    pub project_id: Option<i64>,
+    pub workspace_id: Option<String>,
+    pub baseline_ref: InvestigationRefDto,
+    pub target_ref: InvestigationRefDto,
+    pub status: String,
+    pub evidence_count: usize,
+    pub note_count: usize,
+    pub updated_at: String,
+    pub archived: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvestigationEvidenceDto {
+    pub evidence_id: i64,
+    pub investigation_id: i64,
+    pub evidence_type: String,
+    pub title: String,
+    pub delta: Option<i64>,
+    pub severity: String,
+    pub confidence: f64,
+    pub source_view: String,
+    pub linked_view: Option<String>,
+    pub stable_ref: serde_json::Value,
+    pub snapshot: serde_json::Value,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvestigationNoteDto {
+    pub note_id: i64,
+    pub investigation_id: i64,
+    pub linked_entity_type: Option<String>,
+    pub linked_entity_id: Option<String>,
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvestigationTimelineEventDto {
+    pub event_id: i64,
+    pub investigation_id: i64,
+    pub event_type: String,
+    pub payload: serde_json::Value,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvestigationVerdictDto {
+    pub investigation_id: i64,
+    pub verdict_type: String,
+    pub confidence: f64,
+    pub summary: String,
+    pub supporting_evidence_ids: Vec<i64>,
+    pub unresolved_questions: String,
+    pub next_actions: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvestigationDetailDto {
+    pub summary: InvestigationSummaryDto,
+    pub evidence: Vec<InvestigationEvidenceDto>,
+    pub notes: Vec<InvestigationNoteDto>,
+    pub timeline: Vec<InvestigationTimelineEventDto>,
+    pub verdict: Option<InvestigationVerdictDto>,
+    pub package_exports: Vec<InvestigationPackageSummaryDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateInvestigationRequestDto {
+    pub title: String,
+    pub project_id: Option<i64>,
+    pub workspace_id: Option<String>,
+    pub baseline_ref: InvestigationRefDto,
+    pub target_ref: InvestigationRefDto,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInvestigationRequestDto {
+    pub title: Option<String>,
+    pub baseline_ref: Option<InvestigationRefDto>,
+    pub target_ref: Option<InvestigationRefDto>,
+    pub status: Option<String>,
+    pub archived: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddInvestigationEvidenceRequestDto {
+    pub evidence_type: String,
+    pub title: String,
+    pub delta: Option<i64>,
+    pub severity: Option<String>,
+    pub confidence: Option<f64>,
+    pub source_view: String,
+    pub linked_view: Option<String>,
+    pub stable_ref: serde_json::Value,
+    pub snapshot: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddInvestigationNoteRequestDto {
+    pub linked_entity_type: Option<String>,
+    pub linked_entity_id: Option<String>,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInvestigationNoteRequestDto {
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetInvestigationVerdictRequestDto {
+    pub verdict_type: String,
+    pub confidence: f64,
+    pub summary: String,
+    pub supporting_evidence_ids: Vec<i64>,
+    pub unresolved_questions: String,
+    pub next_actions: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportInvestigationPackageRequestDto {
+    pub investigation_id: i64,
+    pub package_name: String,
+    pub destination_path: String,
+    pub include_notes: bool,
+    pub include_timeline: bool,
+    pub include_verdict: bool,
+    pub include_evidence_snapshots: bool,
+}

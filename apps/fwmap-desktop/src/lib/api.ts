@@ -2,8 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   ActiveProjectState,
+  AddInvestigationEvidenceRequest,
+  AddInvestigationNoteRequest,
   AnalysisRequest,
   CreateInvestigationPackageRequest,
+  CreateInvestigationRequest,
   CreateProjectRequest,
   DashboardQuery,
   ExportRequest,
@@ -11,6 +14,7 @@ import type {
   DashboardSummary,
   DesktopAppInfo,
   DesktopSettings,
+  ExportInvestigationPackageRequest,
   ExtensionPoint,
   GitRef,
   InvestigationPackageSummary,
@@ -29,6 +33,12 @@ import type {
   InspectorBreakdown,
   InspectorDetail,
   InspectorHierarchyNode,
+  InvestigationDetail,
+  InvestigationEvidence,
+  InvestigationNote,
+  InvestigationSummary,
+  InvestigationTimelineEvent,
+  InvestigationVerdict,
   InspectorQuery,
   InspectorSelection,
   InspectorSummary,
@@ -43,7 +53,10 @@ import type {
   RunSummary,
   SourceContext,
   TimelineResult,
+  UpdateInvestigationNoteRequest,
+  UpdateInvestigationRequest,
   UpdateProjectRequest,
+  SetInvestigationVerdictRequest,
 } from "./types";
 
 export async function getAppInfo(): Promise<DesktopAppInfo> {
@@ -214,4 +227,53 @@ export async function getInvestigationPackageSummary(path: string): Promise<Inve
 
 export async function listRecentPackages(projectId?: number | null, limit = 20): Promise<InvestigationPackageSummary[]> {
   return invoke("desktop_list_recent_packages", { projectId: projectId ?? null, limit });
+}
+
+
+export async function createInvestigation(request: CreateInvestigationRequest): Promise<InvestigationDetail> {
+  return invoke("investigation_create", { request });
+}
+
+export async function listInvestigations(archived = false): Promise<InvestigationSummary[]> {
+  return invoke("investigation_list", { archived });
+}
+
+export async function getInvestigation(investigationId: number): Promise<InvestigationDetail> {
+  return invoke("investigation_get", { investigationId });
+}
+
+export async function updateInvestigation(investigationId: number, patch: UpdateInvestigationRequest): Promise<InvestigationDetail> {
+  return invoke("investigation_update", { investigationId, patch });
+}
+
+export async function deleteInvestigation(investigationId: number): Promise<void> {
+  return invoke("investigation_delete", { investigationId });
+}
+
+export async function addInvestigationEvidence(investigationId: number, request: AddInvestigationEvidenceRequest): Promise<InvestigationEvidence> {
+  return invoke("investigation_add_evidence", { investigationId, request });
+}
+
+export async function removeInvestigationEvidence(investigationId: number, evidenceId: number): Promise<void> {
+  return invoke("investigation_remove_evidence", { investigationId, evidenceId });
+}
+
+export async function addInvestigationNote(investigationId: number, request: AddInvestigationNoteRequest): Promise<InvestigationNote> {
+  return invoke("investigation_add_note", { investigationId, request });
+}
+
+export async function updateInvestigationNote(noteId: number, request: UpdateInvestigationNoteRequest): Promise<InvestigationNote> {
+  return invoke("investigation_update_note", { noteId, request });
+}
+
+export async function listInvestigationTimeline(investigationId: number): Promise<InvestigationTimelineEvent[]> {
+  return invoke("investigation_list_timeline", { investigationId });
+}
+
+export async function setInvestigationVerdict(investigationId: number, request: SetInvestigationVerdictRequest): Promise<InvestigationVerdict> {
+  return invoke("investigation_set_verdict", { investigationId, request });
+}
+
+export async function exportInvestigationPackage(request: ExportInvestigationPackageRequest): Promise<InvestigationPackageSummary> {
+  return invoke("investigation_export_package", { request });
 }
