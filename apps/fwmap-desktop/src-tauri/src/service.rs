@@ -1159,7 +1159,8 @@ fn load_metric_map(
     value_column: &str,
     build_id: i64,
 ) -> Result<BTreeMap<String, i64>, String> {
-    let sql = format!("SELECT {key_column}, {value_column} FROM {table} WHERE build_id = ?1");
+    let key_expr = resolved_history_text_expr(table, key_column);
+    let sql = format!("SELECT {key_expr}, {value_column} FROM {table} WHERE build_id = ?1");
     let mut stmt = conn.prepare(&sql).map_err(|err| format!("failed to prepare metric query: {err}"))?;
     let rows = stmt
         .query_map(params![build_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
@@ -1169,8 +1170,12 @@ fn load_metric_map(
 }
 
 fn load_scoped_metric_map(conn: &Connection, scope: &str, build_id: i64) -> Result<BTreeMap<String, i64>, String> {
+    let name_expr = resolved_history_text_expr("rust_aggregate_metrics", "name");
+    let scope_expr = resolved_history_text_expr("rust_aggregate_metrics", "scope");
     let mut stmt = conn
-        .prepare("SELECT name, size_bytes FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = ?2")
+        .prepare(&format!(
+            "SELECT {name_expr}, size_bytes FROM rust_aggregate_metrics WHERE build_id = ?1 AND {scope_expr} = ?2"
+        ))
         .map_err(|err| format!("failed to prepare rust metric query: {err}"))?;
     let rows = stmt
         .query_map(params![build_id, scope], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
@@ -1180,8 +1185,12 @@ fn load_scoped_metric_map(conn: &Connection, scope: &str, build_id: i64) -> Resu
 }
 
 fn load_like_scoped_metric_map(conn: &Connection, scope_like: &str, build_id: i64) -> Result<BTreeMap<String, i64>, String> {
+    let name_expr = resolved_history_text_expr("rust_aggregate_metrics", "name");
+    let scope_expr = resolved_history_text_expr("rust_aggregate_metrics", "scope");
     let mut stmt = conn
-        .prepare("SELECT name, size_bytes FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope LIKE ?2")
+        .prepare(&format!(
+            "SELECT {name_expr}, size_bytes FROM rust_aggregate_metrics WHERE build_id = ?1 AND {scope_expr} LIKE ?2"
+        ))
         .map_err(|err| format!("failed to prepare rust metric query: {err}"))?;
     let rows = stmt
         .query_map(params![build_id, scope_like], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
@@ -1204,6 +1213,38 @@ fn diff_metric_maps(current: BTreeMap<String, i64>, previous: BTreeMap<String, i
     entries.sort_by(|a, b| b.delta.abs().cmp(&a.delta.abs()).then_with(|| a.name.cmp(&b.name)));
     entries.truncate(limit);
     entries
+}
+
+fn resolved_history_text_expr(table: &str, column: &str) -> String {
+    let id_column = match (table, column) {
+        ("source_file_metrics", "path") => Some("path_text_id"),
+        ("source_file_metrics", "display_path") => Some("display_path_text_id"),
+        ("source_file_metrics", "directory") => Some("directory_text_id"),
+        ("object_metrics", "object_path") => Some("object_path_text_id"),
+        ("function_metrics", "function_key") => Some("function_key_text_id"),
+        ("function_metrics", "raw_name") => Some("raw_name_text_id"),
+        ("function_metrics", "demangled_name") => Some("demangled_name_text_id"),
+        ("function_metrics", "path") => Some("path_text_id"),
+        ("symbol_metrics", "name") => Some("name_text_id"),
+        ("symbol_metrics", "demangled_name") => Some("demangled_name_text_id"),
+        ("rule_results", "code") => Some("code_text_id"),
+        ("rule_results", "level") => Some("level_text_id"),
+        ("rule_results", "related") => Some("related_text_id"),
+        ("rule_results", "message") => Some("message_text_id"),
+        ("why_linked_metrics", "target") => Some("target_text_id"),
+        ("why_linked_metrics", "kind") => Some("kind_text_id"),
+        ("why_linked_metrics", "confidence") => Some("confidence_text_id"),
+        ("why_linked_metrics", "summary") => Some("summary_text_id"),
+        ("rust_aggregate_metrics", "scope") => Some("scope_text_id"),
+        ("rust_aggregate_metrics", "name") => Some("name_text_id"),
+        _ => None,
+    };
+    match id_column {
+        Some(id_column) => format!(
+            "COALESCE(NULLIF({column}, ''), (SELECT value FROM text_pool WHERE id = {id_column}))"
+        ),
+        None => column.to_string(),
+    }
 }
 
 fn map_timeline_row(row: fwmap::core::history::CommitTimelineRow) -> TimelineEntryDto {
@@ -2134,4 +2175,329 @@ fn render_export_html(payload: &serde_json::Value, print_friendly: bool) -> Stri
 
 fn html_escape(input: &str) -> String {
     input.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fwmap::core::history::{HistoryRecordInput, record_build};
+    use fwmap::core::model::{
+        AnalysisResult, BinaryInfo, DebugArtifactInfo, DebugInfoSummary, MemorySummary, ObjectContribution, ObjectSourceKind,
+        RustAggregate, RustContext, RustFamilyKind, RustFamilySummary, RustSymbolSummary, RustView, SectionCategory, SectionTotal,
+        SourceFile, SymbolInfo, ToolchainInfo, ToolchainKind, ToolchainSelection, UnknownSourceBucket, WarningItem, WarningLevel,
+        WarningSource,
+    };
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn desktop_metric_deltas_read_pooled_history_strings() {
+        let base = temp_test_dir("desktop-pooled-deltas");
+        let state = DesktopState::new(&base).unwrap();
+        let db = state.storage.paths().history_db_path.clone();
+
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: sample_analysis(100, 20, 1, 48, "tokio"),
+                metadata: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: sample_analysis(160, 24, 2, 96, "tokio"),
+                metadata: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+
+        let object_deltas = load_metric_deltas(&db, 1, 2, MetricTable::Object, 10).unwrap();
+        let source_deltas = load_metric_deltas(&db, 1, 2, MetricTable::SourceFile, 10).unwrap();
+        let symbol_deltas = load_metric_deltas(&db, 1, 2, MetricTable::Symbol, 10).unwrap();
+        let rust_deltas = load_metric_deltas(&db, 1, 2, MetricTable::RustDependency, 10).unwrap();
+
+        assert_eq!(object_deltas[0].name, "build/main.o");
+        assert_eq!(object_deltas[0].delta, 60);
+        assert_eq!(source_deltas[0].name, "src/main.cpp");
+        assert_eq!(source_deltas[0].delta, 60);
+        assert_eq!(symbol_deltas[0].name, "_Z4mainv");
+        assert_eq!(symbol_deltas[0].delta, 60);
+        assert_eq!(rust_deltas[0].name, "tokio");
+        assert_eq!(rust_deltas[0].delta, 48);
+
+        let growth = load_dashboard_top_growth(&db, 1, 2).unwrap();
+        assert!(growth.iter().any(|item| item.name == "src/main.cpp" && item.delta == 60));
+        assert!(growth.iter().any(|item| item.name == "_Z4mainv" && item.delta == 60));
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn desktop_run_detail_reads_pooled_history_content() {
+        let base = temp_test_dir("desktop-run-detail");
+        let state = DesktopState::new(&base).unwrap();
+        let db = state.storage.paths().history_db_path.clone();
+
+        let build_id = record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: sample_analysis(144, 32, 2, 72, "tokio"),
+                metadata: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+
+        let run_id = state
+            .storage
+            .insert_recent_run(&InsertRunRecord {
+                project_id: None,
+                build_id,
+                created_at: "2026-03-15T20:00:00+09:00".to_string(),
+                label: Some("pooled run".to_string()),
+                status: "finished".to_string(),
+                git_revision: Some("abc1234".to_string()),
+                profile: Some("release".to_string()),
+                target: Some("x86_64-unknown-linux-gnu".to_string()),
+                rom_bytes: 144,
+                ram_bytes: 32,
+                warning_count: 2,
+                history_db_path: db.to_string_lossy().to_string(),
+                report_html_path: None,
+                report_json_path: None,
+            })
+            .unwrap();
+
+        let detail = state.run_detail(run_id).unwrap().unwrap();
+        assert_eq!(detail.top_symbols[0].0, "main()");
+        assert_eq!(detail.top_sections[0].0, ".text");
+        assert_eq!(detail.warnings[0].0, "SIZE001");
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn desktop_metric_deltas_support_legacy_and_pooled_rows_together() {
+        let base = temp_test_dir("desktop-legacy-pooled");
+        let state = DesktopState::new(&base).unwrap();
+        let db = state.storage.paths().history_db_path.clone();
+
+        let pooled_build_id = record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: sample_analysis(100, 20, 1, 48, "tokio"),
+                metadata: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(pooled_build_id, 1);
+
+        let conn = Connection::open(&db).unwrap();
+        conn.execute(
+            "INSERT INTO builds (
+                id, created_at, elf_path, arch, linker_family, map_format, rom_bytes, ram_bytes, warning_count, error_count, metadata_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![2i64, 2i64, "legacy.elf", "ARM", "gnu", "unknown", 180i64, 28i64, 1i64, 0i64, "{}"],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO object_metrics (build_id, object_path, size_bytes) VALUES (?1, ?2, ?3)",
+            params![2i64, "build/main.o", 180i64],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO source_file_metrics (build_id, path, display_path, directory, size_bytes, function_count, line_range_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![2i64, "src/main.cpp", "src/main.cpp", "src", 180i64, 1i64, 1i64],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO symbol_metrics (build_id, name, demangled_name, size_bytes) VALUES (?1, ?2, ?3, ?4)",
+            params![2i64, "_Z4mainv", "main()", 180i64],
+        )
+        .unwrap();
+        drop(conn);
+
+        let object_deltas = load_metric_deltas(&db, 1, 2, MetricTable::Object, 10).unwrap();
+        let source_deltas = load_metric_deltas(&db, 1, 2, MetricTable::SourceFile, 10).unwrap();
+        let symbol_deltas = load_metric_deltas(&db, 1, 2, MetricTable::Symbol, 10).unwrap();
+
+        assert_eq!(object_deltas[0].name, "build/main.o");
+        assert_eq!(object_deltas[0].delta, 80);
+        assert_eq!(source_deltas[0].name, "src/main.cpp");
+        assert_eq!(source_deltas[0].delta, 80);
+        assert_eq!(symbol_deltas[0].name, "_Z4mainv");
+        assert_eq!(symbol_deltas[0].delta, 80);
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    fn temp_test_dir(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let dir = std::env::temp_dir().join(format!("fwmap-{label}-{nonce}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn sample_analysis(rom: u64, ram: u64, warnings: usize, dependency_size: u64, dependency_name: &str) -> AnalysisResult {
+        AnalysisResult {
+            binary: BinaryInfo {
+                path: "sample.elf".to_string(),
+                arch: "ARM".to_string(),
+                elf_class: "ELF32".to_string(),
+                endian: "little-endian".to_string(),
+            },
+            git: None,
+            rust_context: Some(RustContext {
+                workspace_root: Some("/workspace/fwmap".to_string()),
+                manifest_path: Some("/workspace/fwmap/Cargo.toml".to_string()),
+                package_name: Some("fwmap".to_string()),
+                package_id: Some("path+file:///workspace/fwmap#fwmap@0.1.0".to_string()),
+                target_name: Some("fwmap".to_string()),
+                target_kind: vec!["bin".to_string()],
+                crate_types: vec!["bin".to_string()],
+                edition: Some("2024".to_string()),
+                target_triple: Some("x86_64-unknown-linux-gnu".to_string()),
+                profile: Some("release".to_string()),
+                artifact_path: Some("/workspace/fwmap/target/release/fwmap".to_string()),
+                metadata_source: "cargo-build-json".to_string(),
+                workspace_members: vec!["fwmap".to_string()],
+            }),
+            rust_view: Some(RustView {
+                workspace: Some("/workspace/fwmap".to_string()),
+                packages: vec![RustAggregate { name: "fwmap".to_string(), size: rom, symbol_count: 1 }],
+                targets: vec![RustAggregate { name: "fwmap".to_string(), size: rom, symbol_count: 1 }],
+                crates: vec![RustAggregate { name: "fwmap".to_string(), size: rom, symbol_count: 1 }],
+                dependency_crates: vec![RustAggregate {
+                    name: dependency_name.to_string(),
+                    size: dependency_size,
+                    symbol_count: 1,
+                }],
+                source_files: vec![RustAggregate { name: "src/main.rs".to_string(), size: rom, symbol_count: 1 }],
+                grouped_families: vec![RustFamilySummary {
+                    kind: RustFamilyKind::Function,
+                    key: "fwmap::main".to_string(),
+                    display_name: "fwmap::main".to_string(),
+                    symbol_count: 1,
+                    size: rom,
+                }],
+                symbols: vec![RustSymbolSummary {
+                    raw_name: "_Z4mainv".to_string(),
+                    demangled_name: Some("main()".to_string()),
+                    display_name: "main()".to_string(),
+                    package: Some("fwmap".to_string()),
+                    target: Some("fwmap".to_string()),
+                    crate_name: Some("fwmap".to_string()),
+                    dependency_crate: Some(dependency_name.to_string()),
+                    source_path: Some("src/main.rs".to_string()),
+                    family_kind: RustFamilyKind::Function,
+                    family_key: "fwmap::main".to_string(),
+                    size: rom,
+                    language: fwmap::core::model::SymbolLanguage::Rust,
+                }],
+                total_rust_size: rom,
+            }),
+            toolchain: ToolchainInfo {
+                requested: ToolchainSelection::Auto,
+                detected: None,
+                resolved: ToolchainKind::Gnu,
+                linker_family: fwmap::core::model::LinkerFamily::Gnu,
+                map_format: fwmap::core::model::MapFormat::Unknown,
+                parser_warnings_count: 0,
+            },
+            debug_info: DebugInfoSummary {
+                dwarf_mode: fwmap::core::model::DwarfMode::Auto,
+                source_lines: fwmap::core::model::SourceLinesMode::All,
+                dwarf_used: true,
+                cache_hit: false,
+                split_dwarf_detected: false,
+                split_dwarf_kind: None,
+                unknown_source_ratio: 0.0,
+                compilation_units: 1,
+                line_zero_ranges: 0,
+                generated_ranges: 0,
+            },
+            debug_artifact: DebugArtifactInfo::default(),
+            policy: None,
+            sections: Vec::new(),
+            symbols: vec![SymbolInfo {
+                name: "_Z4mainv".to_string(),
+                demangled_name: Some("main()".to_string()),
+                section_name: Some(".text".to_string()),
+                object_path: Some("build/main.o".to_string()),
+                addr: 0,
+                size: rom,
+            }],
+            object_contributions: vec![ObjectContribution {
+                object_path: "build/main.o".to_string(),
+                source_kind: ObjectSourceKind::Object,
+                section_name: Some(".text".to_string()),
+                size: rom,
+            }],
+            archive_contributions: Vec::new(),
+            archive_pulls: Vec::new(),
+            whole_archive_candidates: Vec::new(),
+            relocation_references: Vec::new(),
+            cross_references: Vec::new(),
+            cpp_view: fwmap::core::model::CppView::default(),
+            linker_script: None,
+            memory: MemorySummary {
+                rom_bytes: rom,
+                ram_bytes: ram,
+                section_totals: vec![
+                    SectionTotal {
+                        section_name: ".text".to_string(),
+                        size: rom,
+                        category: SectionCategory::Rom,
+                    },
+                    SectionTotal {
+                        section_name: ".data".to_string(),
+                        size: ram,
+                        category: SectionCategory::Ram,
+                    },
+                ],
+                memory_regions: Vec::new(),
+                region_summaries: Vec::new(),
+            },
+            compilation_units: Vec::new(),
+            source_files: vec![SourceFile {
+                path: "src/main.cpp".to_string(),
+                display_path: "src/main.cpp".to_string(),
+                directory: "src".to_string(),
+                size: rom,
+                functions: 1,
+                line_ranges: 1,
+            }],
+            line_attributions: Vec::new(),
+            line_hotspots: Vec::new(),
+            function_attributions: vec![fwmap::core::model::FunctionAttribution {
+                raw_name: "_Z4mainv".to_string(),
+                demangled_name: Some("main()".to_string()),
+                path: Some("src/main.cpp".to_string()),
+                size: rom,
+                ranges: Vec::new(),
+            }],
+            unknown_source: UnknownSourceBucket { size: 0, ranges: Vec::new() },
+            warnings: (0..warnings)
+                .map(|index| WarningItem {
+                    level: if index == warnings.saturating_sub(1) && warnings > 1 {
+                        WarningLevel::Error
+                    } else {
+                        WarningLevel::Warn
+                    },
+                    code: if index == 0 { "SIZE001".to_string() } else { format!("SIZE{:03}", index + 1) },
+                    message: "size warning".to_string(),
+                    source: WarningSource::Analyze,
+                    related: None,
+                })
+                .collect(),
+        }
+    }
 }
