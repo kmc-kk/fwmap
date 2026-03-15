@@ -13,7 +13,7 @@
               "id": "DWARF_LINE_ZERO",
               "name": "DWARF_LINE_ZERO",
               "shortDescription": {
-                "text": "DWARF emitted 41631 line-0 ranges; these bytes were counted as unknown source"
+                "text": "DWARF emitted 41642 line-0 ranges; these bytes were counted as unknown source"
               },
               "fullDescription": {
                 "text": "DWARF_LINE_ZERO warning from elf"
@@ -22,20 +22,6 @@
                 "text": "fwmap reported DWARF_LINE_ZERO with severity info. Review the related entity and report context for the underlying evidence."
               },
               "helpUri": "/blob/main/README.md#dwarf_line_zero"
-            },
-            {
-              "id": "DWARF_LINE_ZERO_RANGES",
-              "name": "DWARF_LINE_ZERO_RANGES",
-              "shortDescription": {
-                "text": "41631 DWARF ranges used line 0 and were counted as unknown source"
-              },
-              "fullDescription": {
-                "text": "DWARF_LINE_ZERO_RANGES warning from analyze"
-              },
-              "help": {
-                "text": "fwmap reported DWARF_LINE_ZERO_RANGES with severity info. Review the related entity and report context for the underlying evidence."
-              },
-              "helpUri": "/blob/main/README.md#dwarf_line_zero_ranges"
             },
             {
               "id": "LARGE_SYMBOL",
