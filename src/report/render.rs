@@ -649,7 +649,7 @@ fn build_ci_json(
 }
 
 fn style_block() -> &'static str {
-    "body{font-family:Segoe UI,Arial,sans-serif;margin:24px;background:#f4f1ea;color:#1f2933}h1,h2,h3{margin-bottom:8px}section{background:#fff;padding:16px 18px;border-radius:10px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:8px;border-bottom:1px solid #d6dde5;text-align:left;vertical-align:top}th{background:#f0f4f8}.warn{background:#fff3cd}.mono{font-family:Consolas,monospace}.pos{color:#a61b1b}.neg{color:#0a7d33}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.card{background:#f8fafc;padding:12px;border-radius:8px}.muted{color:#52606d}.toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 12px}.toolbar input{padding:8px 10px;border:1px solid #cbd2d9;border-radius:8px;min-width:180px;background:#fff}.pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#e9eff5;font-size:12px;color:#334e68}.path{display:inline-block;max-width:32rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.anchor{color:inherit;text-decoration:none}.anchor:hover{text-decoration:underline}.hidden{display:none}.hint{margin-top:8px;font-size:13px}.compact-list{margin:0;padding-left:18px}.compact-list li{margin:0 0 6px}.why-linked-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px}.why-linked-cards{display:grid;gap:12px}.why-card{border:1px solid #d9e2ec;border-radius:10px;padding:12px;background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)}.why-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px}.why-target{font-size:13px;line-height:1.4;word-break:break-word}.why-summary{font-size:14px;line-height:1.5;margin-bottom:8px}.why-evidence summary{cursor:pointer;font-weight:600;color:#334e68}.why-evidence ul{margin:8px 0 0;padding-left:18px}.why-evidence li{margin:0 0 8px}.conf-high{background:#d9f2e3;color:#17603a}.conf-medium{background:#fff1c2;color:#8a5a00}.conf-low{background:#f8d7da;color:#8a1c2b}"
+    "body{font-family:Segoe UI,Arial,sans-serif;margin:24px;background:#f4f1ea;color:#1f2933}h1,h2,h3{margin-bottom:8px}section{background:#fff;padding:16px 18px;border-radius:10px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:8px;border-bottom:1px solid #d6dde5;text-align:left;vertical-align:top}th{background:#f0f4f8}.warn{background:#fff3cd}.mono{font-family:Consolas,monospace}.pos{color:#a61b1b}.neg{color:#0a7d33}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.card{background:#f8fafc;padding:12px;border-radius:8px}.card-wide{grid-column:span 2}.muted{color:#52606d}.toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 12px}.toolbar input{padding:8px 10px;border:1px solid #cbd2d9;border-radius:8px;min-width:180px;background:#fff}.pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#e9eff5;font-size:12px;color:#334e68}.path{display:inline-block;max-width:32rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.anchor{color:inherit;text-decoration:none}.anchor:hover{text-decoration:underline}.hidden{display:none}.hint{margin-top:8px;font-size:13px}.compact-list{margin:0;padding-left:18px}.compact-list li{margin:0 0 6px}.why-linked-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px}.why-linked-cards{display:grid;gap:12px}.why-card{border:1px solid #d9e2ec;border-radius:10px;padding:12px;background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)}.why-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px}.why-target{font-size:13px;line-height:1.4;word-break:break-word}.why-summary{font-size:14px;line-height:1.5;margin-bottom:8px}.why-evidence summary{cursor:pointer;font-weight:600;color:#334e68}.why-evidence ul{margin:8px 0 0;padding-left:18px}.why-evidence li{margin:0 0 8px}.conf-high{background:#d9f2e3;color:#17603a}.conf-medium{background:#fff1c2;color:#8a5a00}.conf-low{background:#f8d7da;color:#8a1c2b}.git-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.git-subject{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}@media (max-width:720px){.card-wide{grid-column:auto}}"
 }
 
 fn script_block() -> &'static str {
@@ -700,22 +700,28 @@ fn overview(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
         .git
         .as_ref()
         .map(|git| {
+            let subject = git
+                .commit_subject
+                .as_deref()
+                .map(|value| format!("<div class=\"muted git-subject\" title=\"{}\">{}</div>", escape(value), escape(value)))
+                .unwrap_or_default();
             format!(
-                "<div class=\"card\"><strong>Git</strong><div><span class=\"mono\">{}</span>{}{}{}</div></div>",
+                "<div class=\"card card-wide\"><strong>Git</strong><div class=\"git-head\"><span class=\"mono\">{}</span>{}{}{}</div>{}</div>",
                 escape(&git.short_commit_hash),
                 git.branch_name
                     .as_deref()
                     .map(|value| format!(" <span class=\"muted\">{}</span>", escape(value)))
                     .unwrap_or_else(|| " <span class=\"muted\">detached</span>".to_string()),
-                git.commit_subject
+                git.describe
                     .as_deref()
-                    .map(|value| format!("<div class=\"muted\">{}</div>", escape(value)))
+                    .map(|value| format!(" <span class=\"pill\" title=\"{}\">{}</span>", escape(value), escape(value)))
                     .unwrap_or_default(),
                 if git.is_dirty {
-                    "<div class=\"muted\">dirty working tree</div>".to_string()
+                    " <span class=\"pill\">dirty</span>".to_string()
                 } else {
                     String::new()
-                }
+                },
+                subject
             )
         })
         .unwrap_or_default();
