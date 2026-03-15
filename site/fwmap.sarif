@@ -1,0 +1,182 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "fwmap",
+          "version": "0.1.0",
+          "informationUri": "",
+          "rules": [
+            {
+              "id": "DEBUG_ARTIFACT_NOT_FOUND",
+              "name": "DEBUG_ARTIFACT_NOT_FOUND",
+              "shortDescription": {
+                "text": "No usable debug artifact was found for 'build/fwmap.elf'"
+              },
+              "fullDescription": {
+                "text": "DEBUG_ARTIFACT_NOT_FOUND warning from elf"
+              },
+              "help": {
+                "text": "fwmap reported DEBUG_ARTIFACT_NOT_FOUND with severity info. Review the related entity and report context for the underlying evidence."
+              },
+              "helpUri": "/blob/main/README.md#debug_artifact_not_found"
+            },
+            {
+              "id": "LARGE_SYMBOL",
+              "name": "LARGE_SYMBOL",
+              "shortDescription": {
+                "text": "Large symbol detected: sqlite3VdbeExec (49115 bytes (47.96 KiB))"
+              },
+              "fullDescription": {
+                "text": "LARGE_SYMBOL warning from analyze"
+              },
+              "help": {
+                "text": "fwmap reported LARGE_SYMBOL with severity warn. Review the related entity and report context for the underlying evidence."
+              },
+              "helpUri": "/blob/main/README.md#large_symbol"
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "LARGE_SYMBOL",
+          "level": "warning",
+          "kind": "fail",
+          "message": {
+            "text": "Large symbol detected: sqlite3VdbeExec (49115 bytes (47.96 KiB))"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "sqlite3VdbeExec"
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "fwmap/v1": "ee26fe7da6953870"
+          },
+          "properties": {
+            "includePass": false,
+            "logicalIdentity": "related:sqlite3VdbeExec",
+            "related": "sqlite3VdbeExec",
+            "source": "analyze",
+            "symbol": "sqlite3VdbeExec"
+          }
+        },
+        {
+          "ruleId": "LARGE_SYMBOL",
+          "level": "warning",
+          "kind": "fail",
+          "message": {
+            "text": "Large symbol detected: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h75e4fa34e7c912e2E.llvm.2657973373448331171 (39157 bytes (38.24 KiB))"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h75e4fa34e7c912e2E.llvm.2657973373448331171"
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "fwmap/v1": "05850d38ae18df8a"
+          },
+          "properties": {
+            "includePass": false,
+            "logicalIdentity": "related:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h75e4fa34e7c912e2E.llvm.2657973373448331171",
+            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h75e4fa34e7c912e2E.llvm.2657973373448331171",
+            "source": "analyze",
+            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h75e4fa34e7c912e2E.llvm.2657973373448331171"
+          }
+        },
+        {
+          "ruleId": "LARGE_SYMBOL",
+          "level": "warning",
+          "kind": "fail",
+          "message": {
+            "text": "Large symbol detected: _ZN5fwmap3cli3run17h2ebea5cf0817cf1fE (32445 bytes (31.68 KiB))"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "_ZN5fwmap3cli3run17h2ebea5cf0817cf1fE"
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "fwmap/v1": "730321b1c28f2971"
+          },
+          "properties": {
+            "includePass": false,
+            "logicalIdentity": "related:_ZN5fwmap3cli3run17h2ebea5cf0817cf1fE",
+            "related": "_ZN5fwmap3cli3run17h2ebea5cf0817cf1fE",
+            "source": "analyze",
+            "symbol": "_ZN5fwmap3cli3run17h2ebea5cf0817cf1fE"
+          }
+        },
+        {
+          "ruleId": "LARGE_SYMBOL",
+          "level": "warning",
+          "kind": "fail",
+          "message": {
+            "text": "Large symbol detected: _ZN5fwmap6report6render10build_html17hac34121577da807fE (29273 bytes (28.59 KiB))"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "_ZN5fwmap6report6render10build_html17hac34121577da807fE"
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "fwmap/v1": "0d7a047d27e0e0da"
+          },
+          "properties": {
+            "includePass": false,
+            "logicalIdentity": "related:_ZN5fwmap6report6render10build_html17hac34121577da807fE",
+            "related": "_ZN5fwmap6report6render10build_html17hac34121577da807fE",
+            "source": "analyze",
+            "symbol": "_ZN5fwmap6report6render10build_html17hac34121577da807fE"
+          }
+        },
+        {
+          "ruleId": "LARGE_SYMBOL",
+          "level": "warning",
+          "kind": "fail",
+          "message": {
+            "text": "Large symbol detected: _ZN5fwmap3cli18parse_history_args17h133d415979133042E (27391 bytes (26.75 KiB))"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "_ZN5fwmap3cli18parse_history_args17h133d415979133042E"
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "fwmap/v1": "495f28d4f565511e"
+          },
+          "properties": {
+            "includePass": false,
+            "logicalIdentity": "related:_ZN5fwmap3cli18parse_history_args17h133d415979133042E",
+            "related": "_ZN5fwmap3cli18parse_history_args17h133d415979133042E",
+            "source": "analyze",
+            "symbol": "_ZN5fwmap3cli18parse_history_args17h133d415979133042E"
+          }
+        }
+      ]
+    }
+  ]
+}
