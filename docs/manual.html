@@ -1,9 +1,9 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>fwmap ?????</title>
+  <title>fwmap マニュアル</title>
   <style>
     :root {
       color-scheme: light;
@@ -87,15 +87,15 @@
 <body>
   <main>
     <section class="hero">
-      <h1>fwmap ?????</h1>
-      <p>??? <code>manual.md</code> ????? UTF-8 ???????????????????????????????????</p>
+      <h1>fwmap マニュアル</h1>
+      <p>本文は <code>manual.md</code> をそのまま UTF-8 で表示します。ブラウザ上で手早く内容を確認したいときに使ってください。</p>
     </section>
     <section class="panel">
       <div class="panel-header">
         <strong>docs/manual.md</strong>
-        <a href="./manual.md">Markdown ???</a>
+        <a href="./manual.md">Markdown を開く</a>
       </div>
-      <pre id="manual">?????...</pre>
+      <pre id="manual">読み込み中...</pre>
     </section>
   </main>
   <script>
@@ -104,7 +104,7 @@
       try {
         const response = await fetch("./manual.md", { cache: "no-store" });
         if (!response.ok) {
-          throw new Error("manual.md ????????????");
+          throw new Error("manual.md の読み込みに失敗しました");
         }
         target.textContent = await response.text();
       } catch (error) {
