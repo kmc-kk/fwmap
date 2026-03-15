@@ -17,11 +17,12 @@ pub fn demangle_symbol(name: &str, mode: DemangleMode) -> Option<String> {
     if matches!(mode, DemangleMode::Off) {
         return None;
     }
-    if !matches!(mode, DemangleMode::On) && !looks_like_itanium(name) {
+    let normalized = strip_llvm_suffix(name);
+    if !matches!(mode, DemangleMode::On) && !looks_like_itanium(normalized) {
         return None;
     }
 
-    parse_itanium(name)
+    parse_itanium(normalized).map(clean_rust_legacy_demangle)
 }
 
 pub fn display_name(symbol: &SymbolInfo) -> &str {
@@ -30,6 +31,33 @@ pub fn display_name(symbol: &SymbolInfo) -> &str {
 
 fn looks_like_itanium(name: &str) -> bool {
     name.starts_with("_Z")
+}
+
+fn strip_llvm_suffix(name: &str) -> &str {
+    name.split_once(".llvm.").map(|(base, _)| base).unwrap_or(name)
+}
+
+fn clean_rust_legacy_demangle(value: String) -> String {
+    let mut parts = value.split("::").map(str::to_string).collect::<Vec<_>>();
+    if parts.last().is_some_and(|part| looks_like_rust_hash_component(part)) {
+        if let Some(hash) = parts.pop() {
+            return if parts.is_empty() {
+                hash
+            } else {
+                format!("{} [{}]", parts.join("::"), hash)
+            };
+        }
+    }
+    value
+}
+
+fn looks_like_rust_hash_component(value: &str) -> bool {
+    value.len() == 17
+        && value.starts_with('h')
+        && value
+            .chars()
+            .skip(1)
+            .all(|ch| ch.is_ascii_hexdigit())
 }
 
 fn parse_itanium(name: &str) -> Option<String> {
@@ -313,5 +341,18 @@ mod tests {
         }];
         apply_demangling(&mut symbols, DemangleMode::On);
         assert_ne!(display_name(&symbols[0]), symbols[0].name);
+    }
+
+    #[test]
+    fn demangles_rust_legacy_symbol_with_llvm_suffix() {
+        let value = demangle_symbol(
+            "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17h75e4fa34e7c912e2E.llvm.16657126762338766321",
+            DemangleMode::On,
+        )
+        .unwrap();
+        assert_eq!(
+            value,
+            "fwmap::ingest::dwarf::parse_dwarf_enabled [h75e4fa34e7c912e2]"
+        );
     }
 }
