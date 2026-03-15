@@ -23,6 +23,7 @@ jobs:
 
       - name: Build fwmap
         env:
+          CARGO_PROFILE_RELEASE_DEBUG: 1
           RUSTFLAGS: -C link-arg=-Wl,-Map=${{ env.FWMAP_MAP_PATH }}
         run: |
           cargo build --release
@@ -39,6 +40,8 @@ jobs:
           ./bin/fwmap analyze \
             --elf bin/fwmap.elf \
             --map bin/fwmap.map \
+            --dwarf=on \
+            --source-lines lines \
             --out out/report.html \
             --report-json out/report.json \
             --sarif out/fwmap.sarif

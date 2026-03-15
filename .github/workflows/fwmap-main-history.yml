@@ -37,6 +37,7 @@ jobs:
 
       - name: Build fwmap
         env:
+          CARGO_PROFILE_RELEASE_DEBUG: 1
           RUSTFLAGS: -C link-arg=-Wl,-Map=${{ env.FWMAP_MAP_PATH }}
         run: |
           cargo build --release
@@ -62,19 +63,31 @@ jobs:
               git rm -rf . >/dev/null 2>&1 || true
             )
           fi
+          mkdir -p prev
+          if [ -f "history-state/latest/fwmap.elf" ] && [ -f "history-state/latest/fwmap.map" ]; then
+            cp "history-state/latest/fwmap.elf" prev/fwmap-prev.elf
+            cp "history-state/latest/fwmap.map" prev/fwmap-prev.map
+          fi
 
       - name: Run fwmap analyze and save history
         run: |
-          ./bin/fwmap analyze \
-            --elf build/fwmap.elf \
-            --map build/fwmap.map \
-            --out "$FWMAP_OUT_DIR/report.html" \
-            --report-json "$FWMAP_OUT_DIR/report.json" \
-            --sarif "$FWMAP_OUT_DIR/fwmap.sarif" \
-            --save-history \
-            --history-db "$FWMAP_HISTORY_DB" \
-            --git-repo . \
+          ANALYZE_ARGS=(
+            --elf build/fwmap.elf
+            --map build/fwmap.map
+            --dwarf=on
+            --source-lines lines
+            --out "$FWMAP_OUT_DIR/report.html"
+            --report-json "$FWMAP_OUT_DIR/report.json"
+            --sarif "$FWMAP_OUT_DIR/fwmap.sarif"
+            --save-history
+            --history-db "$FWMAP_HISTORY_DB"
+            --git-repo .
             --profile release
+          )
+          if [ -f prev/fwmap-prev.elf ] && [ -f prev/fwmap-prev.map ]; then
+            ANALYZE_ARGS+=(--prev-elf prev/fwmap-prev.elf --prev-map prev/fwmap-prev.map)
+          fi
+          ./bin/fwmap analyze "${ANALYZE_ARGS[@]}"
 
       - name: Render history pages
         run: |
@@ -120,12 +133,15 @@ jobs:
         run: |
           cp "$FWMAP_HISTORY_DB" "history-state/history.db"
           mkdir -p "history-state/site"
+          mkdir -p "history-state/latest"
+          cp build/fwmap.elf "history-state/latest/fwmap.elf"
+          cp build/fwmap.map "history-state/latest/fwmap.map"
           cp -r "$FWMAP_SITE_DIR"/. "history-state/site/"
           (
             cd history-state
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add history.db site
+            git add history.db site latest
             git commit -m "Update fwmap history for ${GITHUB_SHA}" || true
             git push origin "HEAD:$FWMAP_HISTORY_BRANCH"
           )
