@@ -869,6 +869,12 @@ mod tests {
             cpp_class_diffs: Vec::new(),
             cpp_runtime_overhead_diffs: Vec::new(),
             cpp_lambda_group_diffs: Vec::new(),
+            rust_package_diffs: Vec::new(),
+            rust_target_diffs: Vec::new(),
+            rust_crate_diffs: Vec::new(),
+            rust_dependency_diffs: Vec::new(),
+            rust_family_diffs: Vec::new(),
+            rust_symbol_diffs: Vec::new(),
         };
         let why = explain_top_growth(&analysis, &diff, 3);
         assert_eq!(why.top_symbols.len(), 1);
@@ -885,6 +891,7 @@ mod tests {
             },
             git: None,
             rust_context: None,
+            rust_view: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: Some(ToolchainKind::Gnu),

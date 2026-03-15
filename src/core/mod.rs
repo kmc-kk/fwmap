@@ -8,5 +8,6 @@ pub mod linkage;
 pub mod model;
 pub mod policy;
 pub mod rust_ingest;
+pub mod rust_view;
 pub mod rule_config;
 pub mod rules;

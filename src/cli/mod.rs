@@ -14,7 +14,7 @@ use crate::rust_ingest::{has_rust_inputs, resolve_rust_inputs, ResolveRustArtifa
 use crate::linkage::{explain_object, explain_section, explain_symbol, ExplainResult};
 use crate::model::{
     CiFormat, CppGroupBy, DebuginfodMode, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode,
-    ThresholdConfig, ToolchainSelection, WarningLevel,
+    ThresholdConfig, ToolchainSelection, ViewMode, WarningLevel,
 };
 use crate::policy::{dump_effective_policy, evaluate_policy, load_policy_config, policy_warnings};
 use crate::rule_config::{apply_threshold_overrides, load_rule_config};
@@ -140,10 +140,10 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             }
             Ok(0)
         }
-        Command::HistoryShow { db, build } => {
+        Command::HistoryShow { db, build, view } => {
             match show_build(&db, build)? {
                 Some(detail) => {
-                    print_build_detail(&detail);
+                    print_build_detail(&detail, view);
                     Ok(0)
                 }
                 None => Err(format!("build id {build} was not found in {}", db.display())),
@@ -165,6 +165,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             order,
             json,
             html,
+            view,
         } => {
             let report = commit_timeline(&db, repo.as_deref(), branch.as_deref(), limit, profile.as_deref(), toolchain.as_deref(), target.as_deref(), order)?;
             if json {
@@ -176,7 +177,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 write_commit_timeline_html(path, &report)?;
                 println!("HTML: {}", path.display());
             } else {
-                print_commit_timeline(&report);
+                print_commit_timeline(&report, view);
             }
             Ok(0)
         }
@@ -191,6 +192,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             target,
             json,
             html,
+            view,
         } => {
             let report = range_diff(
                 &db,
@@ -211,7 +213,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 write_range_diff_html(path, &report)?;
                 println!("HTML: {}", path.display());
             } else {
-                print_range_diff(&report);
+                print_range_diff(&report, view);
             }
             Ok(0)
         }
@@ -380,6 +382,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             save_history,
             history_db,
             rust_inputs,
+            view,
         } => {
             let rust_resolution = resolve_rust_inputs(elf.as_deref(), &rust_inputs)?;
             let elf = rust_resolution
@@ -492,7 +495,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                     write_ci_summary(path, &current, diff.as_ref(), format, source_options)?;
                 }
             } else {
-                print_cli_summary(&current, diff.as_ref(), verbose);
+                print_cli_summary(&current, diff.as_ref(), verbose, view);
                 if cpp_view {
                     print_cpp_cli_summary(&current);
                 }
@@ -598,6 +601,7 @@ enum Command {
     HistoryShow {
         db: PathBuf,
         build: i64,
+        view: ViewMode,
     },
     HistoryTrend {
         db: PathBuf,
@@ -615,6 +619,7 @@ enum Command {
         order: CommitOrder,
         json: bool,
         html: Option<PathBuf>,
+        view: ViewMode,
     },
     HistoryRange {
         db: PathBuf,
@@ -627,6 +632,7 @@ enum Command {
         target: Option<String>,
         json: bool,
         html: Option<PathBuf>,
+        view: ViewMode,
     },
     HistoryRegression {
         db: PathBuf,
@@ -721,6 +727,7 @@ enum Command {
         save_history: bool,
         history_db: Option<PathBuf>,
         rust_inputs: RustInputs,
+        view: ViewMode,
     },
 }
 
@@ -788,6 +795,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut save_history = false;
     let mut history_db = None;
     let mut rust_inputs = RustInputs::default();
+    let mut view = ViewMode::Default;
     let mut index = 2usize;
     while index < args.len() {
         let key = &args[index];
@@ -805,6 +813,12 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
             "--group-by" => {
                 let value = args.get(index + 1).ok_or_else(|| "missing value for --group-by".to_string())?;
                 group_by = parse_cpp_group_by(value)?;
+                index += 2;
+                continue;
+            }
+            "--view" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --view".to_string())?;
+                view = parse_view_mode(value)?;
                 index += 2;
                 continue;
             }
@@ -1079,6 +1093,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         save_history,
         history_db,
         rust_inputs,
+        view,
     })
 }
 
@@ -1123,14 +1138,14 @@ fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze [--elf <path>] [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--why-linked-top <n>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--policy <path>] [--profile <name>] [--policy-dump-effective] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--git-repo <path>] [--no-git] [--save-history] [--history-db <path>] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--cargo-metadata <path>] [--cargo-build-json <path>] [--cargo-workspace <path>] [--cargo-target-name <name>] [--cargo-package <name-or-id>] [--cargo-target-kind <bin|lib|example|test|bench>] [--cargo-target-triple <triple>] [--resolve-rust-artifact <auto|strict|off>] [--allow-target-dir-fallback] [--cpp-view] [--group-by <mode>] [--verbose]
+fwmap analyze [--view <default|rust>] [--elf <path>] [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--why-linked-top <n>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--policy <path>] [--profile <name>] [--policy-dump-effective] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--git-repo <path>] [--no-git] [--save-history] [--history-db <path>] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--cargo-metadata <path>] [--cargo-build-json <path>] [--cargo-workspace <path>] [--cargo-target-name <name>] [--cargo-package <name-or-id>] [--cargo-target-kind <bin|lib|example|test|bench>] [--cargo-target-triple <triple>] [--resolve-rust-artifact <auto|strict|off>] [--allow-target-dir-fallback] [--cpp-view] [--group-by <mode>] [--verbose]
 fwmap explain --elf <path> [--map <path>] [--lds <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--git-repo <path>] [--no-git] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] (--symbol <name> | --object <name> | --section <name>)
 fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--policy <path>] [--profile <name>] [--policy-dump-effective] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--git-repo <path>] [--no-git] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
 fwmap history list --db <path> [--limit <n>] [--json]
-fwmap history show --db <path> --build <id>
-fwmap history trend --db <path> --metric <rom|ram|warnings|unknown_source|region:NAME|section:NAME|source:PATH|function:KEY|object:PATH|archive-member:ARCHIVE(MEMBER)|directory:PATH> [--last <n>]
-fwmap history commits [--db <path>] [--repo <path>] [--branch <name>] [--limit <n>] [--profile <name>] [--toolchain <id>] [--target <id>] [--order <timestamp|ancestry>] [--json] [--html <path>]
-fwmap history range <A..B|A...B> [--db <path>] [--repo <path>] [--profile <name>] [--toolchain <id>] [--target <id>] [--order <timestamp|ancestry>] [--include-changed-files] [--json] [--html <path>]
+fwmap history show --db <path> --build <id> [--view <default|rust>]
+fwmap history trend --db <path> --metric <rom|ram|warnings|unknown_source|region:NAME|section:NAME|source:PATH|function:KEY|object:PATH|archive-member:ARCHIVE(MEMBER)|directory:PATH|rust-package:NAME|rust-target:NAME|rust-crate:NAME|rust-dependency:NAME|rust-source:PATH|rust-family:NAME> [--last <n>]
+fwmap history commits [--db <path>] [--repo <path>] [--branch <name>] [--limit <n>] [--profile <name>] [--toolchain <id>] [--target <id>] [--order <timestamp|ancestry>] [--view <default|rust>] [--json] [--html <path>]
+fwmap history range <A..B|A...B> [--db <path>] [--repo <path>] [--profile <name>] [--toolchain <id>] [--target <id>] [--order <timestamp|ancestry>] [--view <default|rust>] [--include-changed-files] [--json] [--html <path>]
 fwmap history regression (--metric <key> | --rule <id> | --entity <key>) [<A..B|A...B>] [--db <path>] [--repo <path>] [--base <rev> --head <rev> | --from <rev> --to <rev>] [--mode <first-crossing|first-jump|first-presence|first-violation>] [--threshold <delta>] [--threshold-percent <percent>] [--jump-threshold <delta>] [--profile <name>] [--toolchain <id>] [--target <id>] [--order <timestamp|ancestry>] [--include-evidence] [--include-changed-files] [--bisect-like] [--max-steps <n>] [--limit-commits <n>] [--json] [--html <path>]
 
 Options:
@@ -1161,6 +1176,7 @@ Options:
   --no-git    Disable Git metadata collection
   --save-history Save analyze output into a history database
   --history-db Override the history database path used with --save-history
+  --view      default|rust Select generic or Rust-oriented CLI summaries
   --cargo-metadata Cargo metadata JSON file produced by `cargo metadata --format-version=1`
   --cargo-build-json Cargo build message stream produced by `cargo build --message-format=json`
   --cargo-workspace Cargo workspace root or Cargo.toml used to invoke `cargo metadata`
@@ -1548,7 +1564,12 @@ fn parse_history_list_args(args: Vec<String>) -> Result<Command, String> {
 fn parse_history_show_args(args: Vec<String>) -> Result<Command, String> {
     let db = parse_required_path_arg(&args[3..], "--db")?;
     let build = parse_required_i64_arg(&args[3..], "--build")?;
-    Ok(Command::HistoryShow { db, build })
+    let view = parse_optional_string_arg(&args[3..], "--view")?
+        .as_deref()
+        .map(parse_view_mode)
+        .transpose()?
+        .unwrap_or(ViewMode::Default);
+    Ok(Command::HistoryShow { db, build, view })
 }
 
 fn parse_history_trend_args(args: Vec<String>) -> Result<Command, String> {
@@ -1573,6 +1594,11 @@ fn parse_history_commits_args(args: Vec<String>) -> Result<Command, String> {
         .unwrap_or(CommitOrder::Timestamp);
     let json = args[3..].iter().any(|item| item == "--json");
     let html = parse_optional_path_arg(&args[3..], "--html")?;
+    let view = parse_optional_string_arg(&args[3..], "--view")?
+        .as_deref()
+        .map(parse_view_mode)
+        .transpose()?
+        .unwrap_or(ViewMode::Default);
     Ok(Command::HistoryCommits {
         db,
         repo,
@@ -1584,6 +1610,7 @@ fn parse_history_commits_args(args: Vec<String>) -> Result<Command, String> {
         order,
         json,
         html,
+        view,
     })
 }
 
@@ -1613,6 +1640,11 @@ fn parse_history_range_args(args: Vec<String>) -> Result<Command, String> {
     let include_changed_files = args[3..].iter().any(|item| item == "--include-changed-files");
     let json = args[3..].iter().any(|item| item == "--json");
     let html = parse_optional_path_arg(&args[3..], "--html")?;
+    let view = parse_optional_string_arg(&args[3..], "--view")?
+        .as_deref()
+        .map(parse_view_mode)
+        .transpose()?
+        .unwrap_or(ViewMode::Default);
     Ok(Command::HistoryRange {
         db,
         repo,
@@ -1624,6 +1656,7 @@ fn parse_history_range_args(args: Vec<String>) -> Result<Command, String> {
         target,
         json,
         html,
+        view,
     })
 }
 
@@ -1973,6 +2006,14 @@ fn parse_commit_order(value: &str) -> Result<CommitOrder, String> {
     }
 }
 
+fn parse_view_mode(value: &str) -> Result<ViewMode, String> {
+    match value {
+        "default" => Ok(ViewMode::Default),
+        "rust" => Ok(ViewMode::Rust),
+        _ => Err(format!("invalid value for --view: '{value}', expected default|rust")),
+    }
+}
+
 fn print_grouped_cpp_diff(diff: &crate::model::DiffResult, group_by: CppGroupBy) {
     let (label, entries) = match group_by {
         CppGroupBy::Symbol => return,
@@ -1994,7 +2035,7 @@ mod tests {
     use crate::rust_ingest::ResolveRustArtifactMode;
     use crate::model::{
         CiFormat, CppGroupBy, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode, ToolchainSelection,
-        WarningLevel,
+        ViewMode, WarningLevel,
     };
     use std::path::PathBuf;
 
@@ -2282,6 +2323,40 @@ mod tests {
                 assert!(json);
             }
             _ => panic!("expected history range command"),
+        }
+    }
+
+    #[test]
+    fn parses_rust_view_flags_for_analyze_and_history() {
+        let analyze = parse_args(vec![
+            "fwmap".to_string(),
+            "analyze".to_string(),
+            "--elf".to_string(),
+            "Cargo.toml".to_string(),
+            "--view".to_string(),
+            "rust".to_string(),
+        ])
+        .unwrap();
+        match analyze {
+            Command::Analyze { view, .. } => assert_eq!(view, ViewMode::Rust),
+            _ => panic!("expected analyze command"),
+        }
+
+        let history = parse_args(vec![
+            "fwmap".to_string(),
+            "history".to_string(),
+            "show".to_string(),
+            "--db".to_string(),
+            "history.db".to_string(),
+            "--build".to_string(),
+            "1".to_string(),
+            "--view".to_string(),
+            "rust".to_string(),
+        ])
+        .unwrap();
+        match history {
+            Command::HistoryShow { view, .. } => assert_eq!(view, ViewMode::Rust),
+            _ => panic!("expected history show command"),
         }
     }
 

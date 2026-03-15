@@ -1,4 +1,5 @@
 use crate::model::{DemangleMode, SymbolInfo};
+use rustc_demangle::try_demangle;
 
 pub fn apply_demangling(symbols: &mut [SymbolInfo], mode: DemangleMode) {
     if matches!(mode, DemangleMode::Off) {
@@ -18,11 +19,13 @@ pub fn demangle_symbol(name: &str, mode: DemangleMode) -> Option<String> {
         return None;
     }
     let normalized = strip_llvm_suffix(name);
-    if !matches!(mode, DemangleMode::On) && !looks_like_itanium(normalized) {
+    if !matches!(mode, DemangleMode::On) && !looks_like_itanium(normalized) && !looks_like_rust(normalized) {
         return None;
     }
 
-    parse_itanium(normalized).map(clean_rust_legacy_demangle)
+    parse_itanium(normalized)
+        .map(clean_rust_legacy_demangle)
+        .or_else(|| demangle_rust_symbol(normalized))
 }
 
 pub fn display_name(symbol: &SymbolInfo) -> &str {
@@ -31,6 +34,10 @@ pub fn display_name(symbol: &SymbolInfo) -> &str {
 
 fn looks_like_itanium(name: &str) -> bool {
     name.starts_with("_Z")
+}
+
+fn looks_like_rust(name: &str) -> bool {
+    name.starts_with("_R") || name.starts_with("_ZN")
 }
 
 fn strip_llvm_suffix(name: &str) -> &str {
@@ -49,6 +56,10 @@ fn clean_rust_legacy_demangle(value: String) -> String {
         }
     }
     value
+}
+
+fn demangle_rust_symbol(name: &str) -> Option<String> {
+    try_demangle(name).ok().map(|value| value.to_string())
 }
 
 fn looks_like_rust_hash_component(value: &str) -> bool {

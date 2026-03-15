@@ -1554,3 +1554,105 @@ fwmap analyze \
 - Cargo 入力がある場合、`report.json` には `rust_context` が追加されます。
 - `history.db` には Rust の package / target / profile / target triple を additive migration で保存します。
 - `history list --json` と `history show` でも保存済みの Rust context を確認できます。
+
+## 17. Rust View
+
+Phase 26 では Rust アプリケーション向けの `Rust View` を追加しました。`--view rust` を付けると、従来の ELF / map 解析結果を保ったまま、Rust 開発者が見たい単位でサイズを追えるようになります。
+
+### 17.1 基本の使い方
+
+```bash
+fwmap analyze \
+  --elf target/release/fwmap \
+  --map target/release/fwmap.map \
+  --cargo-metadata build/cargo-metadata.json \
+  --cargo-build-json build/cargo-build.jsonl \
+  --cargo-package fwmap \
+  --cargo-target-name fwmap \
+  --view rust \
+  --report-json out/report.json \
+  --out out/report.html
+```
+
+この表示では主に次を確認できます。
+
+- package ごとのサイズ
+- target ごとのサイズ
+- crate ごとのサイズ
+- dependency crate ごとのサイズ
+- source file ごとのサイズ
+- Rust symbol ごとのサイズ
+- generic / closure / async / trait / function 系の grouped family
+
+Rust metadata が不足している場合でも panic せず、Rust-attributed symbol が見つからない旨だけを表示して通常解析を続けます。
+
+### 17.2 CLI と history
+
+`--view rust` は `analyze` だけでなく history 系にも使えます。
+
+```bash
+fwmap history show --db history.db --build 12 --view rust
+fwmap history range main~20..main --db history.db --repo . --view rust
+```
+
+Rust View を履歴へ保存した build では、`history show --view rust` で package / target / crate / dependency / source / family の要約を確認できます。
+
+### 17.3 trend / regression で使える Rust キー
+
+```bash
+fwmap history trend --db history.db --metric rust-package:fwmap --last 20
+fwmap history trend --db history.db --metric rust-target:fwmap --last 20
+fwmap history trend --db history.db --metric rust-crate:serde --last 20
+fwmap history trend --db history.db --metric rust-dependency:tokio --last 20
+fwmap history trend --db history.db --metric rust-source:src/main.rs --last 20
+fwmap history trend --db history.db --metric rust-family:fwmap::worker::poll --last 20
+
+fwmap history regression \
+  --db history.db \
+  --repo . \
+  main~50..main \
+  --metric rust-dependency:tokio.size \
+  --threshold +16384
+```
+
+`.size` 付きの metric key は regression 用です。`trend` は `rust-package:...` のようなそのままのキーを使います。
+
+### 17.4 HTML / JSON に追加される内容
+
+HTML の `Rust View` セクションでは次を表示します。
+
+- Rust Total
+- Top Package
+- Top Dependency
+- Top Generic
+- Top Async
+- Top Rust Packages
+- Top Rust Targets
+- Top Rust Crates
+- Dependency Crates
+- Rust Source Files
+- Grouped Rust Families
+- Largest Rust Symbols
+
+差分がある場合は `Rust Diff` セクションに以下が追加されます。
+
+- Rust Package Delta
+- Rust Target Delta
+- Rust Crate Delta
+- Dependency Crate Delta
+- Rust Family Delta
+- Rust Symbol Delta
+
+JSON には optional な `rust_view` と `rust_diff` が追加されます。Rust symbol が存在しない build ではこれらは `null` または省略可能な扱いとして見てください。
+
+### 17.5 grouping の考え方
+
+Rust family の grouping は完全な意味解析ではなく、安定して比較できる deterministic な正規化です。
+
+- generic family: `<...>` の型引数部分を畳み込みます
+- closure family: `{{closure}}` を含む名前をまとめます
+- async family: `poll`、`Future`、`GenFuture`、`{{async}}` などのパターンをまとめます
+- trait family: `<T as Trait>` 形式をまとめます
+- function family: 上記に当てはまらない Rust function / method をそのまま近い形で使います
+
+このため proc-macro 展開境界やすべての monomorphization を完全復元するわけではありませんが、build 間比較には十分に安定したキーになります。

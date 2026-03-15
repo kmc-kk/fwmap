@@ -15,6 +15,7 @@ use crate::model::{
     WarningItem,
 };
 use crate::rules::{evaluate_default_rules, RuleContext};
+use crate::rust_view::build_rust_view;
 use crate::validation::quality::evaluate_quality_checks;
 
 #[derive(Debug, Clone)]
@@ -129,6 +130,7 @@ pub fn analyze_paths(
         binary: elf.binary,
         git: collect_git_metadata(&options.git),
         rust_context: options.rust_context.clone(),
+        rust_view: None,
         toolchain: ToolchainInfo {
             requested: options.toolchain,
             detected: map_data.as_ref().and_then(|item| item.detected_toolchain),
@@ -168,6 +170,7 @@ pub fn analyze_paths(
         unknown_source: dwarf_data.unknown_source,
         warnings,
     };
+    result.rust_view = build_rust_view(&result);
     result.warnings.extend(evaluate_quality_checks(&result));
     result.warnings.extend(evaluate_warnings(&result, None, &options.thresholds, &options.custom_rules));
     Ok(result)
@@ -669,6 +672,12 @@ mod tests {
             cpp_class_diffs: Vec::new(),
             cpp_runtime_overhead_diffs: Vec::new(),
             cpp_lambda_group_diffs: Vec::new(),
+            rust_package_diffs: Vec::new(),
+            rust_target_diffs: Vec::new(),
+            rust_crate_diffs: Vec::new(),
+            rust_dependency_diffs: Vec::new(),
+            rust_family_diffs: Vec::new(),
+            rust_symbol_diffs: Vec::new(),
         };
         let warnings = evaluate_warnings(&current, Some(&diff), &ThresholdConfig::default(), &[]);
         assert!(warnings.iter().any(|w| w.code == "ROM_THRESHOLD"));
@@ -711,6 +720,12 @@ mod tests {
             cpp_class_diffs: Vec::new(),
             cpp_runtime_overhead_diffs: Vec::new(),
             cpp_lambda_group_diffs: Vec::new(),
+            rust_package_diffs: Vec::new(),
+            rust_target_diffs: Vec::new(),
+            rust_crate_diffs: Vec::new(),
+            rust_dependency_diffs: Vec::new(),
+            rust_family_diffs: Vec::new(),
+            rust_symbol_diffs: Vec::new(),
         };
         let thresholds = ThresholdConfig {
             rom_percent: 95.0,
@@ -819,6 +834,7 @@ mod tests {
             },
             git: None,
             rust_context: None,
+            rust_view: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: None,

@@ -565,6 +565,7 @@ mod tests {
             },
             git: None,
             rust_context: None,
+            rust_view: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: Some(ToolchainKind::Gnu),

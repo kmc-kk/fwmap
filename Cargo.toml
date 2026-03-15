@@ -10,3 +10,4 @@ toml = "0.8"
 rusqlite = { version = "0.31", features = ["bundled"] }
 gimli = { version = "0.31", default-features = false, features = ["read"] }
 object = { version = "0.36", default-features = false, features = ["read", "write"] }
+rustc-demangle = "0.1"

@@ -41,6 +41,12 @@ pub struct BuildDetail {
     pub regions: Vec<(String, u64, u64, f64)>,
     pub top_source_files: Vec<(String, u64, usize, usize)>,
     pub top_functions: Vec<(String, String, u64)>,
+    pub rust_packages: Vec<(String, u64, usize)>,
+    pub rust_targets: Vec<(String, u64, usize)>,
+    pub rust_crates: Vec<(String, u64, usize)>,
+    pub rust_dependencies: Vec<(String, u64, usize)>,
+    pub rust_source_files: Vec<(String, u64, usize)>,
+    pub rust_families: Vec<(String, u64, usize)>,
     pub why_linked: Vec<WhyLinkedRecord>,
     pub warnings: Vec<(String, String, Option<String>)>,
 }
@@ -165,6 +171,8 @@ pub struct RangeDiffReport {
     pub top_changed_objects: Vec<ChangeEntry>,
     pub top_changed_source_files: Vec<ChangeEntry>,
     pub top_changed_symbols: Vec<ChangeEntry>,
+    pub top_changed_rust_dependencies: Vec<ChangeEntry>,
+    pub top_changed_rust_families: Vec<ChangeEntry>,
     pub changed_files_summary: Option<ChangedFilesSummary>,
     pub timeline_rows: Vec<CommitTimelineRow>,
 }
@@ -574,6 +582,51 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
         }
     }
 
+    if let Some(rust_view) = input.analysis.rust_view.as_ref() {
+        let mut rust_stmt = tx
+            .prepare(
+                "INSERT INTO rust_aggregate_metrics (build_id, scope, name, size_bytes, symbol_count)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )
+            .map_err(|err| format!("failed to prepare Rust aggregate insert: {err}"))?;
+        for item in &rust_view.packages {
+            rust_stmt
+                .execute(params![build_id, "package", item.name, item.size as i64, item.symbol_count as i64])
+                .map_err(|err| format!("failed to insert Rust package aggregate: {err}"))?;
+        }
+        for item in &rust_view.targets {
+            rust_stmt
+                .execute(params![build_id, "target", item.name, item.size as i64, item.symbol_count as i64])
+                .map_err(|err| format!("failed to insert Rust target aggregate: {err}"))?;
+        }
+        for item in &rust_view.crates {
+            rust_stmt
+                .execute(params![build_id, "crate", item.name, item.size as i64, item.symbol_count as i64])
+                .map_err(|err| format!("failed to insert Rust crate aggregate: {err}"))?;
+        }
+        for item in &rust_view.source_files {
+            rust_stmt
+                .execute(params![build_id, "source", item.name, item.size as i64, item.symbol_count as i64])
+                .map_err(|err| format!("failed to insert Rust source aggregate: {err}"))?;
+        }
+        for item in &rust_view.dependency_crates {
+            rust_stmt
+                .execute(params![build_id, "dependency", item.name, item.size as i64, item.symbol_count as i64])
+                .map_err(|err| format!("failed to insert Rust dependency aggregate: {err}"))?;
+        }
+        for item in &rust_view.grouped_families {
+            rust_stmt
+                .execute(params![
+                    build_id,
+                    format!("family:{:?}", item.kind).to_lowercase(),
+                    item.display_name,
+                    item.size as i64,
+                    item.symbol_count as i64
+                ])
+                .map_err(|err| format!("failed to insert Rust family aggregate: {err}"))?;
+        }
+    }
+
     tx.commit()
         .map_err(|err| format!("failed to commit build history transaction: {err}"))?;
     Ok(build_id)
@@ -748,6 +801,36 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|err| format!("failed to collect function detail: {err}"))?
     };
+    let rust_packages = query_triple_i64(
+        &conn,
+        "SELECT name, size_bytes, symbol_count FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = 'package' ORDER BY size_bytes DESC, name ASC LIMIT 10",
+        build_id,
+    )?;
+    let rust_targets = query_triple_i64(
+        &conn,
+        "SELECT name, size_bytes, symbol_count FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = 'target' ORDER BY size_bytes DESC, name ASC LIMIT 10",
+        build_id,
+    )?;
+    let rust_crates = query_triple_i64(
+        &conn,
+        "SELECT name, size_bytes, symbol_count FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = 'crate' ORDER BY size_bytes DESC, name ASC LIMIT 10",
+        build_id,
+    )?;
+    let rust_dependencies = query_triple_i64(
+        &conn,
+        "SELECT name, size_bytes, symbol_count FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = 'dependency' ORDER BY size_bytes DESC, name ASC LIMIT 10",
+        build_id,
+    )?;
+    let rust_source_files = query_triple_i64(
+        &conn,
+        "SELECT name, size_bytes, symbol_count FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = 'source' ORDER BY size_bytes DESC, name ASC LIMIT 10",
+        build_id,
+    )?;
+    let rust_families = query_triple_i64(
+        &conn,
+        "SELECT name, size_bytes, symbol_count FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope LIKE 'family:%' ORDER BY size_bytes DESC, name ASC LIMIT 10",
+        build_id,
+    )?;
     let warnings = {
         let mut stmt = conn
             .prepare(
@@ -790,6 +873,12 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
         regions,
         top_source_files,
         top_functions,
+        rust_packages,
+        rust_targets,
+        rust_crates,
+        rust_dependencies,
+        rust_source_files,
+        rust_families,
         why_linked,
         warnings,
     }))
@@ -867,8 +956,71 @@ pub fn trend_metric(db_path: &Path, metric: &str, last: usize) -> Result<Vec<Tre
     if let Some(directory) = metric.strip_prefix("directory:") {
         return query_directory_trend(&conn, directory, last);
     }
+    if let Some(name) = metric.strip_prefix("rust-package:") {
+        return query_named_metric(
+            &conn,
+            "rust_aggregate_metrics",
+            "name",
+            "size_bytes",
+            name,
+            last,
+            TrendFormat::Bytes,
+            NamedMetricMode::ByNameAndScope("package"),
+        );
+    }
+    if let Some(name) = metric.strip_prefix("rust-target:") {
+        return query_named_metric(
+            &conn,
+            "rust_aggregate_metrics",
+            "name",
+            "size_bytes",
+            name,
+            last,
+            TrendFormat::Bytes,
+            NamedMetricMode::ByNameAndScope("target"),
+        );
+    }
+    if let Some(name) = metric.strip_prefix("rust-crate:") {
+        return query_named_metric(
+            &conn,
+            "rust_aggregate_metrics",
+            "name",
+            "size_bytes",
+            name,
+            last,
+            TrendFormat::Bytes,
+            NamedMetricMode::ByNameAndScope("crate"),
+        );
+    }
+    if let Some(name) = metric.strip_prefix("rust-dependency:") {
+        return query_named_metric(
+            &conn,
+            "rust_aggregate_metrics",
+            "name",
+            "size_bytes",
+            name,
+            last,
+            TrendFormat::Bytes,
+            NamedMetricMode::ByNameAndScope("dependency"),
+        );
+    }
+    if let Some(name) = metric.strip_prefix("rust-source:") {
+        return query_named_metric(
+            &conn,
+            "rust_aggregate_metrics",
+            "name",
+            "size_bytes",
+            name,
+            last,
+            TrendFormat::Bytes,
+            NamedMetricMode::ByNameAndScope("source"),
+        );
+    }
+    if let Some(name) = metric.strip_prefix("rust-family:") {
+        return query_named_metric_like_scope(&conn, name, "family:%", last);
+    }
     Err(format!(
-        "unsupported trend metric '{metric}', expected rom|ram|warnings|unknown_source|region:<name>|section:<name>|source:<path>|function:<key>|object:<path>|archive-member:<archive(member)>|directory:<path>"
+        "unsupported trend metric '{metric}', expected rom|ram|warnings|unknown_source|region:<name>|section:<name>|source:<path>|function:<key>|object:<path>|archive-member:<archive(member)>|directory:<path>|rust-package:<name>|rust-target:<name>|rust-crate:<name>|rust-dependency:<name>|rust-source:<path>|rust-family:<name>"
     ))
 }
 
@@ -1037,6 +1189,14 @@ pub fn range_diff(
         top_changed_objects: range_metrics.as_ref().map(|diff| diff.objects.clone()).unwrap_or_default(),
         top_changed_source_files: range_metrics.as_ref().map(|diff| diff.source_files.clone()).unwrap_or_default(),
         top_changed_symbols: range_metrics.as_ref().map(|diff| diff.symbols.clone()).unwrap_or_default(),
+        top_changed_rust_dependencies: range_metrics
+            .as_ref()
+            .map(|diff| diff.rust_dependencies.clone())
+            .unwrap_or_default(),
+        top_changed_rust_families: range_metrics
+            .as_ref()
+            .map(|diff| diff.rust_families.clone())
+            .unwrap_or_default(),
         changed_files_summary,
         timeline_rows: rows,
     })
@@ -1344,6 +1504,24 @@ fn load_metric_value(conn: &Connection, build_id: i64, key: &str) -> Result<Opti
     if let Some(name) = key.strip_prefix("symbol:").and_then(|value| value.strip_suffix(".size")) {
         return query_named_metric_value(conn, "symbol_metrics", "name", "size_bytes", build_id, name);
     }
+    if let Some(name) = key.strip_prefix("rust-package:").and_then(|value| value.strip_suffix(".size")) {
+        return query_rust_metric_value(conn, build_id, "package", name);
+    }
+    if let Some(name) = key.strip_prefix("rust-target:").and_then(|value| value.strip_suffix(".size")) {
+        return query_rust_metric_value(conn, build_id, "target", name);
+    }
+    if let Some(name) = key.strip_prefix("rust-crate:").and_then(|value| value.strip_suffix(".size")) {
+        return query_rust_metric_value(conn, build_id, "crate", name);
+    }
+    if let Some(name) = key.strip_prefix("rust-dependency:").and_then(|value| value.strip_suffix(".size")) {
+        return query_rust_metric_value(conn, build_id, "dependency", name);
+    }
+    if let Some(name) = key.strip_prefix("rust-source:").and_then(|value| value.strip_suffix(".size")) {
+        return query_rust_metric_value(conn, build_id, "source", name);
+    }
+    if let Some(name) = key.strip_prefix("rust-family:").and_then(|value| value.strip_suffix(".size")) {
+        return query_rust_metric_value_like(conn, build_id, "family:%", name);
+    }
     Err(format!("unsupported metric key '{key}'"))
 }
 
@@ -1363,6 +1541,24 @@ fn load_entity_value(conn: &Connection, build_id: i64, key: &str) -> Result<Opti
     if let Some(name) = key.strip_prefix("region:") {
         return query_named_metric_value(conn, "region_metrics", "region_name", "used_bytes", build_id, name);
     }
+    if let Some(name) = key.strip_prefix("rust-package:") {
+        return query_rust_metric_value(conn, build_id, "package", name);
+    }
+    if let Some(name) = key.strip_prefix("rust-target:") {
+        return query_rust_metric_value(conn, build_id, "target", name);
+    }
+    if let Some(name) = key.strip_prefix("rust-crate:") {
+        return query_rust_metric_value(conn, build_id, "crate", name);
+    }
+    if let Some(name) = key.strip_prefix("rust-dependency:") {
+        return query_rust_metric_value(conn, build_id, "dependency", name);
+    }
+    if let Some(name) = key.strip_prefix("rust-source:") {
+        return query_rust_metric_value(conn, build_id, "source", name);
+    }
+    if let Some(name) = key.strip_prefix("rust-family:") {
+        return query_rust_metric_value_like(conn, build_id, "family:%", name);
+    }
     Err(format!("unsupported entity key '{key}'"))
 }
 
@@ -1380,6 +1576,26 @@ fn query_named_metric_value(
     conn.query_row(&sql, params![build_id, name], |row| row.get::<_, i64>(0))
         .optional()
         .map_err(|err| format!("failed to query {table} '{name}': {err}"))
+}
+
+fn query_rust_metric_value(conn: &Connection, build_id: i64, scope: &str, name: &str) -> Result<Option<i64>, String> {
+    conn.query_row(
+        "SELECT size_bytes FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = ?2 AND name = ?3 LIMIT 1",
+        params![build_id, scope, name],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .map_err(|err| format!("failed to query rust_aggregate_metrics '{scope}:{name}': {err}"))
+}
+
+fn query_rust_metric_value_like(conn: &Connection, build_id: i64, scope_pattern: &str, name: &str) -> Result<Option<i64>, String> {
+    conn.query_row(
+        "SELECT SUM(size_bytes) FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope LIKE ?2 AND name = ?3 GROUP BY name LIMIT 1",
+        params![build_id, scope_pattern, name],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .map_err(|err| format!("failed to query rust_aggregate_metrics '{scope_pattern}:{name}': {err}"))
 }
 
 fn classify_regression_confidence(
@@ -1592,13 +1808,22 @@ fn query_named_metric(
     format: TrendFormat,
     mode: NamedMetricMode,
 ) -> Result<Vec<TrendPoint>, String> {
-    let sql = format!(
-        "SELECT b.id, b.created_at, t.{value_column}
-         FROM builds b
-         JOIN {table} t ON t.build_id = b.id
-         WHERE t.{name_column} = ?1
-         ORDER BY b.id DESC LIMIT ?2"
-    );
+    let sql = match mode {
+        NamedMetricMode::ByName => format!(
+            "SELECT b.id, b.created_at, t.{value_column}
+             FROM builds b
+             JOIN {table} t ON t.build_id = b.id
+             WHERE t.{name_column} = ?1
+             ORDER BY b.id DESC LIMIT ?2"
+        ),
+        NamedMetricMode::ByNameAndScope(_) => format!(
+            "SELECT b.id, b.created_at, t.{value_column}
+             FROM builds b
+             JOIN {table} t ON t.build_id = b.id
+             WHERE t.{name_column} = ?1 AND t.scope = ?2
+             ORDER BY b.id DESC LIMIT ?3"
+        ),
+    };
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|err| format!("failed to prepare named trend query: {err}"))?;
@@ -1617,7 +1842,51 @@ fn query_named_metric(
             .map_err(|err| format!("failed to query named trend metric: {err}"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|err| format!("failed to collect named trend metric: {err}"))?,
+        NamedMetricMode::ByNameAndScope(scope) => stmt
+            .query_map(params![name, scope, last as i64], |row| {
+                Ok(TrendPoint {
+                    build_id: row.get(0)?,
+                    created_at: row.get(1)?,
+                    label: name.to_string(),
+                    value: row.get::<_, i64>(2)?,
+                    format,
+                    note: Some(scope.to_string()),
+                })
+            })
+            .map_err(|err| format!("failed to query named scoped trend metric: {err}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("failed to collect named scoped trend metric: {err}"))?,
     };
+    points.reverse();
+    Ok(points)
+}
+
+fn query_named_metric_like_scope(conn: &Connection, name: &str, scope_pattern: &str, last: usize) -> Result<Vec<TrendPoint>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT b.id, b.created_at, COALESCE(SUM(t.size_bytes), 0)
+             FROM builds b
+             JOIN rust_aggregate_metrics t ON t.build_id = b.id
+             WHERE t.name = ?1 AND t.scope LIKE ?2
+             GROUP BY b.id, b.created_at
+             ORDER BY b.id DESC LIMIT ?3",
+        )
+        .map_err(|err| format!("failed to prepare Rust family trend query: {err}"))?;
+    let rows = stmt
+        .query_map(params![name, scope_pattern, last as i64], |row| {
+            Ok(TrendPoint {
+                build_id: row.get(0)?,
+                created_at: row.get(1)?,
+                label: name.to_string(),
+                value: row.get::<_, i64>(2)?,
+                format: TrendFormat::Bytes,
+                note: Some("family".to_string()),
+            })
+        })
+        .map_err(|err| format!("failed to query Rust family trend metric: {err}"))?;
+    let mut points = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("failed to collect Rust family trend metric: {err}"))?;
     points.reverse();
     Ok(points)
 }
@@ -1715,7 +1984,7 @@ pub fn print_build_list(items: &[BuildRecord]) {
     }
 }
 
-pub fn print_build_detail(detail: &BuildDetail) {
+pub fn print_build_detail(detail: &BuildDetail, view: crate::model::ViewMode) {
     println!(
         "Build #{} at {}",
         detail.build.id, detail.build.created_at
@@ -1808,6 +2077,44 @@ pub fn print_build_detail(detail: &BuildDetail) {
             println!("  {} {} {}", name, path, size);
         }
     }
+    if matches!(view, crate::model::ViewMode::Rust) {
+        if !detail.rust_packages.is_empty() {
+            println!("Rust packages:");
+            for (name, size, symbols) in &detail.rust_packages {
+                println!("  {} {} symbols={}", name, size, symbols);
+            }
+        }
+        if !detail.rust_targets.is_empty() {
+            println!("Rust targets:");
+            for (name, size, symbols) in &detail.rust_targets {
+                println!("  {} {} symbols={}", name, size, symbols);
+            }
+        }
+        if !detail.rust_crates.is_empty() {
+            println!("Rust crates:");
+            for (name, size, symbols) in &detail.rust_crates {
+                println!("  {} {} symbols={}", name, size, symbols);
+            }
+        }
+        if !detail.rust_dependencies.is_empty() {
+            println!("Rust dependency crates:");
+            for (name, size, symbols) in &detail.rust_dependencies {
+                println!("  {} {} symbols={}", name, size, symbols);
+            }
+        }
+        if !detail.rust_source_files.is_empty() {
+            println!("Rust source files:");
+            for (name, size, symbols) in &detail.rust_source_files {
+                println!("  {} {} symbols={}", name, size, symbols);
+            }
+        }
+        if !detail.rust_families.is_empty() {
+            println!("Rust families:");
+            for (name, size, symbols) in &detail.rust_families {
+                println!("  {} {} symbols={}", name, size, symbols);
+            }
+        }
+    }
     if !detail.why_linked.is_empty() {
         println!("Why linked:");
         for item in &detail.why_linked {
@@ -1860,7 +2167,7 @@ pub fn print_trend(points: &[TrendPoint]) {
     }
 }
 
-pub fn print_commit_timeline(report: &CommitTimelineReport) {
+pub fn print_commit_timeline(report: &CommitTimelineReport, view: crate::model::ViewMode) {
     if report.rows.is_empty() {
         println!("No analyzed commits matched the requested timeline.");
         return;
@@ -1884,10 +2191,15 @@ pub fn print_commit_timeline(report: &CommitTimelineReport) {
             rom_delta,
             ram_delta
         );
+        if matches!(view, crate::model::ViewMode::Rust) {
+            if let Some(item) = row.top_increases.source_files.first() {
+                println!("    top source delta: {} ({:+})", item.name, item.delta);
+            }
+        }
     }
 }
 
-pub fn print_range_diff(report: &RangeDiffReport) {
+pub fn print_range_diff(report: &RangeDiffReport, view: crate::model::ViewMode) {
     println!(
         "Range {} {} analyzed={} missing={} cumulative_rom={:+} cumulative_ram={:+}",
         report.input_range_spec,
@@ -1902,6 +2214,14 @@ pub fn print_range_diff(report: &RangeDiffReport) {
     }
     if let Some(item) = report.worst_commit_by_ram.as_ref() {
         println!("Worst RAM commit: {} {} ({:+})", item.commit, item.subject, item.delta);
+    }
+    if matches!(view, crate::model::ViewMode::Rust) {
+        if let Some(item) = report.top_changed_rust_dependencies.first() {
+            println!("Top Rust dependency delta: {} ({:+})", item.name, item.delta);
+        }
+        if let Some(item) = report.top_changed_rust_families.first() {
+            println!("Top Rust family delta: {} ({:+})", item.name, item.delta);
+        }
     }
 }
 
@@ -2089,6 +2409,7 @@ pub fn write_regression_html(path: &Path, report: &RegressionReport) -> Result<(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NamedMetricMode {
     ByName,
+    ByNameAndScope(&'static str),
 }
 
 fn history_report_css() -> &'static str {
@@ -2116,6 +2437,8 @@ struct BuildMetricDiff {
     objects: Vec<ChangeEntry>,
     source_files: Vec<ChangeEntry>,
     symbols: Vec<ChangeEntry>,
+    rust_dependencies: Vec<ChangeEntry>,
+    rust_families: Vec<ChangeEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -2265,6 +2588,16 @@ fn build_metric_diff(db_path: &Path, current_build_id: i64, previous_build_id: i
             load_metric_map(&conn, "symbol_metrics", "name", previous_build_id)?,
             5,
         ),
+        rust_dependencies: diff_metric_entries(
+            load_scoped_metric_map(&conn, "dependency", current_build_id)?,
+            load_scoped_metric_map(&conn, "dependency", previous_build_id)?,
+            3,
+        ),
+        rust_families: diff_metric_entries(
+            load_like_scoped_metric_map(&conn, "family:%", current_build_id)?,
+            load_like_scoped_metric_map(&conn, "family:%", previous_build_id)?,
+            3,
+        ),
     })
 }
 
@@ -2315,6 +2648,34 @@ fn load_metric_map(conn: &Connection, table: &str, name_column: &str, build_id: 
     Ok(rows
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| format!("failed to collect metric table {table}: {err}"))?
+        .into_iter()
+        .collect())
+}
+
+fn load_scoped_metric_map(conn: &Connection, scope: &str, build_id: i64) -> Result<HashMap<String, i64>, String> {
+    let mut stmt = conn
+        .prepare("SELECT name, size_bytes FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = ?2")
+        .map_err(|err| format!("failed to prepare scoped Rust metric query: {err}"))?;
+    let rows = stmt
+        .query_map(params![build_id, scope], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+        .map_err(|err| format!("failed to query scoped Rust metrics: {err}"))?;
+    Ok(rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("failed to collect scoped Rust metrics: {err}"))?
+        .into_iter()
+        .collect())
+}
+
+fn load_like_scoped_metric_map(conn: &Connection, scope_pattern: &str, build_id: i64) -> Result<HashMap<String, i64>, String> {
+    let mut stmt = conn
+        .prepare("SELECT name, SUM(size_bytes) FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope LIKE ?2 GROUP BY name")
+        .map_err(|err| format!("failed to prepare LIKE-scoped Rust metric query: {err}"))?;
+    let rows = stmt
+        .query_map(params![build_id, scope_pattern], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+        .map_err(|err| format!("failed to query LIKE-scoped Rust metrics: {err}"))?;
+    Ok(rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("failed to collect LIKE-scoped Rust metrics: {err}"))?
         .into_iter()
         .collect())
 }
@@ -2433,6 +2794,23 @@ fn query_pairs_i64(conn: &Connection, sql: &str, build_id: i64) -> Result<Vec<(S
         .map_err(|err| format!("failed to query history pairs: {err}"))?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|err| format!("failed to collect history pairs: {err}"))
+}
+
+fn query_triple_i64(conn: &Connection, sql: &str, build_id: i64) -> Result<Vec<(String, u64, usize)>, String> {
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|err| format!("failed to prepare history triple query: {err}"))?;
+    let rows = stmt
+        .query_map(params![build_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)? as u64,
+                row.get::<_, i64>(2)? as usize,
+            ))
+        })
+        .map_err(|err| format!("failed to query history triples: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("failed to collect history triples: {err}"))
 }
 
 fn open_history_db(path: &Path) -> Result<Connection, String> {
@@ -2558,6 +2936,14 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             artifact_path TEXT,
             metadata_source TEXT NOT NULL DEFAULT '',
             workspace_members_json TEXT NOT NULL DEFAULT '[]'
+        );
+        CREATE TABLE IF NOT EXISTS rust_aggregate_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            build_id INTEGER NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+            scope TEXT NOT NULL,
+            name TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            symbol_count INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS schema_meta (
             key TEXT PRIMARY KEY,
@@ -2756,8 +3142,9 @@ mod tests {
     use crate::git::{collect_git_metadata, CommitOrder, GitOptions};
     use crate::model::{
         AnalysisResult, BinaryInfo, DebugArtifactInfo, DebugInfoSummary, MemorySummary, ObjectContribution,
-        ObjectSourceKind, RustContext, SectionCategory, SectionTotal, SymbolInfo, ToolchainInfo, ToolchainKind,
-        ToolchainSelection, UnknownSourceBucket, WarningItem, WarningLevel, WarningSource,
+        ObjectSourceKind, RustAggregate, RustContext, RustFamilyKind, RustFamilySummary, RustSymbolSummary, RustView,
+        SectionCategory, SectionTotal, SymbolInfo, SymbolLanguage, ToolchainInfo, ToolchainKind, ToolchainSelection,
+        UnknownSourceBucket, WarningItem, WarningLevel, WarningSource,
     };
     use rusqlite::Connection;
     use std::collections::BTreeMap;
@@ -2789,6 +3176,85 @@ mod tests {
         assert_eq!(detail.top_functions.len(), 1);
         assert_eq!(detail.why_linked.len(), 0);
         let _ = fs::remove_file(db);
+    }
+
+    #[test]
+    fn persists_rust_view_aggregates_and_supports_rust_trend_and_regression() {
+        let db = temp_db();
+        let repo = init_repo("rust-metrics");
+        let commit_one = checkout_and_collect(&repo, "HEAD");
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: analysis_for_commit_with_rust(100, 20, &commit_one, "tokio", 32),
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+        fs::write(repo.join("src").join("main.cpp"), "hello 2\n").unwrap();
+        run_git(&repo, &["commit", "-am", "second commit"]);
+        let commit_two = checkout_and_collect(&repo, "HEAD");
+        let build_id = record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: analysis_for_commit_with_rust(140, 24, &commit_two, "tokio", 64),
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+        fs::write(repo.join("src").join("main.cpp"), "hello 3\n").unwrap();
+        run_git(&repo, &["commit", "-am", "third commit"]);
+        let commit_three = checkout_and_collect(&repo, "HEAD");
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: analysis_for_commit_with_rust(150, 28, &commit_three, "tokio", 72),
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+
+        let detail = show_build(&db, build_id).unwrap().unwrap();
+        assert_eq!(detail.rust_packages.first().map(|item| item.0.as_str()), Some("fwmap"));
+        assert_eq!(detail.rust_targets.first().map(|item| item.0.as_str()), Some("fwmap"));
+        assert_eq!(detail.rust_crates.first().map(|item| item.0.as_str()), Some("fwmap"));
+        assert_eq!(detail.rust_dependencies.first().map(|item| item.0.as_str()), Some("tokio"));
+        assert_eq!(detail.rust_source_files.first().map(|item| item.0.as_str()), Some("src/main.rs"));
+
+        let trend = trend_metric(&db, "rust-dependency:tokio", 10).unwrap();
+        assert_eq!(trend.len(), 3);
+        assert_eq!(trend[0].value, 32);
+        assert_eq!(trend[1].value, 64);
+        assert_eq!(trend[2].value, 72);
+
+        let regression = regression_origin(
+            &db,
+            Some(&repo),
+            "HEAD~2..HEAD",
+            RegressionDetector::Metric,
+            "rust-dependency:tokio.size",
+            RegressionMode::FirstCrossing,
+            Some(36),
+            None,
+            None,
+            CommitOrder::Ancestry,
+            false,
+            false,
+            false,
+            8,
+            None,
+            Some("release"),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            regression.origin.first_observed_bad.as_ref().map(|item| item.subject.as_str()),
+            Some("third commit")
+        );
+
+        let _ = fs::remove_file(db);
+        let _ = fs::remove_dir_all(repo);
     }
 
     #[test]
@@ -3282,6 +3748,89 @@ mod tests {
         analysis
     }
 
+    fn analysis_for_commit_with_rust(
+        rom: u64,
+        ram: u64,
+        git: &crate::model::GitMetadata,
+        dependency: &str,
+        dependency_size: u64,
+    ) -> AnalysisResult {
+        let mut analysis = analysis_for_commit(rom, ram, git);
+        analysis.rust_context = Some(RustContext {
+            workspace_root: Some("/workspace/fwmap".to_string()),
+            manifest_path: Some("/workspace/fwmap/Cargo.toml".to_string()),
+            package_name: Some("fwmap".to_string()),
+            package_id: Some("path+file:///workspace/fwmap#fwmap@0.1.0".to_string()),
+            target_name: Some("fwmap".to_string()),
+            target_kind: vec!["bin".to_string()],
+            crate_types: vec!["bin".to_string()],
+            edition: Some("2024".to_string()),
+            target_triple: Some("x86_64-unknown-linux-gnu".to_string()),
+            profile: Some("release".to_string()),
+            artifact_path: Some("/workspace/fwmap/target/release/fwmap".to_string()),
+            metadata_source: "test".to_string(),
+            workspace_members: vec!["fwmap".to_string()],
+        });
+        analysis.rust_view = Some(RustView {
+            workspace: Some("/workspace/fwmap".to_string()),
+            packages: vec![RustAggregate {
+                name: "fwmap".to_string(),
+                size: rom,
+                symbol_count: 2,
+            }],
+            targets: vec![RustAggregate {
+                name: "fwmap".to_string(),
+                size: rom,
+                symbol_count: 2,
+            }],
+            crates: vec![
+                RustAggregate {
+                    name: "fwmap".to_string(),
+                    size: rom.saturating_sub(dependency_size),
+                    symbol_count: 1,
+                },
+                RustAggregate {
+                    name: dependency.to_string(),
+                    size: dependency_size,
+                    symbol_count: 1,
+                },
+            ],
+            dependency_crates: vec![RustAggregate {
+                name: dependency.to_string(),
+                size: dependency_size,
+                symbol_count: 1,
+            }],
+            source_files: vec![RustAggregate {
+                name: "src/main.rs".to_string(),
+                size: rom,
+                symbol_count: 2,
+            }],
+            grouped_families: vec![RustFamilySummary {
+                kind: RustFamilyKind::Async,
+                key: "fwmap::worker::poll".to_string(),
+                display_name: "fwmap::worker::poll".to_string(),
+                size: rom,
+                symbol_count: 2,
+            }],
+            symbols: vec![RustSymbolSummary {
+                raw_name: "_RNvC6fwmap6worker4poll".to_string(),
+                demangled_name: Some("fwmap::worker::poll".to_string()),
+                display_name: "fwmap::worker::poll".to_string(),
+                language: SymbolLanguage::Rust,
+                package: Some("fwmap".to_string()),
+                target: Some("fwmap".to_string()),
+                crate_name: Some("fwmap".to_string()),
+                dependency_crate: Some(dependency.to_string()),
+                source_path: Some("src/main.rs".to_string()),
+                family_kind: RustFamilyKind::Async,
+                family_key: "fwmap::worker::poll".to_string(),
+                size: rom,
+            }],
+            total_rust_size: rom,
+        });
+        analysis
+    }
+
     fn init_repo(label: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("fwmap-history-{label}-{}", super::now_unix()));
         fs::create_dir_all(&dir).unwrap();
@@ -3320,6 +3869,7 @@ mod tests {
             },
             git: None,
             rust_context: None,
+            rust_view: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: None,

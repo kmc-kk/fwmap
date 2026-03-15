@@ -16,6 +16,7 @@ pub use core::linkage;
 pub use core::model;
 pub use core::policy;
 pub use core::rust_ingest;
+pub use core::rust_view;
 pub use core::rule_config;
 pub use core::rules;
 pub use report::render;

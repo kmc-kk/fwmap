@@ -49,6 +49,72 @@ pub struct RustContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SymbolLanguage {
+    Rust,
+    Cpp,
+    C,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RustFamilyKind {
+    Generic,
+    Closure,
+    Async,
+    Trait,
+    Function,
+    Static,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RustAggregate {
+    pub name: String,
+    pub size: u64,
+    pub symbol_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RustFamilySummary {
+    pub kind: RustFamilyKind,
+    pub key: String,
+    pub display_name: String,
+    pub size: u64,
+    pub symbol_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RustSymbolSummary {
+    pub raw_name: String,
+    pub demangled_name: Option<String>,
+    pub display_name: String,
+    pub language: SymbolLanguage,
+    pub package: Option<String>,
+    pub target: Option<String>,
+    pub crate_name: Option<String>,
+    pub dependency_crate: Option<String>,
+    pub source_path: Option<String>,
+    pub family_kind: RustFamilyKind,
+    pub family_key: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct RustView {
+    pub workspace: Option<String>,
+    pub packages: Vec<RustAggregate>,
+    pub targets: Vec<RustAggregate>,
+    pub crates: Vec<RustAggregate>,
+    pub dependency_crates: Vec<RustAggregate>,
+    pub source_files: Vec<RustAggregate>,
+    pub grouped_families: Vec<RustFamilySummary>,
+    pub symbols: Vec<RustSymbolSummary>,
+    pub total_rust_size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SectionInfo {
     pub name: String,
     pub addr: u64,
@@ -192,6 +258,7 @@ pub struct AnalysisResult {
     pub binary: BinaryInfo,
     pub git: Option<GitMetadata>,
     pub rust_context: Option<RustContext>,
+    pub rust_view: Option<RustView>,
     pub toolchain: ToolchainInfo,
     pub debug_info: DebugInfoSummary,
     pub debug_artifact: DebugArtifactInfo,
@@ -242,6 +309,12 @@ pub struct DiffResult {
     pub cpp_class_diffs: Vec<DiffEntry>,
     pub cpp_runtime_overhead_diffs: Vec<DiffEntry>,
     pub cpp_lambda_group_diffs: Vec<DiffEntry>,
+    pub rust_package_diffs: Vec<DiffEntry>,
+    pub rust_target_diffs: Vec<DiffEntry>,
+    pub rust_crate_diffs: Vec<DiffEntry>,
+    pub rust_dependency_diffs: Vec<DiffEntry>,
+    pub rust_family_diffs: Vec<DiffEntry>,
+    pub rust_symbol_diffs: Vec<DiffEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
@@ -593,6 +666,14 @@ pub enum CiFormat {
     Text,
     Markdown,
     Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ViewMode {
+    #[default]
+    Default,
+    Rust,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

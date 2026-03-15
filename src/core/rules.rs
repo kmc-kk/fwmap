@@ -544,6 +544,12 @@ mod tests {
             cpp_class_diffs: Vec::new(),
             cpp_runtime_overhead_diffs: Vec::new(),
             cpp_lambda_group_diffs: Vec::new(),
+            rust_package_diffs: Vec::new(),
+            rust_target_diffs: Vec::new(),
+            rust_crate_diffs: Vec::new(),
+            rust_dependency_diffs: Vec::new(),
+            rust_family_diffs: Vec::new(),
+            rust_symbol_diffs: Vec::new(),
         };
         let context = RuleContext {
             current: &current,
@@ -597,6 +603,12 @@ mod tests {
             cpp_class_diffs: Vec::new(),
             cpp_runtime_overhead_diffs: Vec::new(),
             cpp_lambda_group_diffs: Vec::new(),
+            rust_package_diffs: Vec::new(),
+            rust_target_diffs: Vec::new(),
+            rust_crate_diffs: Vec::new(),
+            rust_dependency_diffs: Vec::new(),
+            rust_family_diffs: Vec::new(),
+            rust_symbol_diffs: Vec::new(),
         };
         let thresholds = ThresholdConfig {
             rom_percent: 95.0,
@@ -679,6 +691,12 @@ mod tests {
             cpp_class_diffs: Vec::new(),
             cpp_runtime_overhead_diffs: Vec::new(),
             cpp_lambda_group_diffs: Vec::new(),
+            rust_package_diffs: Vec::new(),
+            rust_target_diffs: Vec::new(),
+            rust_crate_diffs: Vec::new(),
+            rust_dependency_diffs: Vec::new(),
+            rust_family_diffs: Vec::new(),
+            rust_symbol_diffs: Vec::new(),
         };
         let custom_rules = vec![
             crate::model::CustomRule {
@@ -738,6 +756,7 @@ mod tests {
             },
             git: None,
             rust_context: None,
+            rust_view: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: None,

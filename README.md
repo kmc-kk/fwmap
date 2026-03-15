@@ -28,6 +28,7 @@
 - warning-based exit control
 - SQLite-backed history recording and trend inspection
 - Rust Cargo metadata / build JSON ingestion and artifact discovery
+- Rust View aggregations for packages, targets, crates, dependency crates, source files, grouped families, and symbols
 - Graceful degradation for missing symbol tables and partially broken map files
 - Toolchain auto-detection and parser-family selection
 - `--verbose` and `--version` CLI support
@@ -88,6 +89,23 @@ cargo run -- analyze \
 
 When multiple Rust artifacts are present, narrow selection with `--cargo-package`, `--cargo-target-name`, or `--cargo-target-kind`. If you already know the artifact path, `--elf` still wins and Cargo inputs only enrich `rust_context`.
 
+Rust View:
+
+```bash
+cargo run -- analyze \
+  --elf target/release/fwmap \
+  --map target/release/fwmap.map \
+  --cargo-metadata build/cargo-metadata.json \
+  --cargo-build-json build/cargo-build.jsonl \
+  --cargo-package fwmap \
+  --cargo-target-name fwmap \
+  --view rust \
+  --report-json report.json \
+  --out report.html
+```
+
+`--view rust` keeps the generic ELF workflow intact and adds Rust-oriented summaries for packages, targets, crates, dependency crates, grouped generic/closure/async families, and Rust symbols. If Rust metadata is missing, the CLI degrades gracefully instead of failing.
+
 Explain why a symbol or object was linked:
 
 ```bash
@@ -109,7 +127,7 @@ cargo run -- analyze --elf build/app.elf --map build/app.map --save-history --no
 cargo run -- history record --db history.db --elf build/app.elf --map build/app.map --git-repo .
 cargo run -- history list --db history.db --limit 20
 cargo run -- history list --db history.db --limit 20 --json
-cargo run -- history show --db history.db --build 1
+cargo run -- history show --db history.db --build 1 --view rust
 cargo run -- history trend --db history.db --metric rom --last 20
 cargo run -- history trend --db history.db --metric source:src/main.cpp --last 20
 cargo run -- history trend --db history.db --metric function:src/main.cpp::_ZN3app4mainEv --last 20
@@ -117,11 +135,15 @@ cargo run -- history trend --db history.db --metric object:build/main.o --last 2
 cargo run -- history trend --db history.db --metric archive-member:libapp.a(startup.o) --last 20
 cargo run -- history trend --db history.db --metric directory:src/app --last 20
 cargo run -- history trend --db history.db --metric unknown_source --last 20
+cargo run -- history trend --db history.db --metric rust-package:fwmap --last 20
+cargo run -- history trend --db history.db --metric rust-dependency:tokio --last 20
+cargo run -- history trend --db history.db --metric rust-family:fwmap::worker::poll --last 20
 cargo run -- history commits --repo . --limit 50 --order ancestry
 cargo run -- history commits --repo . --branch main --json
-cargo run -- history range main~20..main --repo . --include-changed-files
+cargo run -- history range main~20..main --repo . --include-changed-files --view rust
 cargo run -- history range main...feature/foo --repo . --json
 cargo run -- history regression --metric rom_total main~50..main --threshold +8192 --repo .
+cargo run -- history regression --metric rust-dependency:tokio.size main~50..main --threshold +16384 --repo .
 cargo run -- history regression --rule ram-budget-exceeded main~50..main --include-evidence --json
 cargo run -- history regression --entity source:src/net/proto.cpp v1.2.0..HEAD --include-changed-files --html regression.html
 ```
@@ -281,6 +303,8 @@ Top growth object: drivers/net.o (+8192)
 - Line Hotspots: compressed source line ranges with byte totals
 - C++ view: classified symbols plus top template families, classes, method families, lambda groups, and runtime overhead buckets
 - C++ diff: template-family, class, runtime-overhead, and lambda-group growth with symbol drill-down and why-linked summaries
+- Rust view: top packages, targets, crates, dependency crates, source files, grouped generic/closure/async families, and largest Rust symbols
+- Rust diff: package, target, crate, dependency, family, and symbol deltas
 - JSON: machine-readable report with binary, memory, warnings, diff, and region data
 - SARIF: GitHub code scanning friendly warning output with rule ids, levels, locations, and stable fingerprints
 - CI summary: compact text / markdown / JSON output for CI logs and PR comments
@@ -293,6 +317,9 @@ The JSON report uses a fixed top-level shape:
 {
   "schema_version": 1,
   "binary": { "...": "..." },
+  "git": { "...": "..." },
+  "rust_context": { "...": "..." },
+  "rust_view": { "...": "..." },
   "toolchain": { "...": "..." },
   "debug_info": { "...": "..." },
   "linker_script": { "...": "..." },
@@ -308,6 +335,7 @@ The JSON report uses a fixed top-level shape:
   "line_hotspots": [],
   "line_attributions": [],
   "unknown_source": { "...": "..." },
+  "rust_diff": { "...": "..." },
   "regions": [],
   "diff_summary": { "...": "..." },
   "diff": { "...": "..." },
@@ -318,6 +346,7 @@ The JSON report uses a fixed top-level shape:
 `diff_summary` and `diff` are `null` when no previous build is provided.
 
 `top_symbols` keep both raw `name` and optional `demangled_name`, so downstream tooling can use stable raw keys while rendering readable C++ names.
+`rust_view` is optional and appears when Rust-attributed symbols are detected. It includes `packages`, `targets`, `crates`, `dependency_crates`, `source_files`, `grouped_families`, and `symbols`. `rust_diff` mirrors those aggregate layers for build-to-build comparisons.
 
 ## Test Fixtures
 
@@ -569,6 +598,7 @@ Trend metrics:
 - `directory:<path>`
 
 History details now also include DWARF availability, unknown-source ratio, top source files, top functions, and stored why-linked summaries for top objects in each recorded build.
+When Rust View data is present, history also persists summarized Rust package / target / crate / dependency / source / family tables so `history show --view rust`, `history trend`, and regression detection can inspect Rust-oriented growth without recomputing symbol groups.
 
 The HTML report now includes lightweight client-side search and filtering for source files, functions, line hotspots, memory regions, region sections, objects, and archives. Long paths are shortened in tables while preserving the full path in hover tooltips, and each source/object/archive row links to a ready-made history trend command block.
 
@@ -591,6 +621,7 @@ cargo test
 - Demangling currently prioritizes Itanium ABI names and falls back safely when conversion fails.
 - History storage currently uses a local SQLite file and focuses on summary, section, region, rule-result, and source-attribution metrics.
 - Rust history persistence stores normalized package / target / profile / triple context when Cargo inputs are present.
+- Rust family grouping is heuristic and deterministic rather than perfect. Generic families collapse angle-bracket payloads, closures key off `{{closure}}`, async groups key off async/future/poll patterns, and trait groups key off `<T as Trait>` forms.
 - Toolchain auto-detection is intentionally lightweight and currently keys off GNU ld / LLVM lld map patterns only.
 - `lld-native` parsing is aimed at ELF `ld.lld -Map` / `--print-map` text output and may not cover every future column variation.
 - DWARF attribution uses line tables plus ELF symbol ranges; optimized builds may still collapse, duplicate, or split line ranges.

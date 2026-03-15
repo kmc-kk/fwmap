@@ -5,6 +5,7 @@ use crate::model::{
     AnalysisResult, ArchiveContribution, CppGroupBy, DiffChangeKind, DiffEntry, DiffResult, DiffSummary,
     ObjectSourceKind,
 };
+use crate::rust_view::{aggregate_group_sizes as aggregate_rust_group_sizes, RustGroupBy};
 
 pub fn diff_results(current: &AnalysisResult, previous: &AnalysisResult) -> DiffResult {
     let section_diffs = diff_named(
@@ -69,6 +70,90 @@ pub fn diff_results(current: &AnalysisResult, previous: &AnalysisResult) -> Diff
         aggregate_group_sizes(&current.cpp_view, CppGroupBy::CppLambdaGroup).into_iter(),
         aggregate_group_sizes(&previous.cpp_view, CppGroupBy::CppLambdaGroup).into_iter(),
     );
+    let rust_package_diffs = diff_named(
+        current
+            .rust_view
+            .as_ref()
+            .map(|view| aggregate_rust_group_sizes(view, RustGroupBy::Package))
+            .unwrap_or_default()
+            .into_iter(),
+        previous
+            .rust_view
+            .as_ref()
+            .map(|view| aggregate_rust_group_sizes(view, RustGroupBy::Package))
+            .unwrap_or_default()
+            .into_iter(),
+    );
+    let rust_target_diffs = diff_named(
+        current
+            .rust_view
+            .as_ref()
+            .map(|view| aggregate_rust_group_sizes(view, RustGroupBy::Target))
+            .unwrap_or_default()
+            .into_iter(),
+        previous
+            .rust_view
+            .as_ref()
+            .map(|view| aggregate_rust_group_sizes(view, RustGroupBy::Target))
+            .unwrap_or_default()
+            .into_iter(),
+    );
+    let rust_crate_diffs = diff_named(
+        current
+            .rust_view
+            .as_ref()
+            .map(|view| aggregate_rust_group_sizes(view, RustGroupBy::Crate))
+            .unwrap_or_default()
+            .into_iter(),
+        previous
+            .rust_view
+            .as_ref()
+            .map(|view| aggregate_rust_group_sizes(view, RustGroupBy::Crate))
+            .unwrap_or_default()
+            .into_iter(),
+    );
+    let rust_dependency_diffs = diff_named(
+        current
+            .rust_view
+            .as_ref()
+            .map(|view| aggregate_rust_group_sizes(view, RustGroupBy::Dependency))
+            .unwrap_or_default()
+            .into_iter(),
+        previous
+            .rust_view
+            .as_ref()
+            .map(|view| aggregate_rust_group_sizes(view, RustGroupBy::Dependency))
+            .unwrap_or_default()
+            .into_iter(),
+    );
+    let rust_family_diffs = diff_named(
+        current
+            .rust_view
+            .as_ref()
+            .map(|view| aggregate_rust_group_sizes(view, RustGroupBy::Family))
+            .unwrap_or_default()
+            .into_iter(),
+        previous
+            .rust_view
+            .as_ref()
+            .map(|view| aggregate_rust_group_sizes(view, RustGroupBy::Family))
+            .unwrap_or_default()
+            .into_iter(),
+    );
+    let rust_symbol_diffs = diff_named(
+        current
+            .rust_view
+            .as_ref()
+            .map(|view| aggregate_rust_group_sizes(view, RustGroupBy::Symbol))
+            .unwrap_or_default()
+            .into_iter(),
+        previous
+            .rust_view
+            .as_ref()
+            .map(|view| aggregate_rust_group_sizes(view, RustGroupBy::Symbol))
+            .unwrap_or_default()
+            .into_iter(),
+    );
 
     // Keep every diff as the same name/current/previous/delta shape so HTML/JSON/CI can reuse one renderer.
     let summary = DiffSummary {
@@ -114,6 +199,12 @@ pub fn diff_results(current: &AnalysisResult, previous: &AnalysisResult) -> Diff
         cpp_class_diffs,
         cpp_runtime_overhead_diffs,
         cpp_lambda_group_diffs,
+        rust_package_diffs,
+        rust_target_diffs,
+        rust_crate_diffs,
+        rust_dependency_diffs,
+        rust_family_diffs,
+        rust_symbol_diffs,
     }
 }
 
@@ -387,6 +478,7 @@ mod tests {
             },
             git: None,
             rust_context: None,
+            rust_view: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: None,

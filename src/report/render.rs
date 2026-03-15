@@ -8,8 +8,9 @@ use crate::diff::{names_for_kind, top_increases};
 use crate::linkage::{explain_object, explain_symbol, explain_top_growth, WhyLinkedCollection};
 use crate::model::{
     AnalysisResult, CiFormat, CppAggregate, CppGroupBy, DiffChangeKind, DiffEntry, DiffResult, ObjectSourceKind,
-    ThresholdConfig, WarningItem, WarningLevel,
+    ThresholdConfig, ViewMode, WarningItem, WarningLevel,
 };
+use crate::rust_view::{top_group_symbols as top_rust_group_symbols, RustGroupBy};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SourceRenderOptions {
@@ -30,7 +31,7 @@ impl Default for SourceRenderOptions {
     }
 }
 
-pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, verbose: bool) {
+pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, verbose: bool, view: ViewMode) {
     println!("ELF: {}", result.binary.path);
     if let Some(git) = result.git.as_ref() {
         println!(
@@ -135,10 +136,55 @@ pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, ver
             format_bytes(hotspot.size)
         );
     }
+    if matches!(view, ViewMode::Rust) {
+        print_rust_cli_summary(result, diff);
+    }
     if verbose && !result.warnings.is_empty() {
         println!("Warnings:");
         for item in &result.warnings {
             println!("  [{}:{}] {}", item.source, item.code, item.message);
+        }
+    }
+}
+
+fn print_rust_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>) {
+    let Some(rust_view) = result.rust_view.as_ref() else {
+        println!("Rust view: no Rust-attributed symbols were detected");
+        return;
+    };
+    println!(
+        "Rust view: total={} packages={} crates={} deps={} families={}",
+        format_bytes(rust_view.total_rust_size),
+        rust_view.packages.len(),
+        rust_view.crates.len(),
+        rust_view.dependency_crates.len(),
+        rust_view.grouped_families.len()
+    );
+    if let Some(item) = rust_view.packages.first() {
+        println!("Top Rust package: {} ({})", item.name, format_bytes(item.size));
+    }
+    if let Some(item) = rust_view.dependency_crates.first() {
+        println!("Top dependency crate: {} ({})", item.name, format_bytes(item.size));
+    }
+    if let Some(item) = rust_view.grouped_families.first() {
+        let members = top_rust_group_symbols(rust_view, RustGroupBy::Family, &item.key, 3).join(", ");
+        println!(
+            "Top Rust family: {} {:?} ({}, {})",
+            item.display_name,
+            item.kind,
+            format_bytes(item.size),
+            members
+        );
+    }
+    if let Some(diff) = diff {
+        if let Some(item) = top_increases(&diff.rust_package_diffs, 1).first() {
+            println!("Top package growth: {} ({:+})", item.name, item.delta);
+        }
+        if let Some(item) = top_increases(&diff.rust_dependency_diffs, 1).first() {
+            println!("Top dependency growth: {} ({:+})", item.name, item.delta);
+        }
+        if let Some(item) = top_increases(&diff.rust_family_diffs, 1).first() {
+            println!("Top Rust family growth: {} ({:+})", item.name, item.delta);
         }
     }
 }
@@ -242,6 +288,7 @@ fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>, source_option
         [
             header(current),
             overview(current, diff),
+            rust_view_section(current),
             policy_section(current),
             warning_section(&current.warnings),
             cpp_view_section(current),
@@ -258,11 +305,60 @@ fn build_html(current: &AnalysisResult, diff: Option<&DiffResult>, source_option
             object_details(current),
             archive_details(current),
             diff_section(current, diff, source_options),
+            rust_diff_section(diff),
             why_linked_section(why_linked.as_ref()),
             trend_links_section(current),
             footer(),
         ]
         .join("")
+    )
+}
+
+fn rust_diff_section(diff: Option<&DiffResult>) -> String {
+    let Some(diff) = diff else {
+        return String::new();
+    };
+    if diff.rust_package_diffs.is_empty()
+        && diff.rust_target_diffs.is_empty()
+        && diff.rust_crate_diffs.is_empty()
+        && diff.rust_dependency_diffs.is_empty()
+        && diff.rust_family_diffs.is_empty()
+        && diff.rust_symbol_diffs.is_empty()
+    {
+        return String::new();
+    }
+    let packages = rust_diff_table("Rust Package Delta", &diff.rust_package_diffs, 10);
+    let targets = rust_diff_table("Rust Target Delta", &diff.rust_target_diffs, 10);
+    let crates = rust_diff_table("Rust Crate Delta", &diff.rust_crate_diffs, 10);
+    let dependencies = rust_diff_table("Dependency Crate Delta", &diff.rust_dependency_diffs, 10);
+    let families = rust_diff_table("Rust Family Delta", &diff.rust_family_diffs, 10);
+    let symbols = rust_diff_table("Rust Symbol Delta", &diff.rust_symbol_diffs, 12);
+    format!("<section id=\"rust-diff\"><h2>Rust Diff</h2>{packages}{targets}{crates}{dependencies}{families}{symbols}</section>")
+}
+
+fn rust_diff_table(title: &str, rows: &[DiffEntry], limit: usize) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    let body = rows
+        .iter()
+        .take(limit)
+        .map(|item| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td><span class=\"{}\">{:+}</span></td></tr>",
+                escape(&item.name),
+                format_bytes(item.current),
+                format_bytes(item.previous),
+                delta_class(item.delta),
+                item.delta
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<h3>{}</h3><table><thead><tr><th>Name</th><th>Current</th><th>Previous</th><th>Delta</th></tr></thead><tbody>{}</tbody></table>",
+        escape(title),
+        body
     )
 }
 
@@ -281,6 +377,7 @@ fn build_json(
         "binary": &current.binary,
         "git": &current.git,
         "rust_context": &current.rust_context,
+        "rust_view": &current.rust_view,
         "toolchain": &current.toolchain,
         "map_format": current.toolchain.map_format,
         "linker_family": current.toolchain.linker_family,
@@ -305,6 +402,7 @@ fn build_json(
         "unknown_source": &current.unknown_source,
         "cpp_view": &current.cpp_view,
         "cpp_diff": diff.map(|item| cpp_diff_payload(current, item)),
+        "rust_diff": diff.map(rust_diff_payload),
         "regions": &current.memory.region_summaries,
         "diff_summary": diff.map(|item| &item.summary),
         "diff": diff,
@@ -312,6 +410,134 @@ fn build_json(
         "why_linked": why_linked,
     });
     serde_json::to_string_pretty(&payload).map_err(|err| format!("failed to serialize JSON report: {err}"))
+}
+
+fn rust_view_section(current: &AnalysisResult) -> String {
+    let Some(rust_view) = current.rust_view.as_ref() else {
+        return String::new();
+    };
+    let top_generic = top_family_name_by_kind(rust_view, crate::model::RustFamilyKind::Generic);
+    let top_async = top_family_name_by_kind(rust_view, crate::model::RustFamilyKind::Async);
+    let summary = format!(
+        "<div class=\"grid\"><div class=\"card\"><strong>Rust Total</strong><div>{}</div></div><div class=\"card\"><strong>Top Package</strong><div>{}</div></div><div class=\"card\"><strong>Top Dependency</strong><div>{}</div></div><div class=\"card\"><strong>Top Generic</strong><div>{}</div></div><div class=\"card\"><strong>Top Async</strong><div>{}</div></div></div>",
+        format_bytes(rust_view.total_rust_size),
+        rust_view.packages.first().map(|item| escape(&item.name)).unwrap_or_else(|| "-".to_string()),
+        rust_view
+            .dependency_crates
+            .first()
+            .map(|item| escape(&item.name))
+            .unwrap_or_else(|| "-".to_string()),
+        escape(top_generic.as_deref().unwrap_or("-")),
+        escape(top_async.as_deref().unwrap_or("-"))
+    );
+    let packages = rust_aggregate_table("Top Rust Packages", &rust_view.packages);
+    let targets = rust_aggregate_table("Top Rust Targets", &rust_view.targets);
+    let crates = rust_aggregate_table("Top Rust Crates", &rust_view.crates);
+    let dependencies = rust_aggregate_table("Dependency Crates", &rust_view.dependency_crates);
+    let source_files = rust_aggregate_table("Rust Source Files", &rust_view.source_files);
+    let families = rust_family_table(&rust_view.grouped_families);
+    let symbols = rust_symbol_table(&rust_view.symbols);
+    format!(
+        "<section id=\"rust-view\"><h2>Rust View</h2>{summary}{packages}{targets}{crates}{dependencies}{source_files}{families}{symbols}</section>"
+    )
+}
+
+fn rust_aggregate_table(title: &str, rows: &[crate::model::RustAggregate]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    let body = rows
+        .iter()
+        .take(12)
+        .map(|item| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
+                escape(&item.name),
+                item.symbol_count,
+                format_bytes(item.size)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<h3>{}</h3><table><thead><tr><th>Name</th><th>Symbols</th><th>Size</th></tr></thead><tbody>{}</tbody></table>",
+        escape(title),
+        body
+    )
+}
+
+fn rust_family_table(rows: &[crate::model::RustFamilySummary]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    let body = rows
+        .iter()
+        .take(12)
+        .map(|item| {
+            format!(
+                "<tr><td>{:?}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                item.kind,
+                escape(&item.display_name),
+                item.symbol_count,
+                format_bytes(item.size)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<h3>Grouped Rust Families</h3><table><thead><tr><th>Kind</th><th>Family</th><th>Symbols</th><th>Size</th></tr></thead><tbody>{}</tbody></table>",
+        body
+    )
+}
+
+fn rust_symbol_table(rows: &[crate::model::RustSymbolSummary]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    let body = rows
+        .iter()
+        .take(20)
+        .map(|item| {
+            let raw = item
+                .demangled_name
+                .as_ref()
+                .filter(|_| item.raw_name != item.display_name)
+                .map(|_| format!("<div class=\"muted mono\">{}</div>", escape(&item.raw_name)))
+                .unwrap_or_default();
+            format!(
+                "<tr><td>{}{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                escape(&item.display_name),
+                raw,
+                escape(item.crate_name.as_deref().unwrap_or("-")),
+                escape(item.dependency_crate.as_deref().unwrap_or("-")),
+                escape(item.source_path.as_deref().unwrap_or("-")),
+                format_bytes(item.size)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<h3>Largest Rust Symbols</h3><table><thead><tr><th>Symbol</th><th>Crate</th><th>Dependency</th><th>Source</th><th>Size</th></tr></thead><tbody>{}</tbody></table>",
+        body
+    )
+}
+
+fn rust_diff_payload(diff: &DiffResult) -> serde_json::Value {
+    serde_json::json!({
+        "packages": diff.rust_package_diffs,
+        "targets": diff.rust_target_diffs,
+        "crates": diff.rust_crate_diffs,
+        "dependency_crates": diff.rust_dependency_diffs,
+        "families": diff.rust_family_diffs,
+        "symbols": diff.rust_symbol_diffs,
+    })
+}
+
+fn top_family_name_by_kind(view: &crate::model::RustView, kind: crate::model::RustFamilyKind) -> Option<String> {
+    view.grouped_families
+        .iter()
+        .find(|item| item.kind == kind)
+        .map(|item| item.display_name.clone())
 }
 
 fn build_ci_text(current: &AnalysisResult, diff: Option<&DiffResult>, source_options: SourceRenderOptions) -> String {
@@ -1703,8 +1929,9 @@ mod tests {
     use crate::model::{
         AnalysisResult, BinaryInfo, CiFormat, DebugArtifactInfo, DebugInfoSummary, DiffChangeKind, DiffEntry,
         DiffResult, DiffSummary, MemoryRegion, MemorySummary, ObjectSourceKind, RegionSectionUsage, RegionUsageSummary,
-        SectionCategory, SectionInfo, SectionTotal, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind,
-        ToolchainSelection, UnknownSourceBucket, WarningItem, WarningLevel, WarningSource,
+        RustAggregate, RustFamilyKind, RustFamilySummary, RustSymbolSummary, RustView, SectionCategory, SectionInfo,
+        SectionTotal, SymbolInfo, SymbolLanguage, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection,
+        UnknownSourceBucket, WarningItem, WarningLevel, WarningSource,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1874,6 +2101,12 @@ mod tests {
                 change: DiffChangeKind::Added,
             }],
             cpp_lambda_group_diffs: Vec::new(),
+            rust_package_diffs: Vec::new(),
+            rust_target_diffs: Vec::new(),
+            rust_crate_diffs: Vec::new(),
+            rust_dependency_diffs: Vec::new(),
+            rust_family_diffs: Vec::new(),
+            rust_symbol_diffs: Vec::new(),
         };
         write_html_report(
             &path,
@@ -1955,6 +2188,116 @@ mod tests {
     }
 
     #[test]
+    fn html_and_json_include_rust_view_sections() {
+        let html_path = std::env::temp_dir().join(format!(
+            "fwmap-rust-view-{}.html",
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let json_path = std::env::temp_dir().join(format!(
+            "fwmap-rust-view-{}.json",
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let mut analysis = sample_analysis();
+        analysis.rust_context = Some(crate::model::RustContext {
+            workspace_root: Some("/workspace/fwmap".to_string()),
+            manifest_path: Some("/workspace/fwmap/Cargo.toml".to_string()),
+            package_name: Some("fwmap".to_string()),
+            package_id: Some("path+file:///workspace/fwmap#fwmap@0.1.0".to_string()),
+            target_name: Some("fwmap".to_string()),
+            target_kind: vec!["bin".to_string()],
+            crate_types: vec!["bin".to_string()],
+            edition: Some("2024".to_string()),
+            target_triple: Some("x86_64-unknown-linux-gnu".to_string()),
+            profile: Some("release".to_string()),
+            artifact_path: Some("/workspace/fwmap/target/release/fwmap".to_string()),
+            metadata_source: "cargo-build-json".to_string(),
+            workspace_members: vec!["fwmap".to_string()],
+        });
+        analysis.rust_view = Some(sample_rust_view());
+        let diff = DiffResult {
+            rom_delta: 0,
+            ram_delta: 0,
+            unknown_source_delta: 0,
+            summary: DiffSummary::default(),
+            section_diffs: Vec::new(),
+            symbol_diffs: Vec::new(),
+            object_diffs: Vec::new(),
+            archive_diffs: Vec::new(),
+            source_file_diffs: Vec::new(),
+            function_diffs: Vec::new(),
+            line_diffs: Vec::new(),
+            cpp_template_family_diffs: Vec::new(),
+            cpp_class_diffs: Vec::new(),
+            cpp_runtime_overhead_diffs: Vec::new(),
+            cpp_lambda_group_diffs: Vec::new(),
+            rust_package_diffs: vec![DiffEntry {
+                name: "fwmap".to_string(),
+                current: 120,
+                previous: 96,
+                delta: 24,
+                change: DiffChangeKind::Increased,
+            }],
+            rust_target_diffs: vec![DiffEntry {
+                name: "fwmap".to_string(),
+                current: 120,
+                previous: 96,
+                delta: 24,
+                change: DiffChangeKind::Increased,
+            }],
+            rust_crate_diffs: vec![DiffEntry {
+                name: "serde".to_string(),
+                current: 40,
+                previous: 24,
+                delta: 16,
+                change: DiffChangeKind::Increased,
+            }],
+            rust_dependency_diffs: vec![DiffEntry {
+                name: "tokio".to_string(),
+                current: 64,
+                previous: 32,
+                delta: 32,
+                change: DiffChangeKind::Increased,
+            }],
+            rust_family_diffs: vec![DiffEntry {
+                name: "fwmap::worker::<...>".to_string(),
+                current: 88,
+                previous: 40,
+                delta: 48,
+                change: DiffChangeKind::Increased,
+            }],
+            rust_symbol_diffs: vec![DiffEntry {
+                name: "fwmap::worker::poll".to_string(),
+                current: 48,
+                previous: 12,
+                delta: 36,
+                change: DiffChangeKind::Increased,
+            }],
+        };
+        write_html_report(&html_path, &analysis, Some(&diff), SourceRenderOptions::default(), 3).unwrap();
+        write_json_report(
+            &json_path,
+            &analysis,
+            Some(&diff),
+            &ThresholdConfig::default(),
+            SourceRenderOptions::default(),
+            3,
+        )
+        .unwrap();
+        let html = fs::read_to_string(&html_path).unwrap();
+        let json = fs::read_to_string(&json_path).unwrap();
+        assert!(html.contains("Rust View"));
+        assert!(html.contains("Top Rust Crates"));
+        assert!(html.contains("Rust Source Files"));
+        assert!(html.contains("Rust Diff"));
+        assert!(html.contains("Rust Symbol Delta"));
+        assert!(json.contains("\"rust_view\""));
+        assert!(json.contains("\"rust_diff\""));
+        assert!(json.contains("\"dependency_crates\""));
+        let _ = fs::remove_file(html_path);
+        let _ = fs::remove_file(json_path);
+    }
+
+    #[test]
     fn ci_summary_supports_text_markdown_and_json() {
         let mut analysis = sample_analysis_with_sources();
         analysis.warnings.push(WarningItem {
@@ -2016,6 +2359,12 @@ mod tests {
             cpp_class_diffs: Vec::new(),
             cpp_runtime_overhead_diffs: Vec::new(),
             cpp_lambda_group_diffs: Vec::new(),
+            rust_package_diffs: Vec::new(),
+            rust_target_diffs: Vec::new(),
+            rust_crate_diffs: Vec::new(),
+            rust_dependency_diffs: Vec::new(),
+            rust_family_diffs: Vec::new(),
+            rust_symbol_diffs: Vec::new(),
         };
         let text = build_ci_summary(
             &analysis,
@@ -2068,6 +2417,7 @@ mod tests {
             },
             git: None,
             rust_context: None,
+            rust_view: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: Some(ToolchainKind::Gnu),
@@ -2193,5 +2543,74 @@ mod tests {
         }];
         analysis.cpp_view = crate::cpp::build_cpp_view(&analysis.symbols);
         analysis
+    }
+
+    fn sample_rust_view() -> RustView {
+        RustView {
+            workspace: Some("/workspace/fwmap".to_string()),
+            packages: vec![RustAggregate {
+                name: "fwmap".to_string(),
+                size: 120,
+                symbol_count: 3,
+            }],
+            targets: vec![RustAggregate {
+                name: "fwmap".to_string(),
+                size: 120,
+                symbol_count: 3,
+            }],
+            crates: vec![
+                RustAggregate {
+                    name: "fwmap".to_string(),
+                    size: 80,
+                    symbol_count: 2,
+                },
+                RustAggregate {
+                    name: "tokio".to_string(),
+                    size: 40,
+                    symbol_count: 1,
+                },
+            ],
+            dependency_crates: vec![RustAggregate {
+                name: "tokio".to_string(),
+                size: 40,
+                symbol_count: 1,
+            }],
+            source_files: vec![RustAggregate {
+                name: "src/main.rs".to_string(),
+                size: 96,
+                symbol_count: 2,
+            }],
+            grouped_families: vec![
+                RustFamilySummary {
+                    kind: RustFamilyKind::Generic,
+                    key: "fwmap::worker::<...>".to_string(),
+                    display_name: "fwmap::worker::<...>".to_string(),
+                    size: 64,
+                    symbol_count: 2,
+                },
+                RustFamilySummary {
+                    kind: RustFamilyKind::Async,
+                    key: "fwmap::worker::poll".to_string(),
+                    display_name: "fwmap::worker::poll".to_string(),
+                    size: 32,
+                    symbol_count: 1,
+                },
+            ],
+            symbols: vec![RustSymbolSummary {
+                raw_name: "_RNvC6fwmap6worker4poll".to_string(),
+                demangled_name: Some("fwmap::worker::poll".to_string()),
+                display_name: "fwmap::worker::poll".to_string(),
+                language: SymbolLanguage::Rust,
+                package: Some("fwmap".to_string()),
+                target: Some("fwmap".to_string()),
+                crate_name: Some("fwmap".to_string()),
+                dependency_crate: None,
+                source_path: Some("src/main.rs".to_string()),
+                family_kind: RustFamilyKind::Async,
+                family_key: "fwmap::worker::poll".to_string(),
+                size: 32,
+            }],
+            total_rust_size: 120,
+        }
     }
 }

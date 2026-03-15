@@ -840,6 +840,7 @@ warn_delta_bytes = 128
             },
             git: None,
             rust_context: None,
+            rust_view: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: None,
@@ -965,6 +966,12 @@ warn_delta_bytes = 128
             }],
             cpp_runtime_overhead_diffs: Vec::new(),
             cpp_lambda_group_diffs: Vec::new(),
+            rust_package_diffs: Vec::new(),
+            rust_target_diffs: Vec::new(),
+            rust_crate_diffs: Vec::new(),
+            rust_dependency_diffs: Vec::new(),
+            rust_family_diffs: Vec::new(),
+            rust_symbol_diffs: Vec::new(),
         }
     }
 }
