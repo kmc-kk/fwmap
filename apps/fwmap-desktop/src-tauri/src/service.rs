@@ -18,11 +18,12 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::dto::{
-    AnalysisRequestDto, ChangedFilesSummaryDto, DeltaEntryDto, DesktopAppInfo, DesktopSettingsDto, FirstRuleViolationSummaryDto,
-    GitRefDto, HistoryItemDto, HistoryQueryDto, JobEventDto, JobStatusDto, MetricSummaryDto, RangeDiffQueryDto,
-    RangeDiffResultDto, RegressionOriginPointDto, RegressionQueryDto, RegressionResultDto, RegressionWindowRowDto,
-    RunCompareRequestDto, RunCompareResultDto, RunDetailDto, RunSummaryDto, TimelineEntryDto, TimelineResultDto,
-    WorstCommitSummaryDto,
+    AnalysisRequestDto, ChangedFilesSummaryDto, DashboardQueryDto, DashboardSummaryDto, DeltaEntryDto, DesktopAppInfo,
+    DesktopSettingsDto, FirstRuleViolationSummaryDto, GitRefDto, HistoryItemDto, HistoryQueryDto, JobEventDto, JobStatusDto,
+    MetricSummaryDto, OverviewCardDto, RangeDiffQueryDto, RangeDiffResultDto, RecentRegressionDto, RegionUsageDto,
+    RegressionOriginPointDto, RegressionQueryDto, RegressionResultDto, RegressionWindowRowDto, RunCompareRequestDto,
+    RunCompareResultDto, RunDetailDto, RunSummaryDto, TimelineEntryDto, TimelineResultDto, TopGrowthEntryDto,
+    TrendPointDto, TrendSeriesDto, WorstCommitSummaryDto,
 };
 use crate::storage::{DesktopStorage, InsertRunRecord, StoredRunRecord};
 
@@ -80,6 +81,60 @@ impl DesktopState {
             return Ok(None);
         };
         Ok(Some(self.build_run_detail(stored)?))
+    }
+
+    pub fn dashboard_summary(&self, query: DashboardQueryDto) -> Result<DashboardSummaryDto, String> {
+        let history_query = HistoryQueryDto {
+            repo_path: query.repo_path.clone(),
+            branch: query.branch.clone(),
+            profile: query.profile.clone(),
+            toolchain: query.toolchain.clone(),
+            target: query.target.clone(),
+            limit: Some(query.limit.unwrap_or(20).max(2)),
+            order: Some("ancestry".to_string()),
+        };
+        let history_items = self.list_history(history_query.clone())?;
+        let latest_history_item = history_items.first().cloned();
+        let latest_run = self.storage.list_recent_runs(1, 0)?.into_iter().next();
+        let recent_trends = build_dashboard_trends(&history_items);
+        let top_growth_sources = if history_items.len() >= 2 {
+            load_dashboard_top_growth(
+                Path::new(&self.storage.load_settings()?.history_db_path),
+                history_items[1].build_id,
+                history_items[0].build_id,
+            )?
+        } else {
+            Vec::new()
+        };
+        let region_usage = if let Some(item) = latest_history_item.as_ref() {
+            show_build(Path::new(&self.storage.load_settings()?.history_db_path), item.build_id)?
+                .map(|detail| {
+                    detail
+                        .regions
+                        .into_iter()
+                        .map(|(region_name, used_bytes, free_bytes, usage_ratio)| RegionUsageDto {
+                            region_name,
+                            used_bytes,
+                            free_bytes,
+                            usage_ratio,
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let recent_regressions = build_recent_regressions(&history_items);
+        let overview_cards = build_dashboard_cards(&history_items, latest_run.as_ref(), latest_history_item.as_ref(), &recent_regressions);
+        Ok(DashboardSummaryDto {
+            overview_cards,
+            latest_run,
+            latest_history_item,
+            recent_trends,
+            recent_regressions,
+            top_growth_sources,
+            region_usage,
+        })
     }
 
     pub fn list_history(&self, query: HistoryQueryDto) -> Result<Vec<HistoryItemDto>, String> {
@@ -922,3 +977,136 @@ fn emit_status(app: &AppHandle, event_name: &str, state: &DesktopState, job_id: 
 fn now_rfc3339() -> String {
     Utc::now().to_rfc3339()
 }
+
+
+fn build_dashboard_cards(
+    history_items: &[HistoryItemDto],
+    latest_run: Option<&RunSummaryDto>,
+    latest_history_item: Option<&HistoryItemDto>,
+    recent_regressions: &[RecentRegressionDto],
+) -> Vec<OverviewCardDto> {
+    let latest = latest_history_item.or_else(|| history_items.first());
+    vec![
+        OverviewCardDto {
+            key: "latest-run".to_string(),
+            title: "Latest Run".to_string(),
+            value: latest_run
+                .map(|item| item.label.clone().unwrap_or_else(|| format!("#{}", item.run_id)))
+                .unwrap_or_else(|| "-".to_string()),
+            subtitle: latest_run.map(|item| format_time_short(&item.created_at)),
+            tone: "neutral".to_string(),
+        },
+        OverviewCardDto {
+            key: "latest-branch".to_string(),
+            title: "Current Branch".to_string(),
+            value: latest.and_then(|item| item.git_branch.clone()).unwrap_or_else(|| "-".to_string()),
+            subtitle: latest.and_then(|item| item.git_revision.clone()),
+            tone: "info".to_string(),
+        },
+        OverviewCardDto {
+            key: "latest-rom".to_string(),
+            title: "Latest ROM".to_string(),
+            value: latest.map(|item| format_bytes_compact(item.rom_bytes)).unwrap_or_else(|| "-".to_string()),
+            subtitle: latest.map(|item| format!("RAM {}", format_bytes_compact(item.ram_bytes))),
+            tone: "primary".to_string(),
+        },
+        OverviewCardDto {
+            key: "warnings".to_string(),
+            title: "Rule Violations".to_string(),
+            value: latest.map(|item| item.warning_count.to_string()).unwrap_or_else(|| "0".to_string()),
+            subtitle: latest.map(|item| format!("errors {}", item.error_count)),
+            tone: if latest.map(|item| item.warning_count > 0).unwrap_or(false) { "warning" } else { "success" }.to_string(),
+        },
+        OverviewCardDto {
+            key: "recent-regressions".to_string(),
+            title: "Recent Regressions".to_string(),
+            value: recent_regressions.len().to_string(),
+            subtitle: recent_regressions.first().map(|item| item.commit.clone()),
+            tone: if recent_regressions.is_empty() { "success" } else { "danger" }.to_string(),
+        },
+    ]
+}
+
+fn build_dashboard_trends(history_items: &[HistoryItemDto]) -> Vec<TrendSeriesDto> {
+    let ordered = history_items.iter().rev().collect::<Vec<_>>();
+    vec![
+        TrendSeriesDto {
+            key: "rom-ram".to_string(),
+            label: "ROM / RAM".to_string(),
+            unit: "bytes".to_string(),
+            points: ordered
+                .iter()
+                .map(|item| TrendPointDto {
+                    label: item.git_revision.clone().unwrap_or_else(|| format!("#{}", item.build_id)),
+                    value: item.rom_bytes as f64,
+                    secondary_value: Some(item.ram_bytes as f64),
+                })
+                .collect(),
+        },
+        TrendSeriesDto {
+            key: "warnings".to_string(),
+            label: "Rule Violations".to_string(),
+            unit: "count".to_string(),
+            points: ordered
+                .iter()
+                .map(|item| TrendPointDto {
+                    label: item.git_revision.clone().unwrap_or_else(|| format!("#{}", item.build_id)),
+                    value: item.warning_count as f64,
+                    secondary_value: Some(item.error_count as f64),
+                })
+                .collect(),
+        },
+    ]
+}
+
+fn build_recent_regressions(history_items: &[HistoryItemDto]) -> Vec<RecentRegressionDto> {
+    history_items
+        .iter()
+        .filter(|item| item.warning_count > 0)
+        .take(5)
+        .map(|item| RecentRegressionDto {
+            detector_type: "rule".to_string(),
+            key: item.git_subject.clone().unwrap_or_else(|| "warnings-present".to_string()),
+            confidence: "medium".to_string(),
+            commit: item.git_revision.clone().unwrap_or_else(|| format!("#{}", item.build_id)),
+            subject: item.git_subject.clone().unwrap_or_else(|| item.elf_path.clone()),
+            reasoning: format!("{} rule warnings were recorded for this build", item.warning_count),
+        })
+        .collect()
+}
+
+fn load_dashboard_top_growth(db_path: &Path, left_build_id: i64, right_build_id: i64) -> Result<Vec<TopGrowthEntryDto>, String> {
+    let mut entries = Vec::new();
+    for item in load_metric_deltas(db_path, left_build_id, right_build_id, MetricTable::Section, 4)? {
+        entries.push(TopGrowthEntryDto { scope: "section".to_string(), name: item.name, delta: item.delta, detail: None });
+    }
+    for item in load_metric_deltas(db_path, left_build_id, right_build_id, MetricTable::SourceFile, 4)? {
+        entries.push(TopGrowthEntryDto { scope: "source".to_string(), name: item.name, delta: item.delta, detail: None });
+    }
+    for item in load_metric_deltas(db_path, left_build_id, right_build_id, MetricTable::Symbol, 4)? {
+        entries.push(TopGrowthEntryDto { scope: "symbol".to_string(), name: item.name, delta: item.delta, detail: None });
+    }
+    entries.sort_by(|a, b| b.delta.abs().cmp(&a.delta.abs()).then_with(|| a.name.cmp(&b.name)));
+    entries.truncate(8);
+    Ok(entries)
+}
+
+fn format_bytes_compact(value: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut size = value as f64;
+    let mut unit_index = 0usize;
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+    if unit_index == 0 || size >= 100.0 {
+        format!("{size:.0} {}", UNITS[unit_index])
+    } else {
+        format!("{size:.1} {}", UNITS[unit_index])
+    }
+}
+
+fn format_time_short(value: &str) -> String {
+    value.chars().take(16).collect()
+}
+

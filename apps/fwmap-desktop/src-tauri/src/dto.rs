@@ -337,3 +337,83 @@ pub struct RegressionResultDto {
     pub related_rule_hits: Vec<String>,
     pub narrowed_commits: Vec<String>,
 }
+
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardQueryDto {
+    pub repo_path: Option<String>,
+    pub branch: Option<String>,
+    pub profile: Option<String>,
+    pub toolchain: Option<String>,
+    pub target: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverviewCardDto {
+    pub key: String,
+    pub title: String,
+    pub value: String,
+    pub subtitle: Option<String>,
+    pub tone: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrendPointDto {
+    pub label: String,
+    pub value: f64,
+    pub secondary_value: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrendSeriesDto {
+    pub key: String,
+    pub label: String,
+    pub unit: String,
+    pub points: Vec<TrendPointDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopGrowthEntryDto {
+    pub scope: String,
+    pub name: String,
+    pub delta: i64,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentRegressionDto {
+    pub detector_type: String,
+    pub key: String,
+    pub confidence: String,
+    pub commit: String,
+    pub subject: String,
+    pub reasoning: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegionUsageDto {
+    pub region_name: String,
+    pub used_bytes: u64,
+    pub free_bytes: u64,
+    pub usage_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardSummaryDto {
+    pub overview_cards: Vec<OverviewCardDto>,
+    pub latest_run: Option<RunSummaryDto>,
+    pub latest_history_item: Option<HistoryItemDto>,
+    pub recent_trends: Vec<TrendSeriesDto>,
+    pub recent_regressions: Vec<RecentRegressionDto>,
+    pub top_growth_sources: Vec<TopGrowthEntryDto>,
+    pub region_usage: Vec<RegionUsageDto>,
+}

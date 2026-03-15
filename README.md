@@ -80,6 +80,7 @@ Desktop support now covers two layers:
 
 - Phase D1: start analysis jobs, track job state, persist settings, and inspect recent runs
 - Phase D2: inspect history timeline, compare two recorded runs, query git-aware range diffs, and surface regression-origin results
+- Phase D3: use a visual dashboard with trend charts, top growth contributors, region usage, and recent regression cards
 
 Desktop capabilities currently available:
 
@@ -91,6 +92,7 @@ Desktop capabilities currently available:
 - Load commit timelines with branch / profile / target filters
 - Compare two recorded runs with section / object / source / symbol / Rust delta lists
 - Query git-aware range diffs and regression-origin summaries from the desktop UI
+- Visualize recent ROM/RAM history, warning pressure, region usage, and top growth contributors in the dashboard
 
 Current limitations:
 

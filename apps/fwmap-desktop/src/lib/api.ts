@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   AnalysisRequest,
+  DashboardQuery,
+  DashboardSummary,
   DesktopAppInfo,
   DesktopSettings,
   GitRef,
@@ -49,6 +51,10 @@ export async function listRecentRuns(limit = 20, offset = 0): Promise<RunSummary
 
 export async function getRunDetail(runId: number): Promise<RunDetail | null> {
   return invoke("desktop_get_run_detail", { runId });
+}
+
+export async function getDashboardSummary(query: DashboardQuery): Promise<DashboardSummary> {
+  return invoke("desktop_get_dashboard_summary", { query });
 }
 
 export async function listHistory(query: HistoryQuery): Promise<HistoryItem[]> {

@@ -27,6 +27,7 @@ pub fn run() {
             commands::desktop_cancel_job,
             commands::desktop_list_recent_runs,
             commands::desktop_get_run_detail,
+            commands::desktop_get_dashboard_summary,
             commands::desktop_list_history,
             commands::desktop_get_timeline,
             commands::desktop_compare_runs,
