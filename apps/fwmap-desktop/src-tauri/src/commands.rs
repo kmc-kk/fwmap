@@ -1,7 +1,7 @@
 use tauri::{AppHandle, State};
 
 use crate::dto::{
-    AnalysisRequestDto, DesktopAppInfo, DesktopSettingsDto, GitRefDto, HistoryItemDto, HistoryQueryDto, JobStatusDto,
+    AnalysisRequestDto, DashboardQueryDto, DashboardSummaryDto, DesktopAppInfo, DesktopSettingsDto, GitRefDto, HistoryItemDto, HistoryQueryDto, JobStatusDto,
     RangeDiffQueryDto, RangeDiffResultDto, RegressionQueryDto, RegressionResultDto, RunCompareRequestDto,
     RunCompareResultDto, RunDetailDto, RunSummaryDto, TimelineResultDto,
 };
@@ -65,6 +65,15 @@ pub fn desktop_get_run_detail(
     run_id: i64,
 ) -> Result<Option<RunDetailDto>, String> {
     state.run_detail(run_id)
+}
+
+
+#[tauri::command]
+pub fn desktop_get_dashboard_summary(
+    state: State<'_, DesktopState>,
+    query: DashboardQueryDto,
+) -> Result<DashboardSummaryDto, String> {
+    state.dashboard_summary(query)
 }
 
 #[tauri::command]

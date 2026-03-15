@@ -81,6 +81,8 @@ export type HistoryQuery = {
   order?: "ancestry" | "timestamp" | null;
 };
 
+export type DashboardQuery = HistoryQuery;
+
 export type HistoryItem = {
   buildId: number;
   createdAt: string;
@@ -284,4 +286,58 @@ export type RegressionResult = {
   changedFilesSummary: ChangedFilesSummary | null;
   relatedRuleHits: string[];
   narrowedCommits: string[];
+};
+
+export type OverviewCard = {
+  key: string;
+  title: string;
+  value: string;
+  subtitle: string | null;
+  tone: string;
+};
+
+export type TrendPoint = {
+  label: string;
+  value: number;
+  secondaryValue: number | null;
+};
+
+export type TrendSeries = {
+  key: string;
+  label: string;
+  unit: string;
+  points: TrendPoint[];
+};
+
+export type TopGrowthEntry = {
+  scope: string;
+  name: string;
+  delta: number;
+  detail: string | null;
+};
+
+export type RecentRegression = {
+  detectorType: string;
+  key: string;
+  confidence: string;
+  commit: string;
+  subject: string;
+  reasoning: string;
+};
+
+export type RegionUsage = {
+  regionName: string;
+  usedBytes: number;
+  freeBytes: number;
+  usageRatio: number;
+};
+
+export type DashboardSummary = {
+  overviewCards: OverviewCard[];
+  latestRun: RunSummary | null;
+  latestHistoryItem: HistoryItem | null;
+  recentTrends: TrendSeries[];
+  recentRegressions: RecentRegression[];
+  topGrowthSources: TopGrowthEntry[];
+  regionUsage: RegionUsage[];
 };
