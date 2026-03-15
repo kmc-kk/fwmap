@@ -7,32 +7,52 @@ import { MetricLineChart } from "./components/MetricLineChart";
 import {
   cancelJob,
   compareRuns,
+  createProject,
+  deleteProject,
   detectRegression,
+  exportReport,
+  getActiveProject,
   getAppInfo,
   getDashboardSummary,
   getRangeDiff,
   getRunDetail,
   getSettings,
+  listProjects,
+  listRecentExports,
+  loadPolicy,
   getTimeline,
   listBranches,
   listHistory,
   listRecentRuns,
+  savePolicy,
+  setActiveProject,
   listTags,
   saveSettings,
   startAnalysis,
+  updateProject,
+  validatePolicy,
 } from "./lib/api";
 import { listenToJobEvents } from "./lib/events";
 import { formatBytes, formatTime, joinParts } from "./lib/format";
 import type {
+  ActiveProjectState,
   AnalysisRequest,
+  CreateProjectRequest,
   DashboardSummary,
   DesktopAppInfo,
   DesktopSettings,
+  ExportRequest,
+  ExportResult,
   GitRef,
   HistoryItem,
   HistoryQuery,
   JobEvent,
   JobStatus,
+  PolicyDocument,
+  PolicyValidationResult,
+  ProjectDetail,
+  ProjectSummary,
+  RecentExport,
   RangeDiffQuery,
   RangeDiffResult,
   RegressionQuery,
@@ -82,6 +102,40 @@ const defaultRangeQuery: RangeDiffQuery = {
   target: null,
 };
 
+const emptyProjectDraft: CreateProjectRequest = {
+  name: "",
+  rootPath: "",
+  gitRepoPath: null,
+  defaultElfPath: null,
+  defaultMapPath: null,
+  defaultDebugPath: null,
+  defaultRuleFilePath: null,
+  defaultTarget: null,
+  defaultProfile: null,
+  defaultExportDir: null,
+};
+
+const emptyPolicyDocument: PolicyDocument = {
+  path: null,
+  format: "toml",
+  content: "",
+  projectId: null,
+};
+
+const defaultExportRequest: ExportRequest = {
+  exportTarget: "dashboard",
+  format: "html",
+  destinationPath: "",
+  projectId: null,
+  runId: null,
+  compare: null,
+  historyQuery: null,
+  rangeQuery: null,
+  regressionQuery: null,
+  dashboardQuery: null,
+  title: null,
+};
+
 const defaultRegressionQuery: RegressionQuery = {
   repoPath: null,
   spec: "HEAD~50..HEAD",
@@ -116,6 +170,13 @@ export default function App() {
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
   const [timeline, setTimeline] = useState<TimelineResult | null>(null);
   const [dashboardSummary, setDashboardSummary] = useState<DashboardSummary | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [activeProjectState, setActiveProjectState] = useState<ActiveProjectState | null>(null);
+  const [projectDraft, setProjectDraft] = useState<CreateProjectRequest>(emptyProjectDraft);
+  const [policyDocument, setPolicyDocument] = useState<PolicyDocument>(emptyPolicyDocument);
+  const [policyValidation, setPolicyValidation] = useState<PolicyValidationResult | null>(null);
+  const [exportDraft, setExportDraft] = useState<ExportRequest>(defaultExportRequest);
+  const [recentExports, setRecentExports] = useState<RecentExport[]>([]);
   const [compareLeftRunId, setCompareLeftRunId] = useState<number | null>(null);
   const [compareRightRunId, setCompareRightRunId] = useState<number | null>(null);
   const [compareResult, setCompareResult] = useState<RunCompareResult | null>(null);
@@ -133,6 +194,9 @@ export default function App() {
   const [loadingRange, setLoadingRange] = useState(false);
   const [loadingRegression, setLoadingRegression] = useState(false);
   const [loadingDashboard, setLoadingDashboard] = useState(false);
+  const [loadingProjects, setLoadingProjects] = useState(false);
+  const [loadingPolicy, setLoadingPolicy] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [loadingRefs, setLoadingRefs] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -178,23 +242,36 @@ export default function App() {
     async function load() {
       setBusy(true);
       try {
-        const [info, loadedSettings, loadedRuns] = await Promise.all([getAppInfo(), getSettings(), listRecentRuns(30, 0)]);
+        const [info, loadedSettings, loadedRuns, loadedProjects, loadedActiveProject, loadedExports] = await Promise.all([
+          getAppInfo(),
+          getSettings(),
+          listRecentRuns(30, 0),
+          listProjects(),
+          getActiveProject(),
+          listRecentExports(null, 12),
+        ]);
         if (disposed) return;
-        const repoPath = loadedSettings.defaultGitRepoPath;
+        const projectRepoPath = loadedActiveProject.activeProject?.gitRepoPath ?? null;
+        const repoPath = projectRepoPath ?? loadedSettings.defaultGitRepoPath;
         const initialHistoryQuery = currentOr(defaultHistoryQuery, repoPath);
         setAppInfo(info);
         setSettings(loadedSettings);
         setDraftSettings(loadedSettings);
         setRequest((current) => ({
           ...current,
-          elfPath: current.elfPath ?? loadedSettings.lastElfPath,
-          mapPath: current.mapPath ?? loadedSettings.lastMapPath,
-          ruleFilePath: current.ruleFilePath ?? loadedSettings.defaultRuleFilePath,
-          gitRepoPath: current.gitRepoPath ?? loadedSettings.defaultGitRepoPath,
+          elfPath: current.elfPath ?? loadedActiveProject.activeProject?.defaultElfPath ?? loadedSettings.lastElfPath,
+          mapPath: current.mapPath ?? loadedActiveProject.activeProject?.defaultMapPath ?? loadedSettings.lastMapPath,
+          ruleFilePath: current.ruleFilePath ?? loadedActiveProject.activeProject?.defaultRuleFilePath ?? loadedSettings.defaultRuleFilePath,
+          gitRepoPath: current.gitRepoPath ?? repoPath,
         }));
         setHistoryFilters(initialHistoryQuery);
         setRangeQuery((current) => ({ ...current, repoPath }));
         setRegressionQuery((current) => ({ ...current, repoPath }));
+        setProjects(loadedProjects);
+        setActiveProjectState(loadedActiveProject);
+        setProjectDraft(projectToDraft(loadedActiveProject.activeProject));
+        setExportDraft((current) => ({ ...current, projectId: loadedActiveProject.activeProjectId, dashboardQuery: initialHistoryQuery }));
+        setRecentExports(loadedExports);
         setRuns(loadedRuns);
         const fallbackRunId = loadedRuns[0]?.runId ?? null;
         setSelectedRunId((current) => current ?? fallbackRunId);
@@ -202,6 +279,10 @@ export default function App() {
         setCompareRightRunId((current) => current ?? loadedRuns[1]?.runId ?? fallbackRunId);
         if (repoPath) {
           await refreshGitRefs(repoPath);
+        }
+        if (loadedActiveProject.activeProjectId) {
+          const policy = await loadPolicy(loadedActiveProject.activeProjectId, null);
+          setPolicyDocument(policy);
         }
         await Promise.all([refreshHistory(initialHistoryQuery), refreshTimeline(initialHistoryQuery), refreshDashboard(initialHistoryQuery)]);
       } catch (loadError) {
@@ -336,6 +417,155 @@ export default function App() {
       setError(String(loadError));
     } finally {
       setLoadingDashboard(false);
+    }
+  }
+
+  async function refreshProjects() {
+    setLoadingProjects(true);
+    try {
+      const [items, active, exports] = await Promise.all([listProjects(), getActiveProject(), listRecentExports(null, 12)]);
+      setProjects(items);
+      setActiveProjectState(active);
+      setProjectDraft(projectToDraft(active.activeProject));
+      setRecentExports(exports);
+    } catch (loadError) {
+      setError(String(loadError));
+    } finally {
+      setLoadingProjects(false);
+    }
+  }
+
+  async function handleSelectProject(projectId: number | null) {
+    try {
+      const active = await setActiveProject(projectId);
+      setActiveProjectState(active);
+      setProjectDraft(projectToDraft(active.activeProject));
+      if (active.activeProject?.gitRepoPath) {
+        setRequest((current) => ({
+          ...current,
+          elfPath: current.elfPath ?? active.activeProject?.defaultElfPath ?? null,
+          mapPath: current.mapPath ?? active.activeProject?.defaultMapPath ?? null,
+          ruleFilePath: active.activeProject?.defaultRuleFilePath ?? current.ruleFilePath,
+          gitRepoPath: active.activeProject?.gitRepoPath ?? current.gitRepoPath,
+        }));
+        const nextHistory = currentOr(historyFilters, active.activeProject.gitRepoPath);
+        setHistoryFilters(nextHistory);
+        setRangeQuery((current) => ({ ...current, repoPath: active.activeProject?.gitRepoPath ?? current.repoPath }));
+        setRegressionQuery((current) => ({ ...current, repoPath: active.activeProject?.gitRepoPath ?? current.repoPath }));
+        await refreshGitRefs(active.activeProject.gitRepoPath);
+        await Promise.all([refreshHistory(nextHistory), refreshTimeline(nextHistory), refreshDashboard(nextHistory)]);
+      }
+      const policy = await loadPolicy(active.activeProjectId, null);
+      setPolicyDocument(policy);
+      setPolicyValidation(null);
+      setExportDraft((current) => ({ ...current, projectId: active.activeProjectId }));
+      setNote(active.activeProject ? `Switched to project ${active.activeProject.name}.` : "Cleared active project.");
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function handleCreateProject() {
+    if (!projectDraft.name.trim() || !projectDraft.rootPath.trim()) {
+      setError("Project name and root path are required.");
+      return;
+    }
+    try {
+      const project = await createProject(projectDraft);
+      await refreshProjects();
+      await handleSelectProject(project.projectId);
+      setScreen("settings");
+      setNote(`Created project ${project.name}.`);
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function handleSaveProject() {
+    if (!activeProjectState?.activeProjectId) {
+      await handleCreateProject();
+      return;
+    }
+    try {
+      const project = await updateProject(activeProjectState.activeProjectId, projectDraft as unknown as Partial<ProjectDetail>);
+      await refreshProjects();
+      setProjectDraft(projectToDraft(project));
+      setNote(`Saved project ${project.name}.`);
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function handleDeleteProject() {
+    if (!activeProjectState?.activeProjectId) return;
+    try {
+      await deleteProject(activeProjectState.activeProjectId);
+      setProjectDraft(emptyProjectDraft);
+      setPolicyDocument(emptyPolicyDocument);
+      await refreshProjects();
+      setNote("Project deleted.");
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function handleLoadPolicy() {
+    setLoadingPolicy(true);
+    try {
+      const policy = await loadPolicy(activeProjectState?.activeProjectId ?? null, policyDocument.path);
+      setPolicyDocument(policy);
+      setPolicyValidation(null);
+    } catch (loadError) {
+      setError(String(loadError));
+    } finally {
+      setLoadingPolicy(false);
+    }
+  }
+
+  async function handleValidatePolicy() {
+    try {
+      setPolicyValidation(await validatePolicy(policyDocument));
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function handleSavePolicy() {
+    try {
+      const saved = await savePolicy({ ...policyDocument, projectId: activeProjectState?.activeProjectId ?? null });
+      setPolicyDocument(saved);
+      setPolicyValidation(await validatePolicy(saved));
+      await refreshProjects();
+      setNote("Policy saved.");
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function handleExport() {
+    if (!exportDraft.destinationPath.trim()) {
+      setError("Export destination path is required.");
+      return;
+    }
+    setExporting(true);
+    try {
+      const request: ExportRequest = {
+        ...exportDraft,
+        projectId: activeProjectState?.activeProjectId ?? null,
+        runId: exportDraft.runId ?? selectedRunId,
+        compare: exportDraft.exportTarget === "diff" && compareLeftRunId && compareRightRunId ? { leftRunId: compareLeftRunId, rightRunId: compareRightRunId } : exportDraft.compare,
+        historyQuery: exportDraft.exportTarget === "history" ? historyFilters : exportDraft.historyQuery,
+        rangeQuery: exportDraft.exportTarget === "history" && rangeResult ? rangeQuery : exportDraft.rangeQuery,
+        regressionQuery: exportDraft.exportTarget === "regression" ? regressionQuery : exportDraft.regressionQuery,
+        dashboardQuery: exportDraft.exportTarget === "dashboard" ? historyFilters : exportDraft.dashboardQuery,
+      };
+      const result = await exportReport(request);
+      setNote(`Exported ${result.exportTarget} to ${result.destinationPath}.`);
+      setRecentExports(await listRecentExports(activeProjectState?.activeProjectId ?? null, 12));
+    } catch (loadError) {
+      setError(String(loadError));
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -561,7 +791,14 @@ export default function App() {
             </Tab>
 
             <Tab key="settings" title="Settings">
-              <Card><CardHeader className="section-header">Desktop Settings</CardHeader><CardBody className="panel-stack"><Input label="History DB path" value={draftSettings.historyDbPath} onValueChange={(value) => setDraftSettings((current) => ({ ...current, historyDbPath: value }))} /><Button variant="flat" onPress={() => void chooseSettingsPath("historyDbPath")}>Choose history DB</Button><Input label="Default rule file" value={draftSettings.defaultRuleFilePath ?? ""} onValueChange={(value) => setDraftSettings((current) => ({ ...current, defaultRuleFilePath: value || null }))} /><Button variant="flat" onPress={() => void chooseSettingsPath("defaultRuleFilePath")}>Choose rule file</Button><Input label="Default Git repo" value={draftSettings.defaultGitRepoPath ?? ""} onValueChange={(value) => setDraftSettings((current) => ({ ...current, defaultGitRepoPath: value || null }))} /><Button variant="flat" onPress={() => void chooseSettingsPath("defaultGitRepoPath", true)}>Choose repo</Button><Textarea label="Notes" value="Phase D3 adds a visual dashboard with trends, contributors, and region usage on top of the D2 desktop shell." readOnly /><Button color="primary" isLoading={savingSettings} onPress={() => void handleSaveSettings()}>Save settings</Button></CardBody></Card>
+              <div className="page-stack">
+                <Card><CardHeader className="section-header">Desktop Settings</CardHeader><CardBody className="panel-stack"><Input label="History DB path" value={draftSettings.historyDbPath} onValueChange={(value) => setDraftSettings((current) => ({ ...current, historyDbPath: value }))} /><Button variant="flat" onPress={() => void chooseSettingsPath("historyDbPath")}>Choose history DB</Button><Input label="Default rule file" value={draftSettings.defaultRuleFilePath ?? ""} onValueChange={(value) => setDraftSettings((current) => ({ ...current, defaultRuleFilePath: value || null }))} /><Button variant="flat" onPress={() => void chooseSettingsPath("defaultRuleFilePath")}>Choose rule file</Button><Input label="Default Git repo" value={draftSettings.defaultGitRepoPath ?? ""} onValueChange={(value) => setDraftSettings((current) => ({ ...current, defaultGitRepoPath: value || null }))} /><Button variant="flat" onPress={() => void chooseSettingsPath("defaultGitRepoPath", true)}>Choose repo</Button><Textarea label="Notes" value="Phase D4 adds project workspace, policy editing, and export foundations on top of the D3 desktop shell." readOnly /><Button color="primary" isLoading={savingSettings} onPress={() => void handleSaveSettings()}>Save settings</Button></CardBody></Card>
+                <div className="two-column">
+                  <Card><CardHeader className="section-header">Workspace / Project</CardHeader><CardBody className="panel-stack compact-text"><div className="badge-row">{loadingProjects ? <Chip size="sm">loading</Chip> : null}{activeProjectState?.activeProject ? <Chip color="primary" variant="flat">Active: {activeProjectState.activeProject.name}</Chip> : <Chip variant="flat">No active project</Chip>}</div><select className="native-select" value={activeProjectState?.activeProjectId ?? ""} onChange={(event) => void handleSelectProject(event.target.value ? Number(event.target.value) : null)}><option value="">No active project</option>{projects.map((project) => <option key={project.projectId} value={project.projectId}>{project.name}</option>)}</select><Input label="Project name" value={projectDraft.name} onValueChange={(value) => setProjectDraft((current) => ({ ...current, name: value }))} /><Input label="Root path" value={projectDraft.rootPath} onValueChange={(value) => setProjectDraft((current) => ({ ...current, rootPath: value }))} /><Input label="Git repo path" value={projectDraft.gitRepoPath ?? ""} onValueChange={(value) => setProjectDraft((current) => ({ ...current, gitRepoPath: value || null }))} /><Input label="Default ELF" value={projectDraft.defaultElfPath ?? ""} onValueChange={(value) => setProjectDraft((current) => ({ ...current, defaultElfPath: value || null }))} /><Input label="Default map" value={projectDraft.defaultMapPath ?? ""} onValueChange={(value) => setProjectDraft((current) => ({ ...current, defaultMapPath: value || null }))} /><Input label="Default export dir" value={projectDraft.defaultExportDir ?? ""} onValueChange={(value) => setProjectDraft((current) => ({ ...current, defaultExportDir: value || null }))} /><div className="button-row"><Button color="primary" onPress={() => void handleSaveProject()}>Save project</Button><Button variant="flat" onPress={() => void handleCreateProject()}>Create new</Button><Button color="danger" variant="flat" isDisabled={!activeProjectState?.activeProjectId} onPress={() => void handleDeleteProject()}>Delete</Button></div></CardBody></Card>
+                  <Card><CardHeader className="section-header">Policy Editor</CardHeader><CardBody className="panel-stack compact-text"><Input label="Policy path" value={policyDocument.path ?? ""} onValueChange={(value) => setPolicyDocument((current) => ({ ...current, path: value || null }))} /><div><label>Format</label><select className="native-select" value={policyDocument.format} onChange={(event) => setPolicyDocument((current) => ({ ...current, format: event.target.value }))}><option value="toml">toml</option><option value="json">json</option></select></div><Textarea minRows={12} label="Policy content" value={policyDocument.content} onValueChange={(value) => setPolicyDocument((current) => ({ ...current, content: value, projectId: activeProjectState?.activeProjectId ?? null }))} /><div className="button-row"><Button variant="flat" isLoading={loadingPolicy} onPress={() => void handleLoadPolicy()}>Load</Button><Button variant="flat" onPress={() => void handleValidatePolicy()}>Validate</Button><Button color="primary" onPress={() => void handleSavePolicy()}>Save policy</Button></div>{policyValidation ? <div><strong>{policyValidation.ok ? "Validation passed" : "Validation issues"}</strong><ul className="warning-list">{policyValidation.issues.length === 0 ? <li>No issues</li> : null}{policyValidation.issues.map((issue, index) => <li key={`${issue.level}-${index}`}>{issue.level}: {issue.message}</li>)}</ul></div> : null}</CardBody></Card>
+                </div>
+                <Card><CardHeader className="section-header">Report Export</CardHeader><CardBody className="panel-stack compact-text"><div className="form-grid"><div><label>Target</label><select className="native-select" value={exportDraft.exportTarget} onChange={(event) => setExportDraft((current) => ({ ...current, exportTarget: event.target.value as ExportRequest["exportTarget"] }))}><option value="dashboard">dashboard</option><option value="run">run</option><option value="diff">diff</option><option value="history">history</option><option value="regression">regression</option></select></div><div><label>Format</label><select className="native-select" value={exportDraft.format} onChange={(event) => setExportDraft((current) => ({ ...current, format: event.target.value as ExportRequest["format"] }))}><option value="html">html</option><option value="json">json</option><option value="print-html">print-html</option></select></div><Input label="Destination path" value={exportDraft.destinationPath} onValueChange={(value) => setExportDraft((current) => ({ ...current, destinationPath: value }))} /></div><Input label="Title" value={exportDraft.title ?? ""} onValueChange={(value) => setExportDraft((current) => ({ ...current, title: value || null }))} /><div className="button-row"><Button color="primary" isLoading={exporting} onPress={() => void handleExport()}>Export</Button><Button variant="flat" onPress={() => void refreshProjects()}>Refresh projects/exports</Button></div><div><strong>Recent exports</strong><ul className="warning-list">{recentExports.length === 0 ? <li>No exports yet.</li> : null}{recentExports.slice(0, 8).map((item) => <li key={item.exportId}>{item.createdAt} / {item.exportTarget} / {item.destinationPath}</li>)}</ul></div></CardBody></Card>
+              </div>
             </Tab>
           </Tabs>
 
@@ -570,6 +807,22 @@ export default function App() {
       </div>
     </div>
   );
+}
+
+function projectToDraft(project: ProjectDetail | null | undefined): CreateProjectRequest {
+  if (!project) return emptyProjectDraft;
+  return {
+    name: project.name,
+    rootPath: project.rootPath,
+    gitRepoPath: project.gitRepoPath,
+    defaultElfPath: project.defaultElfPath,
+    defaultMapPath: project.defaultMapPath,
+    defaultDebugPath: project.defaultDebugPath,
+    defaultRuleFilePath: project.defaultRuleFilePath,
+    defaultTarget: project.defaultTarget,
+    defaultProfile: project.defaultProfile,
+    defaultExportDir: project.defaultExportDir,
+  };
 }
 
 function currentOr(query: HistoryQuery, repoPath?: string | null): HistoryQuery {

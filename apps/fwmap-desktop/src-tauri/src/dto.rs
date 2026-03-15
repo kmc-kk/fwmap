@@ -417,3 +417,140 @@ pub struct DashboardSummaryDto {
     pub top_growth_sources: Vec<TopGrowthEntryDto>,
     pub region_usage: Vec<RegionUsageDto>,
 }
+
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSummaryDto {
+    pub project_id: i64,
+    pub name: String,
+    pub root_path: String,
+    pub git_repo_path: Option<String>,
+    pub default_rule_file_path: Option<String>,
+    pub default_target: Option<String>,
+    pub default_profile: Option<String>,
+    pub last_run_at: Option<String>,
+    pub last_export_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDetailDto {
+    pub project_id: i64,
+    pub name: String,
+    pub root_path: String,
+    pub git_repo_path: Option<String>,
+    pub default_elf_path: Option<String>,
+    pub default_map_path: Option<String>,
+    pub default_debug_path: Option<String>,
+    pub default_rule_file_path: Option<String>,
+    pub default_target: Option<String>,
+    pub default_profile: Option<String>,
+    pub default_export_dir: Option<String>,
+    pub pinned_report_path: Option<String>,
+    pub last_opened_screen: Option<String>,
+    pub last_opened_filters_json: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProjectRequestDto {
+    pub name: String,
+    pub root_path: String,
+    pub git_repo_path: Option<String>,
+    pub default_elf_path: Option<String>,
+    pub default_map_path: Option<String>,
+    pub default_debug_path: Option<String>,
+    pub default_rule_file_path: Option<String>,
+    pub default_target: Option<String>,
+    pub default_profile: Option<String>,
+    pub default_export_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProjectRequestDto {
+    pub name: Option<String>,
+    pub root_path: Option<String>,
+    pub git_repo_path: Option<String>,
+    pub default_elf_path: Option<String>,
+    pub default_map_path: Option<String>,
+    pub default_debug_path: Option<String>,
+    pub default_rule_file_path: Option<String>,
+    pub default_target: Option<String>,
+    pub default_profile: Option<String>,
+    pub default_export_dir: Option<String>,
+    pub pinned_report_path: Option<String>,
+    pub last_opened_screen: Option<String>,
+    pub last_opened_filters_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveProjectStateDto {
+    pub active_project_id: Option<i64>,
+    pub active_project: Option<ProjectDetailDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyDocumentDto {
+    pub path: Option<String>,
+    pub format: String,
+    pub content: String,
+    pub project_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyValidationIssueDto {
+    pub level: String,
+    pub message: String,
+    pub line: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyValidationResultDto {
+    pub ok: bool,
+    pub issues: Vec<PolicyValidationIssueDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentExportDto {
+    pub export_id: i64,
+    pub project_id: Option<i64>,
+    pub created_at: String,
+    pub export_target: String,
+    pub format: String,
+    pub destination_path: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportRequestDto {
+    pub project_id: Option<i64>,
+    pub export_target: String,
+    pub format: String,
+    pub destination_path: String,
+    pub run_id: Option<i64>,
+    pub compare: Option<RunCompareRequestDto>,
+    pub history_query: Option<HistoryQueryDto>,
+    pub range_query: Option<RangeDiffQueryDto>,
+    pub regression_query: Option<RegressionQueryDto>,
+    pub dashboard_query: Option<DashboardQueryDto>,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportResultDto {
+    pub destination_path: String,
+    pub export_target: String,
+    pub format: String,
+    pub created_at: String,
+}
