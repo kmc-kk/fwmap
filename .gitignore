@@ -3,3 +3,7 @@
 *.pdf
 fwmap_report.html
 /target_phase19
+/apps/fwmap-desktop/src-tauri/target
+/apps/fwmap-desktop/dist
+/apps/fwmap-desktop/node_modules
+/apps/fwmap-desktop/src-tauri/gen
