@@ -982,7 +982,7 @@ fn overview(current: &AnalysisResult, diff: Option<&DiffResult>) -> String {
         if current.debug_info.dwarf_used { "used" } else { "not used" },
         current.debug_info.unknown_source_ratio * 100.0,
         escape(&debug_artifact_summary(current)),
-        current.sections.len(),
+        current.sections.iter().filter(|section| include_report_section(&section.name)).count(),
         format_bytes(current.memory.rom_bytes),
         format_bytes(current.memory.ram_bytes),
         current.warnings.len(),
@@ -1280,6 +1280,7 @@ fn memory_summary(current: &AnalysisResult) -> String {
         .memory
         .section_totals
         .iter()
+        .filter(|section| include_report_section(&section.section_name))
         .take(20)
         .map(|section| {
             format!(
@@ -1291,6 +1292,9 @@ fn memory_summary(current: &AnalysisResult) -> String {
         })
         .collect::<Vec<_>>()
         .join("");
+    if rows.is_empty() {
+        return "<section><h2>Memory Summary</h2><p>No runtime-relevant sections to display.</p></section>".to_string();
+    }
     format!("<section><h2>Memory Summary</h2><table><thead><tr><th>Section</th><th>Category</th><th>Size</th></tr></thead><tbody>{rows}</tbody></table></section>")
 }
 
@@ -1366,6 +1370,7 @@ fn section_breakdown(current: &AnalysisResult) -> String {
     let rows = current
         .sections
         .iter()
+        .filter(|section| include_report_section(&section.name))
         .take(50)
         .map(|section| {
             format!(
@@ -1378,6 +1383,9 @@ fn section_breakdown(current: &AnalysisResult) -> String {
         })
         .collect::<Vec<_>>()
         .join("");
+    if rows.is_empty() {
+        return "<section><h2>Section Breakdown</h2><p>No runtime-relevant sections to display.</p></section>".to_string();
+    }
     format!("<section><h2>Section Breakdown</h2><table><thead><tr><th>Section</th><th>Address</th><th>Size</th><th>Flags</th></tr></thead><tbody>{rows}</tbody></table></section>")
 }
 
@@ -1533,7 +1541,19 @@ fn diff_section(current: &AnalysisResult, diff: Option<&DiffResult>, source_opti
         Some(diff) => format!(
             "<section><h2>Diff</h2>{}{}{}{}{}{}{}{}{} </section>",
             diff_summary(diff),
-            diff_table("Top Section Growth", &top_increases(&diff.section_diffs, 10), 10),
+            diff_table(
+                "Top Section Growth",
+                &top_increases(
+                    &diff
+                        .section_diffs
+                        .iter()
+                        .filter(|entry| include_report_section(&entry.name))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    10,
+                ),
+                10,
+            ),
             diff_table("Top Symbol Growth", &top_increases(&diff.symbol_diffs, 10), 10),
             diff_table("Top Object Growth", &top_increases(&diff.object_diffs, 10), 10),
             cpp_diff_section(current, diff),
@@ -1923,6 +1943,11 @@ fn function_metric_key(path: Option<&str>, raw_name: &str) -> String {
     }
 }
 
+fn include_report_section(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    !lower.starts_with(".debug") && !lower.starts_with(".zdebug")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{build_ci_summary, write_html_report, write_json_report, SourceRenderOptions};
@@ -1955,6 +1980,85 @@ mod tests {
         assert!(html.contains("Search files"));
         assert!(html.contains("Trend Links"));
         assert!(html.contains("main"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn html_omits_debug_elf_sections_from_section_views() {
+        let path = std::env::temp_dir().join(format!(
+            "fwmap-report-debug-sections-{}.html",
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let mut analysis = sample_analysis();
+        analysis.sections.push(SectionInfo {
+            name: ".debug_info".to_string(),
+            addr: 0x9000,
+            size: 2048,
+            flags: vec![],
+            category: SectionCategory::Other,
+        });
+        analysis.sections.push(SectionInfo {
+            name: ".debug_str".to_string(),
+            addr: 0x9800,
+            size: 1024,
+            flags: vec![],
+            category: SectionCategory::Other,
+        });
+        analysis.memory.section_totals.push(SectionTotal {
+            section_name: ".debug_info".to_string(),
+            size: 2048,
+            category: SectionCategory::Other,
+        });
+        analysis.memory.section_totals.push(SectionTotal {
+            section_name: ".debug_str".to_string(),
+            size: 1024,
+            category: SectionCategory::Other,
+        });
+        let diff = DiffResult {
+            rom_delta: 0,
+            ram_delta: 0,
+            unknown_source_delta: 0,
+            summary: DiffSummary::default(),
+            section_diffs: vec![
+                DiffEntry {
+                    name: ".debug_info".to_string(),
+                    current: 2048,
+                    previous: 1024,
+                    delta: 1024,
+                    change: DiffChangeKind::Increased,
+                },
+                DiffEntry {
+                    name: ".text".to_string(),
+                    current: 128,
+                    previous: 64,
+                    delta: 64,
+                    change: DiffChangeKind::Increased,
+                },
+            ],
+            symbol_diffs: Vec::new(),
+            object_diffs: Vec::new(),
+            archive_diffs: Vec::new(),
+            source_file_diffs: Vec::new(),
+            function_diffs: Vec::new(),
+            line_diffs: Vec::new(),
+            cpp_template_family_diffs: Vec::new(),
+            cpp_class_diffs: Vec::new(),
+            cpp_runtime_overhead_diffs: Vec::new(),
+            cpp_lambda_group_diffs: Vec::new(),
+            rust_package_diffs: Vec::new(),
+            rust_target_diffs: Vec::new(),
+            rust_crate_diffs: Vec::new(),
+            rust_dependency_diffs: Vec::new(),
+            rust_family_diffs: Vec::new(),
+            rust_symbol_diffs: Vec::new(),
+        };
+        write_html_report(&path, &analysis, Some(&diff), SourceRenderOptions::default(), 3).unwrap();
+        let html = fs::read_to_string(&path).unwrap();
+        assert!(html.contains("Memory Summary"));
+        assert!(html.contains("Section Breakdown"));
+        assert!(html.contains(".text"));
+        assert!(!html.contains(".debug_info"));
+        assert!(!html.contains(".debug_str"));
         let _ = fs::remove_file(path);
     }
 
