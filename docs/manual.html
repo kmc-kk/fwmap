@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>fwmap マニュアル</title>
+  <title>fwmap ?????</title>
   <style>
     :root {
       color-scheme: light;
@@ -13,8 +13,6 @@
       --muted: #5b6472;
       --line: #d8dee8;
       --accent: #1d4ed8;
-      --code-bg: #0f172a;
-      --code-fg: #e5eefc;
     }
     * { box-sizing: border-box; }
     body {
@@ -42,7 +40,7 @@
       color: var(--muted);
     }
     .panel {
-      background: rgba(255, 255, 255, 0.9);
+      background: rgba(255, 255, 255, 0.92);
       border: 1px solid var(--line);
       border-radius: 20px;
       box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
@@ -89,15 +87,15 @@
 <body>
   <main>
     <section class="hero">
-      <h1>fwmap マニュアル</h1>
-      <p>内容の正本は <code>manual.md</code> です。このページでは UTF-8 のまま読み込んで表示します。</p>
+      <h1>fwmap ?????</h1>
+      <p>??? <code>manual.md</code> ????? UTF-8 ???????????????????????????????????</p>
     </section>
     <section class="panel">
       <div class="panel-header">
         <strong>docs/manual.md</strong>
-        <a href="./manual.md">Markdown を開く</a>
+        <a href="./manual.md">Markdown ???</a>
       </div>
-      <pre id="manual">読み込み中...</pre>
+      <pre id="manual">?????...</pre>
     </section>
   </main>
   <script>
@@ -106,7 +104,7 @@
       try {
         const response = await fetch("./manual.md", { cache: "no-store" });
         if (!response.ok) {
-          throw new Error("manual.md の取得に失敗しました");
+          throw new Error("manual.md ????????????");
         }
         target.textContent = await response.text();
       } catch (error) {

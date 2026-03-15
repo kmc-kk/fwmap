@@ -45,6 +45,51 @@ Run the full test suite:
 cargo test
 ```
 
+## Desktop App (Phase D1)
+
+A first Tauri desktop shell now lives under `apps/fwmap-desktop/`. It keeps the existing Rust core as the analysis source of truth and adds a local GUI for file picking, job status, recent runs, run detail, and desktop settings.
+
+Install desktop dependencies:
+
+```bash
+cd apps/fwmap-desktop
+npm install
+```
+
+Run the frontend + Tauri shell in development:
+
+```bash
+cd apps/fwmap-desktop
+npm run tauri dev
+```
+
+Check only the Tauri backend crate:
+
+```bash
+cargo check --manifest-path apps/fwmap-desktop/src-tauri/Cargo.toml
+```
+
+Build the desktop frontend bundle:
+
+```bash
+cd apps/fwmap-desktop
+npm run build
+```
+
+Phase D1 keeps the desktop surface intentionally small:
+
+- Start analysis from local ELF / map / rule / Git repo paths
+- Track one-shot analysis jobs with Tauri events
+- Persist desktop settings and recent runs in a local SQLite app database
+- Record actual analysis history into the existing fwmap history database
+- Show a latest-run dashboard and a compact run detail view
+
+Current limitations in D1:
+
+- Job cancellation is a placeholder and does not interrupt the analysis thread
+- Deep drill-down pages, charts, and rich editors are not part of this phase
+- The desktop app reuses existing fwmap core/report output instead of replacing the CLI
+
 ## Usage
 
 Basic analysis:
