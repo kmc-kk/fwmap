@@ -1861,20 +1861,40 @@ pub fn print_regression_report(report: &RegressionReport) {
 }
 
 pub fn write_commit_timeline_html(path: &Path, report: &CommitTimelineReport) -> Result<(), String> {
+    let filter_summary = [
+        report
+            .filters
+            .branch
+            .as_deref()
+            .map(|value| format!("branch {value}")),
+        report
+            .filters
+            .profile
+            .as_deref()
+            .map(|value| format!("profile {value}")),
+        report
+            .filters
+            .toolchain
+            .as_deref()
+            .map(|value| format!("toolchain {value}")),
+        report
+            .filters
+            .target
+            .as_deref()
+            .map(|value| format!("target {value}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" | ");
     let rows = report
         .rows
         .iter()
         .map(|row| {
-            let rom_delta = row
-                .rom_delta_vs_previous
-                .map(|value| format!("{value:+}"))
-                .unwrap_or_else(|| "-".to_string());
-            let ram_delta = row
-                .ram_delta_vs_previous
-                .map(|value| format!("{value:+}"))
-                .unwrap_or_else(|| "-".to_string());
+            let rom_delta = render_delta_badge(row.rom_delta_vs_previous);
+            let ram_delta = render_delta_badge(row.ram_delta_vs_previous);
             format!(
-                "<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td><code>{}</code></td><td class=\"muted\">{}</td><td class=\"subject\">{}</td><td class=\"mono\">{}</td><td class=\"mono\">{}</td><td>{}</td><td>{}</td><td><span class=\"metric-pill\">{}</span></td></tr>",
                 escape_html(&row.short_commit),
                 escape_html(&row.commit_time),
                 escape_html(&row.subject),
@@ -1890,8 +1910,16 @@ pub fn write_commit_timeline_html(path: &Path, report: &CommitTimelineReport) ->
     fs::write(
         path,
         format!(
-            "<!doctype html><html><head><meta charset=\"utf-8\"><title>fwmap history commits</title></head><body><h1>Commit Timeline</h1><p>repo: {}</p><table border=\"1\"><thead><tr><th>Commit</th><th>Time</th><th>Subject</th><th>ROM</th><th>RAM</th><th>ROM delta</th><th>RAM delta</th><th>Rules</th></tr></thead><tbody>{}</tbody></table></body></html>",
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>fwmap history commits</title><style>{}</style></head><body><main class=\"page\"><section class=\"hero\"><p class=\"eyebrow\">fwmap history</p><h1>Commit Timeline</h1><p class=\"lede\">Analyzed commits aligned to Git history with ROM/RAM deltas against the next older analyzed build.</p></section><section class=\"summary-grid\"><article class=\"summary-card\"><span class=\"label\">Repository</span><strong>{}</strong></article><article class=\"summary-card\"><span class=\"label\">Rows</span><strong>{}</strong></article><article class=\"summary-card\"><span class=\"label\">Order</span><strong>{}</strong></article><article class=\"summary-card\"><span class=\"label\">Filters</span><strong>{}</strong></article></section><section class=\"panel\"><div class=\"table-wrap\"><table><thead><tr><th>Commit</th><th>Time</th><th>Subject</th><th>ROM</th><th>RAM</th><th>ROM delta</th><th>RAM delta</th><th>Rules</th></tr></thead><tbody>{}</tbody></table></div></section></main></body></html>",
+            history_report_css(),
             escape_html(&report.repo_id),
+            report.rows.len(),
+            escape_html(&report.order),
+            if filter_summary.is_empty() {
+                "none".to_string()
+            } else {
+                escape_html(&filter_summary)
+            },
             rows
         ),
     )
@@ -1899,20 +1927,24 @@ pub fn write_commit_timeline_html(path: &Path, report: &CommitTimelineReport) ->
 }
 
 pub fn write_range_diff_html(path: &Path, report: &RangeDiffReport) -> Result<(), String> {
+    let worst_rom = report
+        .worst_commit_by_rom
+        .as_ref()
+        .map(|item| format!("{} ({:+})", item.commit, item.delta))
+        .unwrap_or_else(|| "-".to_string());
+    let worst_ram = report
+        .worst_commit_by_ram
+        .as_ref()
+        .map(|item| format!("{} ({:+})", item.commit, item.delta))
+        .unwrap_or_else(|| "-".to_string());
     let rows = report
         .timeline_rows
         .iter()
         .map(|row| {
-            let rom_delta = row
-                .rom_delta_vs_previous
-                .map(|value| format!("{value:+}"))
-                .unwrap_or_else(|| "-".to_string());
-            let ram_delta = row
-                .ram_delta_vs_previous
-                .map(|value| format!("{value:+}"))
-                .unwrap_or_else(|| "-".to_string());
+            let rom_delta = render_delta_badge(row.rom_delta_vs_previous);
+            let ram_delta = render_delta_badge(row.ram_delta_vs_previous);
             format!(
-                "<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td><code>{}</code></td><td class=\"subject\">{}</td><td>{}</td><td>{}</td><td><span class=\"metric-pill\">{}</span></td></tr>",
                 escape_html(&row.short_commit),
                 escape_html(&row.subject),
                 rom_delta,
@@ -1925,11 +1957,15 @@ pub fn write_range_diff_html(path: &Path, report: &RangeDiffReport) -> Result<()
     fs::write(
         path,
         format!(
-            "<!doctype html><html><head><meta charset=\"utf-8\"><title>fwmap history range</title></head><body><h1>Range Diff</h1><p>{}</p><p>commits={} analyzed={} missing={}</p><table border=\"1\"><thead><tr><th>Commit</th><th>Subject</th><th>ROM delta</th><th>RAM delta</th><th>Rules</th></tr></thead><tbody>{}</tbody></table></body></html>",
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>fwmap history range</title><style>{}</style></head><body><main class=\"page\"><section class=\"hero\"><p class=\"eyebrow\">fwmap history</p><h1>Range Diff</h1><p class=\"lede\">Summary for <code>{}</code> with cumulative deltas and per-commit changes across the analyzed range.</p></section><section class=\"summary-grid\"><article class=\"summary-card\"><span class=\"label\">Analyzed commits</span><strong>{}</strong></article><article class=\"summary-card\"><span class=\"label\">Missing analysis</span><strong>{}</strong></article><article class=\"summary-card\"><span class=\"label\">Cumulative ROM</span><strong>{}</strong></article><article class=\"summary-card\"><span class=\"label\">Cumulative RAM</span><strong>{}</strong></article><article class=\"summary-card\"><span class=\"label\">Worst ROM commit</span><strong>{}</strong></article><article class=\"summary-card\"><span class=\"label\">Worst RAM commit</span><strong>{}</strong></article></section><section class=\"panel\"><div class=\"table-wrap\"><table><thead><tr><th>Commit</th><th>Subject</th><th>ROM delta</th><th>RAM delta</th><th>Rules</th></tr></thead><tbody>{}</tbody></table></div></section></main></body></html>",
+            history_report_css(),
             escape_html(&report.input_range_spec),
-            report.total_commits_in_git_range,
             report.analyzed_commits_count,
             report.missing_analysis_commits_count,
+            format_signed(report.cumulative_rom_delta),
+            format_signed(report.cumulative_ram_delta),
+            escape_html(&worst_rom),
+            escape_html(&worst_ram),
             rows
         ),
     )
@@ -1975,6 +2011,23 @@ pub fn write_regression_html(path: &Path, report: &RegressionReport) -> Result<(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NamedMetricMode {
     ByName,
+}
+
+fn history_report_css() -> &'static str {
+    "body{margin:0;font-family:Inter,\"Segoe UI\",system-ui,sans-serif;background:linear-gradient(180deg,#f4f7fb 0%,#eef2f7 100%);color:#17212b}code,.mono{font-family:\"SFMono-Regular\",Consolas,monospace}.page{max-width:1180px;margin:0 auto;padding:32px 20px 56px}.hero{padding:8px 4px 20px}.eyebrow{text-transform:uppercase;letter-spacing:.12em;font-size:12px;color:#6b7a90;margin:0 0 10px}.hero h1{font-size:56px;line-height:1.02;margin:0 0 14px}.lede{max-width:70ch;font-size:18px;line-height:1.6;color:#4b5b70;margin:0}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:8px 0 22px}.summary-card{background:rgba(255,255,255,.78);backdrop-filter:blur(8px);border:1px solid rgba(132,149,173,.2);border-radius:18px;padding:16px 18px;box-shadow:0 14px 40px rgba(25,42,70,.08)}.summary-card .label{display:block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6b7a90;margin-bottom:10px}.summary-card strong{display:block;font-size:22px;line-height:1.3;word-break:break-word}.panel{background:rgba(255,255,255,.88);border:1px solid rgba(132,149,173,.2);border-radius:22px;overflow:hidden;box-shadow:0 16px 48px rgba(25,42,70,.08)}.table-wrap{overflow:auto}.table-wrap table{width:100%;border-collapse:separate;border-spacing:0}.table-wrap thead th{position:sticky;top:0;background:#f8fbff;color:#304055;font-size:13px;text-transform:uppercase;letter-spacing:.06em;padding:14px 16px;border-bottom:1px solid #d8e1ec;white-space:nowrap}.table-wrap tbody td{padding:16px;border-bottom:1px solid #e6edf5;vertical-align:top}.table-wrap tbody tr:nth-child(odd){background:rgba(248,251,255,.65)}.table-wrap tbody tr:hover{background:rgba(231,239,249,.95)}.muted{color:#6b7a90;white-space:nowrap}.subject{min-width:320px;line-height:1.45}.delta{display:inline-flex;align-items:center;justify-content:center;min-width:78px;padding:6px 10px;border-radius:999px;font-weight:700;font-size:13px}.delta.pos{background:#e4f6ea;color:#146c43}.delta.neg{background:#fde9e7;color:#b23b2b}.delta.zero,.delta.na{background:#edf2f7;color:#607287}.metric-pill{display:inline-flex;align-items:center;justify-content:center;min-width:34px;padding:5px 9px;border-radius:999px;background:#edf2f7;color:#334155;font-weight:700;font-size:13px}@media (max-width:760px){.page{padding:24px 14px 40px}.hero h1{font-size:38px}.lede{font-size:16px}.subject{min-width:240px}}"
+}
+
+fn render_delta_badge(value: Option<i64>) -> String {
+    match value {
+        Some(delta) if delta > 0 => format!("<span class=\"delta pos\">{}</span>", format_signed(delta)),
+        Some(delta) if delta < 0 => format!("<span class=\"delta neg\">{}</span>", format_signed(delta)),
+        Some(delta) => format!("<span class=\"delta zero\">{}</span>", format_signed(delta)),
+        None => "<span class=\"delta na\">-</span>".to_string(),
+    }
+}
+
+fn format_signed(value: i64) -> String {
+    format!("{value:+}")
 }
 
 #[derive(Debug, Clone)]
