@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::linkage::explain_object;
 use crate::git::{changed_files, list_commits, list_range_commits, merge_base, resolve_repo_root, resolve_revision, CommitOrder, GitCommit};
-use crate::model::{AnalysisResult, GitMetadata, WarningLevel};
+use crate::model::{AnalysisResult, GitMetadata, RustContext, WarningLevel};
 
 #[derive(Debug, Clone)]
 pub struct HistoryRecordInput {
@@ -30,6 +30,7 @@ pub struct BuildRecord {
     pub error_count: u64,
     pub metadata: BTreeMap<String, String>,
     pub git: Option<GitMetadata>,
+    pub rust_context: Option<RustContext>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -369,6 +370,38 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
         .map_err(|err| format!("failed to insert git metadata: {err}"))?;
     }
 
+    if let Some(rust) = input.analysis.rust_context.as_ref() {
+        let target_kind_json =
+            serde_json::to_string(&rust.target_kind).map_err(|err| format!("failed to serialize Rust target_kind: {err}"))?;
+        let crate_types_json =
+            serde_json::to_string(&rust.crate_types).map_err(|err| format!("failed to serialize Rust crate_types: {err}"))?;
+        let workspace_members_json = serde_json::to_string(&rust.workspace_members)
+            .map_err(|err| format!("failed to serialize Rust workspace_members: {err}"))?;
+        tx.execute(
+            "INSERT INTO rust_metadata (
+                build_id, workspace_root, manifest_path, package_name, package_id, target_name, target_kind_json,
+                crate_types_json, edition, target_triple, profile, artifact_path, metadata_source, workspace_members_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                build_id,
+                rust.workspace_root,
+                rust.manifest_path,
+                rust.package_name,
+                rust.package_id,
+                rust.target_name,
+                target_kind_json,
+                crate_types_json,
+                rust.edition,
+                rust.target_triple,
+                rust.profile,
+                rust.artifact_path,
+                rust.metadata_source,
+                workspace_members_json
+            ],
+        )
+        .map_err(|err| format!("failed to insert Rust metadata: {err}"))?;
+    }
+
     {
         // Keep source aggregates in separate tables so existing history databases can
         // migrate forward by simply creating the new tables on first access.
@@ -554,9 +587,13 @@ pub fn list_builds(db_path: &Path) -> Result<Vec<BuildRecord>, String> {
             "SELECT b.id, b.created_at, b.elf_path, b.arch, b.rom_bytes, b.ram_bytes, b.warning_count, b.error_count,
                     b.metadata_json, b.linker_family, b.map_format,
                     g.repo_root, g.commit_hash, g.short_commit_hash, g.branch_name, g.detached_head, g.tag_names_json,
-                    g.commit_subject, g.author_name, g.author_email, g.commit_timestamp, g.describe, g.is_dirty
+                    g.commit_subject, g.author_name, g.author_email, g.commit_timestamp, g.describe, g.is_dirty,
+                    r.workspace_root, r.manifest_path, r.package_name, r.package_id, r.target_name, r.target_kind_json,
+                    r.crate_types_json, r.edition, r.target_triple, r.profile, r.artifact_path, r.metadata_source,
+                    r.workspace_members_json
              FROM builds b
              LEFT JOIN git_metadata g ON g.build_id = b.id
+             LEFT JOIN rust_metadata r ON r.build_id = b.id
              ORDER BY b.id DESC",
         )
         .map_err(|err| format!("failed to query build history: {err}"))?;
@@ -575,6 +612,7 @@ pub fn list_builds(db_path: &Path) -> Result<Vec<BuildRecord>, String> {
                 error_count: row.get::<_, i64>(7)? as u64,
                 metadata: parse_metadata(row.get::<_, String>(8)?),
                 git: parse_git_metadata(row)?,
+                rust_context: parse_rust_metadata(row)?,
             })
         })
         .map_err(|err| format!("failed to map build history rows: {err}"))?;
@@ -591,9 +629,13 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
             "SELECT b.id, b.created_at, b.elf_path, b.arch, b.rom_bytes, b.ram_bytes, b.warning_count, b.error_count,
                     b.metadata_json, b.linker_family, b.map_format,
                     g.repo_root, g.commit_hash, g.short_commit_hash, g.branch_name, g.detached_head, g.tag_names_json,
-                    g.commit_subject, g.author_name, g.author_email, g.commit_timestamp, g.describe, g.is_dirty
+                    g.commit_subject, g.author_name, g.author_email, g.commit_timestamp, g.describe, g.is_dirty,
+                    r.workspace_root, r.manifest_path, r.package_name, r.package_id, r.target_name, r.target_kind_json,
+                    r.crate_types_json, r.edition, r.target_triple, r.profile, r.artifact_path, r.metadata_source,
+                    r.workspace_members_json
              FROM builds b
              LEFT JOIN git_metadata g ON g.build_id = b.id
+             LEFT JOIN rust_metadata r ON r.build_id = b.id
              WHERE b.id = ?1",
             params![build_id],
             |row| {
@@ -610,6 +652,7 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
                     error_count: row.get::<_, i64>(7)? as u64,
                     metadata: parse_metadata(row.get::<_, String>(8)?),
                     git: parse_git_metadata(row)?,
+                    rust_context: parse_rust_metadata(row)?,
                 })
             },
         )
@@ -1655,6 +1698,20 @@ pub fn print_build_list(items: &[BuildRecord]) {
             item.map_format,
             format_git_summary(item.git.as_ref())
         );
+        if let Some(rust) = item.rust_context.as_ref() {
+            println!(
+                "    rust={}{}{}",
+                rust.package_name.as_deref().unwrap_or("-"),
+                rust.target_name
+                    .as_deref()
+                    .map(|value| format!(" target={value}"))
+                    .unwrap_or_default(),
+                rust.profile
+                    .as_deref()
+                    .map(|value| format!(" profile={value}"))
+                    .unwrap_or_default()
+            );
+        }
     }
 }
 
@@ -1691,6 +1748,27 @@ pub fn print_build_detail(detail: &BuildDetail) {
         if let Some(subject) = git.commit_subject.as_deref() {
             println!("Git subject: {subject}");
         }
+    }
+    if let Some(rust) = detail.build.rust_context.as_ref() {
+        println!(
+            "Rust: {}{}{}{}{}",
+            rust.package_name.as_deref().unwrap_or("-"),
+            rust.target_name
+                .as_deref()
+                .map(|value| format!(" | target={value}"))
+                .unwrap_or_default(),
+            (!rust.target_kind.is_empty())
+                .then(|| format!(" | kind={}", rust.target_kind.join(",")))
+                .unwrap_or_default(),
+            rust.profile
+                .as_deref()
+                .map(|value| format!(" | profile={value}"))
+                .unwrap_or_default(),
+            rust.target_triple
+                .as_deref()
+                .map(|value| format!(" | triple={value}"))
+                .unwrap_or_default()
+        );
     }
     println!(
         "DWARF: {} | Unknown ratio: {:.1}% | CUs: {} | Source files: {} | Functions: {}",
@@ -2195,9 +2273,13 @@ fn load_build_record(conn: &Connection, build_id: i64) -> Result<Option<BuildRec
         "SELECT b.id, b.created_at, b.elf_path, b.arch, b.rom_bytes, b.ram_bytes, b.warning_count, b.error_count,
                 b.metadata_json, b.linker_family, b.map_format,
                 g.repo_root, g.commit_hash, g.short_commit_hash, g.branch_name, g.detached_head, g.tag_names_json,
-                g.commit_subject, g.author_name, g.author_email, g.commit_timestamp, g.describe, g.is_dirty
+                g.commit_subject, g.author_name, g.author_email, g.commit_timestamp, g.describe, g.is_dirty,
+                r.workspace_root, r.manifest_path, r.package_name, r.package_id, r.target_name, r.target_kind_json,
+                r.crate_types_json, r.edition, r.target_triple, r.profile, r.artifact_path, r.metadata_source,
+                r.workspace_members_json
          FROM builds b
          LEFT JOIN git_metadata g ON g.build_id = b.id
+         LEFT JOIN rust_metadata r ON r.build_id = b.id
          WHERE b.id = ?1",
         params![build_id],
         |row| {
@@ -2214,6 +2296,7 @@ fn load_build_record(conn: &Connection, build_id: i64) -> Result<Option<BuildRec
                 error_count: row.get::<_, i64>(7)? as u64,
                 metadata: parse_metadata(row.get::<_, String>(8)?),
                 git: parse_git_metadata(row)?,
+                rust_context: parse_rust_metadata(row)?,
             })
         },
     )
@@ -2460,11 +2543,27 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             describe TEXT,
             is_dirty INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS rust_metadata (
+            build_id INTEGER PRIMARY KEY REFERENCES builds(id) ON DELETE CASCADE,
+            workspace_root TEXT,
+            manifest_path TEXT,
+            package_name TEXT,
+            package_id TEXT,
+            target_name TEXT,
+            target_kind_json TEXT NOT NULL DEFAULT '[]',
+            crate_types_json TEXT NOT NULL DEFAULT '[]',
+            edition TEXT,
+            target_triple TEXT,
+            profile TEXT,
+            artifact_path TEXT,
+            metadata_source TEXT NOT NULL DEFAULT '',
+            workspace_members_json TEXT NOT NULL DEFAULT '[]'
+        );
         CREATE TABLE IF NOT EXISTS schema_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-        INSERT INTO schema_meta(key, value) VALUES ('history_schema_version', '5')
+        INSERT INTO schema_meta(key, value) VALUES ('history_schema_version', '6')
         ON CONFLICT(key) DO UPDATE SET value = excluded.value;
         ",
     )
@@ -2520,6 +2619,51 @@ fn parse_git_metadata(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<GitMet
         commit_timestamp: row.get(20)?,
         describe: row.get(21)?,
         is_dirty: row.get::<_, Option<i64>>(22)?.unwrap_or(0) != 0,
+    }))
+}
+
+fn parse_rust_metadata(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<RustContext>> {
+    let workspace_root = row.get::<_, Option<String>>(23)?;
+    let manifest_path = row.get::<_, Option<String>>(24)?;
+    let package_name = row.get::<_, Option<String>>(25)?;
+    let package_id = row.get::<_, Option<String>>(26)?;
+    let target_name = row.get::<_, Option<String>>(27)?;
+    let metadata_source = row.get::<_, Option<String>>(34)?;
+    if workspace_root.is_none()
+        && manifest_path.is_none()
+        && package_name.is_none()
+        && package_id.is_none()
+        && target_name.is_none()
+        && metadata_source.as_deref().unwrap_or_default().is_empty()
+    {
+        return Ok(None);
+    }
+    let target_kind = row
+        .get::<_, Option<String>>(28)?
+        .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+        .unwrap_or_default();
+    let crate_types = row
+        .get::<_, Option<String>>(29)?
+        .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+        .unwrap_or_default();
+    let workspace_members = row
+        .get::<_, Option<String>>(35)?
+        .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+        .unwrap_or_default();
+    Ok(Some(RustContext {
+        workspace_root,
+        manifest_path,
+        package_name,
+        package_id,
+        target_name,
+        target_kind,
+        crate_types,
+        edition: row.get(30)?,
+        target_triple: row.get(31)?,
+        profile: row.get(32)?,
+        artifact_path: row.get(33)?,
+        metadata_source: metadata_source.unwrap_or_default(),
+        workspace_members,
     }))
 }
 
@@ -2612,9 +2756,10 @@ mod tests {
     use crate::git::{collect_git_metadata, CommitOrder, GitOptions};
     use crate::model::{
         AnalysisResult, BinaryInfo, DebugArtifactInfo, DebugInfoSummary, MemorySummary, ObjectContribution,
-        ObjectSourceKind, SectionCategory, SectionTotal, SymbolInfo, ToolchainInfo, ToolchainKind, ToolchainSelection,
-        UnknownSourceBucket, WarningItem, WarningLevel, WarningSource,
+        ObjectSourceKind, RustContext, SectionCategory, SectionTotal, SymbolInfo, ToolchainInfo, ToolchainKind,
+        ToolchainSelection, UnknownSourceBucket, WarningItem, WarningLevel, WarningSource,
     };
+    use rusqlite::Connection;
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::Path;
@@ -2643,6 +2788,100 @@ mod tests {
         assert_eq!(detail.top_source_files.len(), 1);
         assert_eq!(detail.top_functions.len(), 1);
         assert_eq!(detail.why_linked.len(), 0);
+        let _ = fs::remove_file(db);
+    }
+
+    #[test]
+    fn persists_and_loads_rust_context() {
+        let db = temp_db();
+        let mut analysis = sample_analysis(1024, 256, 0);
+        analysis.rust_context = Some(RustContext {
+            workspace_root: Some("/workspace/fwmap".to_string()),
+            manifest_path: Some("/workspace/fwmap/Cargo.toml".to_string()),
+            package_name: Some("fwmap".to_string()),
+            package_id: Some("path+file:///workspace/fwmap#fwmap@0.1.0".to_string()),
+            target_name: Some("fwmap".to_string()),
+            target_kind: vec!["bin".to_string()],
+            crate_types: vec!["bin".to_string()],
+            edition: Some("2024".to_string()),
+            target_triple: Some("x86_64-unknown-linux-gnu".to_string()),
+            profile: Some("release".to_string()),
+            artifact_path: Some("/workspace/fwmap/target/release/fwmap".to_string()),
+            metadata_source: "cargo-build-json".to_string(),
+            workspace_members: vec!["fwmap".to_string()],
+        });
+        let id = record_build(
+            &db,
+            HistoryRecordInput {
+                analysis,
+                metadata: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+        let items = list_builds(&db).unwrap();
+        assert_eq!(items[0].rust_context.as_ref().and_then(|item| item.package_name.as_deref()), Some("fwmap"));
+        let detail = show_build(&db, id).unwrap().unwrap();
+        assert_eq!(
+            detail
+                .build
+                .rust_context
+                .as_ref()
+                .and_then(|item| item.target_triple.as_deref()),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        let _ = fs::remove_file(db);
+    }
+
+    #[test]
+    fn migrates_old_history_db_without_rust_metadata_table() {
+        let db = temp_db();
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE builds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at INTEGER NOT NULL,
+                elf_path TEXT NOT NULL,
+                arch TEXT NOT NULL,
+                linker_family TEXT NOT NULL DEFAULT 'unknown',
+                map_format TEXT NOT NULL DEFAULT 'unknown',
+                rom_bytes INTEGER NOT NULL,
+                ram_bytes INTEGER NOT NULL,
+                warning_count INTEGER NOT NULL,
+                error_count INTEGER NOT NULL,
+                metadata_json TEXT NOT NULL
+            );
+            CREATE TABLE git_metadata (
+                build_id INTEGER PRIMARY KEY,
+                repo_root TEXT NOT NULL,
+                commit_hash TEXT NOT NULL,
+                short_commit_hash TEXT NOT NULL,
+                branch_name TEXT,
+                detached_head INTEGER NOT NULL,
+                tag_names_json TEXT NOT NULL,
+                commit_subject TEXT,
+                author_name TEXT,
+                author_email TEXT,
+                commit_timestamp TEXT,
+                describe TEXT,
+                is_dirty INTEGER NOT NULL
+            );
+            CREATE TABLE schema_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT INTO builds (
+                created_at, elf_path, arch, linker_family, map_format, rom_bytes, ram_bytes, warning_count, error_count, metadata_json
+            ) VALUES (1, 'legacy.elf', 'ARM', 'gnu', 'unknown', 10, 2, 0, 0, '{}');
+            INSERT INTO schema_meta(key, value) VALUES ('history_schema_version', '5');
+            ",
+        )
+        .unwrap();
+        drop(conn);
+
+        let items = list_builds(&db).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(items[0].rust_context.is_none());
         let _ = fs::remove_file(db);
     }
 
@@ -2968,6 +3207,7 @@ mod tests {
             error_count: 0,
             metadata: BTreeMap::new(),
             git: None,
+            rust_context: None,
         };
         build_off.metadata.insert("build.profile".to_string(), "release".to_string());
         build_off.metadata.insert("toolchain.id".to_string(), "gnu".to_string());
@@ -3079,6 +3319,7 @@ mod tests {
                 endian: "little-endian".to_string(),
             },
             git: None,
+            rust_context: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: None,

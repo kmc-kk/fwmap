@@ -1504,3 +1504,53 @@ fwmap history trend --db history.db --metric rom --last 20
 - `sample_lld.map`
 
 ELF の一部フィクスチャはテスト内で合成生成しています。
+## 16. Rust Cargo Ingestion
+
+Phase 25 では `fwmap analyze` に Rust / Cargo 向けの artifact 解決を追加しました。
+
+### 16.1 Cargo build 出力から解析する
+
+```bash
+cargo metadata --format-version=1 > build/cargo-metadata.json
+cargo build --release --message-format=json > build/cargo-build.jsonl
+
+fwmap analyze \
+  --cargo-build-json build/cargo-build.jsonl \
+  --cargo-metadata build/cargo-metadata.json \
+  --cargo-package fwmap \
+  --cargo-target-name fwmap \
+  --cargo-target-kind bin \
+  --cargo-target-triple x86_64-unknown-linux-gnu \
+  --resolve-rust-artifact strict \
+  --map target/release/fwmap.map \
+  --report-json out/report.json \
+  --out out/report.html
+```
+
+`--elf` を手で指定しなくても、Cargo の build JSON に十分な情報があれば実行ファイルや共有ライブラリを解決できます。
+
+### 16.2 明示的な ELF に Rust context を付与する
+
+```bash
+fwmap analyze \
+  --elf target/release/fwmap \
+  --map target/release/fwmap.map \
+  --cargo-metadata build/cargo-metadata.json \
+  --cargo-package fwmap \
+  --cargo-target-name fwmap
+```
+
+この場合は `--elf` が常に優先され、Cargo 入力は `rust_context` の付与だけに使われます。
+
+### 16.3 曖昧さの扱い
+
+- 複数の Cargo artifact が一致した場合、`fwmap` は自動で 1 つを選ばず、対処方法付きのエラーで停止します。
+- 絞り込みには `--cargo-package`、`--cargo-target-name`、`--cargo-target-kind` を使います。
+- `--elf` を指定した場合はそのパスを必ず使い、Cargo 入力は `rust_context` の補強にだけ使われます。
+- metadata だけを与えた場合、`--allow-target-dir-fallback` を有効にしない限り target directory を推測探索しません。
+
+### 16.4 History と JSON 出力
+
+- Cargo 入力がある場合、`report.json` には `rust_context` が追加されます。
+- `history.db` には Rust の package / target / profile / target triple を additive migration で保存します。
+- `history list --json` と `history show` でも保存済みの Rust context を確認できます。

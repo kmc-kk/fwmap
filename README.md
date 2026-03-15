@@ -27,6 +27,7 @@
 - CI summary in text / markdown / JSON formats
 - warning-based exit control
 - SQLite-backed history recording and trend inspection
+- Rust Cargo metadata / build JSON ingestion and artifact discovery
 - Graceful degradation for missing symbol tables and partially broken map files
 - Toolchain auto-detection and parser-family selection
 - `--verbose` and `--version` CLI support
@@ -66,6 +67,26 @@ cargo run -- analyze \
   --prev-map prev/app.map \
   --out report.html
 ```
+
+Rust / Cargo artifact discovery:
+
+```bash
+cargo metadata --format-version=1 > build/cargo-metadata.json
+cargo build --release --message-format=json > build/cargo-build.jsonl
+
+cargo run -- analyze \
+  --cargo-build-json build/cargo-build.jsonl \
+  --cargo-metadata build/cargo-metadata.json \
+  --cargo-package fwmap \
+  --cargo-target-name fwmap \
+  --cargo-target-kind bin \
+  --cargo-target-triple x86_64-unknown-linux-gnu \
+  --resolve-rust-artifact strict \
+  --map target/release/fwmap.map \
+  --report-json report.json
+```
+
+When multiple Rust artifacts are present, narrow selection with `--cargo-package`, `--cargo-target-name`, or `--cargo-target-kind`. If you already know the artifact path, `--elf` still wins and Cargo inputs only enrich `rust_context`.
 
 Explain why a symbol or object was linked:
 
@@ -569,6 +590,7 @@ cargo test
 - SARIF output targets GitHub-compatible SARIF 2.1.0 fields rather than the full schema surface.
 - Demangling currently prioritizes Itanium ABI names and falls back safely when conversion fails.
 - History storage currently uses a local SQLite file and focuses on summary, section, region, rule-result, and source-attribution metrics.
+- Rust history persistence stores normalized package / target / profile / triple context when Cargo inputs are present.
 - Toolchain auto-detection is intentionally lightweight and currently keys off GNU ld / LLVM lld map patterns only.
 - `lld-native` parsing is aimed at ELF `ld.lld -Map` / `--print-map` text output and may not cover every future column variation.
 - DWARF attribution uses line tables plus ELF symbol ranges; optimized builds may still collapse, duplicate, or split line ranges.
@@ -586,8 +608,15 @@ GitHub Actions:
 ```yaml
 - name: Analyze firmware size
   run: >
+    cargo metadata --format-version=1 > build/cargo-metadata.json &&
+    cargo build --release --message-format=json > build/cargo-build.jsonl &&
     cargo run -- analyze
-    --elf build/app.elf
+    --cargo-build-json build/cargo-build.jsonl
+    --cargo-metadata build/cargo-metadata.json
+    --cargo-package fwmap
+    --cargo-target-name fwmap
+    --cargo-target-kind bin
+    --resolve-rust-artifact strict
     --map build/app.map
     --prev-elf prev/app.elf
     --prev-map prev/app.map
@@ -602,7 +631,9 @@ GitLab CI:
 ```yaml
 fwmap:
   script:
-    - cargo run -- analyze --elf build/app.elf --map build/app.map --report-json fwmap.json --ci-format json --ci-out fwmap_ci.json
+    - cargo metadata --format-version=1 > build/cargo-metadata.json
+    - cargo build --release --message-format=json > build/cargo-build.jsonl
+    - cargo run -- analyze --cargo-build-json build/cargo-build.jsonl --cargo-metadata build/cargo-metadata.json --cargo-target-name app --cargo-target-kind bin --resolve-rust-artifact strict --map build/app.map --report-json fwmap.json --ci-format json --ci-out fwmap_ci.json
   artifacts:
     paths:
       - fwmap_ci.json

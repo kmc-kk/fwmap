@@ -737,6 +737,7 @@ mod tests {
                 endian: "little-endian".to_string(),
             },
             git: None,
+            rust_context: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: None,

@@ -1364,3 +1364,44 @@ Top symbol growth: g_rx_ring (+4096)
 <li><code>sample_lld.map</code></li>
 </ul>
 <p>ELF の一部フィクスチャはテスト内で合成生成しています。</p></body></html>
+</body></html>
+<h2>16. Rust Cargo Ingestion</h2>
+<p>Phase 25 では <code>fwmap analyze</code> に Rust / Cargo 向けの artifact 解決を追加しました。</p>
+<h3>16.1 Cargo build 出力から解析する</h3>
+<pre><code class="language-bash">cargo metadata --format-version=1 &gt; build/cargo-metadata.json
+cargo build --release --message-format=json &gt; build/cargo-build.jsonl
+
+fwmap analyze \
+  --cargo-build-json build/cargo-build.jsonl \
+  --cargo-metadata build/cargo-metadata.json \
+  --cargo-package fwmap \
+  --cargo-target-name fwmap \
+  --cargo-target-kind bin \
+  --cargo-target-triple x86_64-unknown-linux-gnu \
+  --resolve-rust-artifact strict \
+  --map target/release/fwmap.map \
+  --report-json out/report.json \
+  --out out/report.html</code></pre>
+<p><code>--elf</code> を手で指定しなくても、Cargo の build JSON に十分な情報があれば実行ファイルや共有ライブラリを解決できます。</p>
+<h3>16.2 明示的な ELF に Rust context を付与する</h3>
+<pre><code class="language-bash">fwmap analyze \
+  --elf target/release/fwmap \
+  --map target/release/fwmap.map \
+  --cargo-metadata build/cargo-metadata.json \
+  --cargo-package fwmap \
+  --cargo-target-name fwmap</code></pre>
+<p>この場合は <code>--elf</code> が常に優先され、Cargo 入力は <code>rust_context</code> の付与だけに使われます。</p>
+<h3>16.3 曖昧さの扱い</h3>
+<ul>
+<li>複数の Cargo artifact が一致した場合、<code>fwmap</code> は自動で 1 つを選ばず、対処方法付きのエラーで停止します。</li>
+<li>絞り込みには <code>--cargo-package</code>、<code>--cargo-target-name</code>、<code>--cargo-target-kind</code> を使います。</li>
+<li><code>--elf</code> を指定した場合はそのパスを必ず使い、Cargo 入力は <code>rust_context</code> の補強にだけ使われます。</li>
+<li>metadata だけを与えた場合、<code>--allow-target-dir-fallback</code> を有効にしない限り target directory を推測探索しません。</li>
+</ul>
+<h3>16.4 History と JSON 出力</h3>
+<ul>
+<li>Cargo 入力がある場合、<code>report.json</code> には <code>rust_context</code> が追加されます。</li>
+<li><code>history.db</code> には Rust の package / target / profile / target triple を additive migration で保存します。</li>
+<li><code>history list --json</code> と <code>history show</code> でも保存済みの Rust context を確認できます。</li>
+</ul>
+</body></html>

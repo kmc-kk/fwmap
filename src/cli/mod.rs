@@ -10,6 +10,7 @@ use crate::history::{
     write_commit_timeline_html, write_range_diff_html, write_regression_html, HistoryRecordInput, RegressionDetector,
     RegressionMode,
 };
+use crate::rust_ingest::{has_rust_inputs, resolve_rust_inputs, ResolveRustArtifactMode, RustInputs};
 use crate::linkage::{explain_object, explain_section, explain_symbol, ExplainResult};
 use crate::model::{
     CiFormat, CppGroupBy, DebuginfodMode, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode,
@@ -83,6 +84,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 source_root,
                 path_remaps,
                 fail_on_missing_dwarf,
+                rust_context: None,
             };
             if let Some(rule_path) = rules.as_deref() {
                 let config = load_rule_config(rule_path)?;
@@ -312,6 +314,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 source_root,
                 path_remaps,
                 fail_on_missing_dwarf,
+                rust_context: None,
             };
             let analysis = analyze_paths(&elf, map.as_deref(), lds.as_deref(), &options)?;
             print_debug_trace(&analysis);
@@ -376,7 +379,14 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
             group_by,
             save_history,
             history_db,
+            rust_inputs,
         } => {
+            let rust_resolution = resolve_rust_inputs(elf.as_deref(), &rust_inputs)?;
+            let elf = rust_resolution
+                .resolved_elf
+                .clone()
+                .ok_or_else(|| "--elf is required unless Cargo build metadata can resolve a Rust artifact".to_string())?;
+            ensure_exists(&elf, "ELF")?;
             let mut options = AnalyzeOptions {
                 thresholds,
                 demangle,
@@ -397,6 +407,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<i32, String> {
                 source_root,
                 path_remaps,
                 fail_on_missing_dwarf,
+                rust_context: rust_resolution.rust_context.clone(),
             };
             if let Some(rule_path) = rules.as_deref() {
                 let config = load_rule_config(rule_path)?;
@@ -663,7 +674,7 @@ enum Command {
         section: Option<String>,
     },
     Analyze {
-        elf: PathBuf,
+        elf: Option<PathBuf>,
         map: Option<PathBuf>,
         lds: Option<PathBuf>,
         prev_elf: Option<PathBuf>,
@@ -709,6 +720,7 @@ enum Command {
         group_by: CppGroupBy,
         save_history: bool,
         history_db: Option<PathBuf>,
+        rust_inputs: RustInputs,
     },
 }
 
@@ -775,6 +787,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     let mut group_by = CppGroupBy::Symbol;
     let mut save_history = false;
     let mut history_db = None;
+    let mut rust_inputs = RustInputs::default();
     let mut index = 2usize;
     while index < args.len() {
         let key = &args[index];
@@ -938,7 +951,18 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                 index += 2;
                 continue;
             }
-            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--sarif" | "--sarif-base-uri" | "--rules" | "--policy" | "--profile" | "--ci-out" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" | "--git-repo" | "--history-db" => {
+            "--resolve-rust-artifact" => {
+                let value = args.get(index + 1).ok_or_else(|| "missing value for --resolve-rust-artifact".to_string())?;
+                rust_inputs.resolve_artifact = parse_rust_artifact_mode(value)?;
+                index += 2;
+                continue;
+            }
+            "--allow-target-dir-fallback" => {
+                rust_inputs.allow_target_dir_fallback = true;
+                index += 1;
+                continue;
+            }
+            "--elf" | "--map" | "--lds" | "--prev-elf" | "--prev-map" | "--out" | "--report-json" | "--sarif" | "--sarif-base-uri" | "--rules" | "--policy" | "--profile" | "--ci-out" | "--source-root" | "--debug-file-dir" | "--debuginfod-url" | "--debuginfod-cache-dir" | "--git-repo" | "--history-db" | "--cargo-metadata" | "--cargo-build-json" | "--cargo-workspace" | "--cargo-target-name" | "--cargo-package" | "--cargo-target-kind" | "--cargo-target-triple" => {
                 let value = args.get(index + 1).ok_or_else(|| format!("missing value for {key}"))?;
                 match key.as_str() {
                     "--elf" => elf = Some(PathBuf::from(value)),
@@ -960,6 +984,13 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
                     "--debuginfod-cache-dir" => debuginfod_cache_dir = Some(PathBuf::from(value)),
                     "--git-repo" => git_repo = Some(PathBuf::from(value)),
                     "--history-db" => history_db = Some(PathBuf::from(value)),
+                    "--cargo-metadata" => rust_inputs.cargo_metadata = Some(PathBuf::from(value)),
+                    "--cargo-build-json" => rust_inputs.cargo_build_json = Some(PathBuf::from(value)),
+                    "--cargo-workspace" => rust_inputs.cargo_workspace = Some(PathBuf::from(value)),
+                    "--cargo-target-name" => rust_inputs.cargo_target_name = Some(value.to_string()),
+                    "--cargo-package" => rust_inputs.cargo_package = Some(value.to_string()),
+                    "--cargo-target-kind" => rust_inputs.cargo_target_kind = Some(parse_rust_target_kind(value)?.to_string()),
+                    "--cargo-target-triple" => rust_inputs.cargo_target_triple = Some(value.to_string()),
                     _ => {}
                 }
                 index += 2;
@@ -969,8 +1000,9 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         }
     }
 
-    let elf = elf.ok_or_else(|| "--elf is required".to_string())?;
-    ensure_exists(&elf, "ELF")?;
+    if has_rust_inputs(&rust_inputs) && rust_inputs.resolve_artifact == ResolveRustArtifactMode::Off {
+        rust_inputs.resolve_artifact = ResolveRustArtifactMode::Auto;
+    }
     if let Some(path) = map.as_deref() {
         ensure_exists(path, "map")?;
     }
@@ -988,6 +1020,15 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
     }
     if let Some(path) = policy.as_deref() {
         ensure_exists(path, "policy")?;
+    }
+    if let Some(path) = rust_inputs.cargo_metadata.as_deref() {
+        ensure_exists(path, "cargo metadata")?;
+    }
+    if let Some(path) = rust_inputs.cargo_build_json.as_deref() {
+        ensure_exists(path, "cargo build JSON")?;
+    }
+    if let Some(path) = rust_inputs.cargo_workspace.as_deref() {
+        ensure_exists(path, "cargo workspace")?;
     }
 
     Ok(Command::Analyze {
@@ -1037,6 +1078,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
         group_by,
         save_history,
         history_db,
+        rust_inputs,
     })
 }
 
@@ -1081,7 +1123,7 @@ fn help_text() -> String {
     format!(
         "fwmap {VERSION}
 
-fwmap analyze --elf <path> [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--why-linked-top <n>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--policy <path>] [--profile <name>] [--policy-dump-effective] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--git-repo <path>] [--no-git] [--save-history] [--history-db <path>] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--cpp-view] [--group-by <mode>] [--verbose]
+fwmap analyze [--elf <path>] [--map <path>] [--lds <path>] [--prev-elf <path>] [--prev-map <path>] [--out <path>] [--report-json <path>] [--why-linked-top <n>] [--sarif <path>] [--sarif-base-uri <uri>] [--sarif-min-level <level>] [--sarif-include-pass <bool>] [--sarif-tool-name <name>] [--rules <path>] [--policy <path>] [--profile <name>] [--policy-dump-effective] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--git-repo <path>] [--no-git] [--save-history] [--history-db <path>] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--cargo-metadata <path>] [--cargo-build-json <path>] [--cargo-workspace <path>] [--cargo-target-name <name>] [--cargo-package <name-or-id>] [--cargo-target-kind <bin|lib|example|test|bench>] [--cargo-target-triple <triple>] [--resolve-rust-artifact <auto|strict|off>] [--allow-target-dir-fallback] [--cpp-view] [--group-by <mode>] [--verbose]
 fwmap explain --elf <path> [--map <path>] [--lds <path>] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--git-repo <path>] [--no-git] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] (--symbol <name> | --object <name> | --section <name>)
 fwmap history record --db <path> --elf <path> [--map <path>] [--lds <path>] [--rules <path>] [--policy <path>] [--profile <name>] [--policy-dump-effective] [--demangle=auto|on|off] [--toolchain <name>] [--map-format <name>] [--dwarf=auto|on|off] [--debug-file-dir <path>] [--debug-trace] [--git-repo <path>] [--no-git] [--debuginfod=auto|on|off] [--debuginfod-url <url>] [--debuginfod-cache-dir <path>] [--source-lines <mode>] [--source-root <path>] [--path-remap <from=to>] [--fail-on-missing-dwarf] [--meta key=value]
 fwmap history list --db <path> [--limit <n>] [--json]
@@ -1092,7 +1134,7 @@ fwmap history range <A..B|A...B> [--db <path>] [--repo <path>] [--profile <name>
 fwmap history regression (--metric <key> | --rule <id> | --entity <key>) [<A..B|A...B>] [--db <path>] [--repo <path>] [--base <rev> --head <rev> | --from <rev> --to <rev>] [--mode <first-crossing|first-jump|first-presence|first-violation>] [--threshold <delta>] [--threshold-percent <percent>] [--jump-threshold <delta>] [--profile <name>] [--toolchain <id>] [--target <id>] [--order <timestamp|ancestry>] [--include-evidence] [--include-changed-files] [--bisect-like] [--max-steps <n>] [--limit-commits <n>] [--json] [--html <path>]
 
 Options:
-  --elf       Input ELF file (required)
+  --elf       Input ELF file (required unless Rust Cargo inputs resolve it)
   --map       GNU ld map file
   --lds       GNU ld linker script
   --prev-elf  Previous ELF file for diff
@@ -1119,6 +1161,15 @@ Options:
   --no-git    Disable Git metadata collection
   --save-history Save analyze output into a history database
   --history-db Override the history database path used with --save-history
+  --cargo-metadata Cargo metadata JSON file produced by `cargo metadata --format-version=1`
+  --cargo-build-json Cargo build message stream produced by `cargo build --message-format=json`
+  --cargo-workspace Cargo workspace root or Cargo.toml used to invoke `cargo metadata`
+  --cargo-target-name Select a Rust target by name when multiple artifacts exist
+  --cargo-package Select a Rust package by Cargo package name or package id
+  --cargo-target-kind bin|lib|example|test|bench Select a Rust target kind
+  --cargo-target-triple Record or constrain the Rust target triple
+  --resolve-rust-artifact auto|strict|off Control Cargo artifact resolution
+  --allow-target-dir-fallback Search Cargo target directories when build JSON is absent
   --debuginfod=auto|on|off Control debuginfod fallback behavior
   --debuginfod-url Add a debuginfod base URL (repeatable)
   --debuginfod-cache-dir Directory used for debuginfod cache metadata
@@ -1888,6 +1939,32 @@ fn parse_cpp_group_by(value: &str) -> Result<CppGroupBy, String> {
     }
 }
 
+fn parse_rust_target_kind(value: &str) -> Result<&'static str, String> {
+    match value {
+        "bin" | "lib" | "example" | "test" | "bench" => Ok(match value {
+            "bin" => "bin",
+            "lib" => "lib",
+            "example" => "example",
+            "test" => "test",
+            _ => "bench",
+        }),
+        _ => Err(format!(
+            "invalid value for --cargo-target-kind: '{value}', expected bin|lib|example|test|bench"
+        )),
+    }
+}
+
+fn parse_rust_artifact_mode(value: &str) -> Result<ResolveRustArtifactMode, String> {
+    match value {
+        "auto" => Ok(ResolveRustArtifactMode::Auto),
+        "strict" => Ok(ResolveRustArtifactMode::Strict),
+        "off" => Ok(ResolveRustArtifactMode::Off),
+        _ => Err(format!(
+            "invalid value for --resolve-rust-artifact: '{value}', expected auto|strict|off"
+        )),
+    }
+}
+
 fn parse_commit_order(value: &str) -> Result<CommitOrder, String> {
     match value {
         "timestamp" => Ok(CommitOrder::Timestamp),
@@ -1914,6 +1991,7 @@ mod tests {
     use super::{parse_args, Command};
     use crate::git::CommitOrder;
     use crate::history::{RegressionDetector, RegressionMode};
+    use crate::rust_ingest::ResolveRustArtifactMode;
     use crate::model::{
         CiFormat, CppGroupBy, DemangleMode, DwarfMode, MapFormatSelection, SourceLinesMode, ToolchainSelection,
         WarningLevel,
@@ -2352,6 +2430,52 @@ mod tests {
                 assert!(section.is_none());
             }
             _ => panic!("expected explain command"),
+        }
+    }
+
+    #[test]
+    fn parses_rust_analyze_inputs_without_explicit_elf() {
+        let temp = std::env::temp_dir().join("fwmap-cli-rust");
+        let _ = std::fs::create_dir_all(&temp);
+        let metadata = temp.join("cargo-metadata.json");
+        let build_json = temp.join("cargo-build.jsonl");
+        std::fs::write(&metadata, "{}").unwrap();
+        std::fs::write(&build_json, "{}").unwrap();
+        let cmd = parse_args(vec![
+            "fwmap".to_string(),
+            "analyze".to_string(),
+            "--cargo-metadata".to_string(),
+            metadata.to_string_lossy().to_string(),
+            "--cargo-build-json".to_string(),
+            build_json.to_string_lossy().to_string(),
+            "--cargo-target-name".to_string(),
+            "fwmap".to_string(),
+            "--cargo-package".to_string(),
+            "fwmap".to_string(),
+            "--cargo-target-kind".to_string(),
+            "bin".to_string(),
+            "--cargo-target-triple".to_string(),
+            "x86_64-unknown-linux-gnu".to_string(),
+            "--resolve-rust-artifact".to_string(),
+            "strict".to_string(),
+            "--allow-target-dir-fallback".to_string(),
+        ])
+        .unwrap();
+        match cmd {
+            Command::Analyze {
+                elf,
+                rust_inputs,
+                ..
+            } => {
+                assert!(elf.is_none());
+                assert_eq!(rust_inputs.cargo_target_name.as_deref(), Some("fwmap"));
+                assert_eq!(rust_inputs.cargo_package.as_deref(), Some("fwmap"));
+                assert_eq!(rust_inputs.cargo_target_kind.as_deref(), Some("bin"));
+                assert_eq!(rust_inputs.cargo_target_triple.as_deref(), Some("x86_64-unknown-linux-gnu"));
+                assert_eq!(rust_inputs.resolve_artifact, ResolveRustArtifactMode::Strict);
+                assert!(rust_inputs.allow_target_dir_fallback);
+            }
+            _ => panic!("expected analyze command"),
         }
     }
 }

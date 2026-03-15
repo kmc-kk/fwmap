@@ -28,6 +28,26 @@ pub struct GitMetadata {
     pub is_dirty: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct RustContext {
+    pub workspace_root: Option<String>,
+    pub manifest_path: Option<String>,
+    pub package_name: Option<String>,
+    pub package_id: Option<String>,
+    pub target_name: Option<String>,
+    #[serde(default)]
+    pub target_kind: Vec<String>,
+    #[serde(default)]
+    pub crate_types: Vec<String>,
+    pub edition: Option<String>,
+    pub target_triple: Option<String>,
+    pub profile: Option<String>,
+    pub artifact_path: Option<String>,
+    pub metadata_source: String,
+    #[serde(default)]
+    pub workspace_members: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SectionInfo {
     pub name: String,
@@ -171,6 +191,7 @@ pub struct WholeArchiveCandidate {
 pub struct AnalysisResult {
     pub binary: BinaryInfo,
     pub git: Option<GitMetadata>,
+    pub rust_context: Option<RustContext>,
     pub toolchain: ToolchainInfo,
     pub debug_info: DebugInfoSummary,
     pub debug_artifact: DebugArtifactInfo,

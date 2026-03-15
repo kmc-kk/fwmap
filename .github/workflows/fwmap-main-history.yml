@@ -40,7 +40,9 @@ jobs:
           CARGO_PROFILE_RELEASE_DEBUG: 1
           RUSTFLAGS: -C link-arg=-Wl,-Map=${{ env.FWMAP_MAP_PATH }}
         run: |
-          cargo build --release
+          mkdir -p build
+          cargo metadata --format-version=1 > build/cargo-metadata.json
+          cargo build --release --message-format=json > build/cargo-build.jsonl
           mkdir -p bin build "$FWMAP_OUT_DIR/history" "$FWMAP_SITE_DIR"
           cp target/release/fwmap bin/fwmap
           cp target/release/fwmap build/fwmap.elf
@@ -72,7 +74,13 @@ jobs:
       - name: Run fwmap analyze and save history
         run: |
           ANALYZE_ARGS=(
-            --elf build/fwmap.elf
+            --cargo-build-json build/cargo-build.jsonl
+            --cargo-metadata build/cargo-metadata.json
+            --cargo-package fwmap
+            --cargo-target-name fwmap
+            --cargo-target-kind bin
+            --cargo-target-triple x86_64-unknown-linux-gnu
+            --resolve-rust-artifact strict
             --map build/fwmap.map
             --dwarf=on
             --source-lines lines

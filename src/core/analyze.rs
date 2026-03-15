@@ -10,8 +10,9 @@ use crate::model::{
     AnalysisResult, ArchiveContribution, CustomRule, DebuginfodMode, DemangleMode, DiffResult,
     DwarfMode, FunctionAttribution, LineAttribution, LineRangeAttribution, LinkerFamily, MapFormat,
     MapFormatSelection, MemoryRegion, MemorySummary, ObjectContribution, ObjectSourceKind, RegionSectionUsage,
-    RegionUsageSummary, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SourceFile, SourceLinesMode,
-    SourceSpan, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection, WarningItem,
+    RegionUsageSummary, RustContext, SectionCategory, SectionInfo, SectionPlacement, SectionTotal, SourceFile,
+    SourceLinesMode, SourceSpan, SymbolInfo, ThresholdConfig, ToolchainInfo, ToolchainKind, ToolchainSelection,
+    WarningItem,
 };
 use crate::rules::{evaluate_default_rules, RuleContext};
 use crate::validation::quality::evaluate_quality_checks;
@@ -34,6 +35,7 @@ pub struct AnalyzeOptions {
     pub source_root: Option<std::path::PathBuf>,
     pub path_remaps: Vec<(String, String)>,
     pub fail_on_missing_dwarf: bool,
+    pub rust_context: Option<RustContext>,
 }
 
 impl Default for AnalyzeOptions {
@@ -55,6 +57,7 @@ impl Default for AnalyzeOptions {
             source_root: None,
             path_remaps: Vec::new(),
             fail_on_missing_dwarf: false,
+            rust_context: None,
         }
     }
 }
@@ -125,6 +128,7 @@ pub fn analyze_paths(
     let mut result = AnalysisResult {
         binary: elf.binary,
         git: collect_git_metadata(&options.git),
+        rust_context: options.rust_context.clone(),
         toolchain: ToolchainInfo {
             requested: options.toolchain,
             detected: map_data.as_ref().and_then(|item| item.detected_toolchain),
@@ -814,6 +818,7 @@ mod tests {
                 endian: "little-endian".to_string(),
             },
             git: None,
+            rust_context: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: None,

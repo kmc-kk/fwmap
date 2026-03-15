@@ -47,6 +47,23 @@ pub fn print_cli_summary(result: &AnalysisResult, diff: Option<&DiffResult>, ver
             if git.is_dirty { " | dirty" } else { "" }
         );
     }
+    if let Some(rust) = result.rust_context.as_ref() {
+        println!(
+            "Rust: {}{}{}{}",
+            rust.package_name.as_deref().unwrap_or("-"),
+            rust.target_name
+                .as_deref()
+                .map(|value| format!(" | target: {value}"))
+                .unwrap_or_default(),
+            (!rust.target_kind.is_empty())
+                .then(|| format!(" | kind: {}", rust.target_kind.join(",")))
+                .unwrap_or_default(),
+            rust.profile
+                .as_deref()
+                .map(|value| format!(" | profile: {value}"))
+                .unwrap_or_default()
+        );
+    }
     println!("Toolchain: {} (requested: {})", result.toolchain.resolved, result.toolchain.requested);
     println!(
         "Linker family: {} | Map format: {} | Parser warnings: {}",
@@ -263,6 +280,7 @@ fn build_json(
         "schema_version": 1,
         "binary": &current.binary,
         "git": &current.git,
+        "rust_context": &current.rust_context,
         "toolchain": &current.toolchain,
         "map_format": current.toolchain.map_format,
         "linker_family": current.toolchain.linker_family,
@@ -1895,6 +1913,21 @@ mod tests {
         ));
         let analysis = sample_analysis();
         let mut analysis = analysis;
+        analysis.rust_context = Some(crate::model::RustContext {
+            workspace_root: Some("/workspace/fwmap".to_string()),
+            manifest_path: Some("/workspace/fwmap/Cargo.toml".to_string()),
+            package_name: Some("fwmap".to_string()),
+            package_id: Some("path+file:///workspace/fwmap#fwmap@0.1.0".to_string()),
+            target_name: Some("fwmap".to_string()),
+            target_kind: vec!["bin".to_string()],
+            crate_types: vec!["bin".to_string()],
+            edition: Some("2024".to_string()),
+            target_triple: Some("x86_64-unknown-linux-gnu".to_string()),
+            profile: Some("release".to_string()),
+            artifact_path: Some("/workspace/fwmap/target/release/fwmap".to_string()),
+            metadata_source: "cargo-build-json".to_string(),
+            workspace_members: vec!["fwmap".to_string()],
+        });
         analysis.policy = Some(crate::model::PolicyEvaluation {
             profile: "release".to_string(),
             effective: crate::model::EffectivePolicySummary::default(),
@@ -1916,6 +1949,8 @@ mod tests {
         assert!(json.contains("\"line_hotspots\""));
         assert!(json.contains("\"cpp_view\""));
         assert!(json.contains("\"policy\""));
+        assert!(json.contains("\"rust_context\""));
+        assert!(json.contains("\"package_name\": \"fwmap\""));
         let _ = fs::remove_file(path);
     }
 
@@ -2032,6 +2067,7 @@ mod tests {
                 endian: "little-endian".to_string(),
             },
             git: None,
+            rust_context: None,
             toolchain: ToolchainInfo {
                 requested: ToolchainSelection::Auto,
                 detected: Some(ToolchainKind::Gnu),

@@ -1,0 +1,44 @@
+{
+  "workspace_root": "/tmp/fwmap",
+  "target_directory": "/tmp/fwmap/target",
+  "workspace_members": [
+    "path+file:///tmp/fwmap/app#app@0.1.0",
+    "path+file:///tmp/fwmap/tools/helper#helper@0.1.0"
+  ],
+  "packages": [
+    {
+      "id": "path+file:///tmp/fwmap/app#app@0.1.0",
+      "name": "app",
+      "manifest_path": "/tmp/fwmap/app/Cargo.toml",
+      "edition": "2021",
+      "targets": [
+        {
+          "name": "app",
+          "kind": ["bin"],
+          "crate_types": ["bin"],
+          "edition": "2021"
+        },
+        {
+          "name": "app-helper",
+          "kind": ["bin"],
+          "crate_types": ["bin"],
+          "edition": "2021"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///tmp/fwmap/tools/helper#helper@0.1.0",
+      "name": "helper",
+      "manifest_path": "/tmp/fwmap/tools/helper/Cargo.toml",
+      "edition": "2021",
+      "targets": [
+        {
+          "name": "helper",
+          "kind": ["bin"],
+          "crate_types": ["bin"],
+          "edition": "2021"
+        }
+      ]
+    }
+  ]
+}

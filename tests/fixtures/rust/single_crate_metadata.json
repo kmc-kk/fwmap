@@ -1,0 +1,23 @@
+{
+  "workspace_root": "/workspace/fwmap",
+  "target_directory": "/workspace/fwmap/target",
+  "workspace_members": [
+    "path+file:///workspace/fwmap#fwmap@0.1.0"
+  ],
+  "packages": [
+    {
+      "id": "path+file:///workspace/fwmap#fwmap@0.1.0",
+      "name": "fwmap",
+      "manifest_path": "/workspace/fwmap/Cargo.toml",
+      "edition": "2024",
+      "targets": [
+        {
+          "name": "fwmap",
+          "kind": ["bin"],
+          "crate_types": ["bin"],
+          "edition": "2024"
+        }
+      ]
+    }
+  ]
+}
