@@ -13,7 +13,7 @@
               "id": "DWARF_LINE_ZERO",
               "name": "DWARF_LINE_ZERO",
               "shortDescription": {
-                "text": "DWARF emitted 45968 line-0 ranges; these bytes were counted as unknown source"
+                "text": "DWARF emitted 46131 line-0 ranges; these bytes were counted as unknown source"
               },
               "fullDescription": {
                 "text": "DWARF_LINE_ZERO warning from elf"
@@ -36,6 +36,20 @@
                 "text": "fwmap reported LARGE_SYMBOL with severity warn. Review the related entity and report context for the underlying evidence."
               },
               "helpUri": "/blob/main/README.md#large_symbol"
+            },
+            {
+              "id": "SYMBOL_SPIKE",
+              "name": "SYMBOL_SPIKE",
+              "shortDescription": {
+                "text": "Symbol growth spike: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448 (+29991)"
+              },
+              "fullDescription": {
+                "text": "SYMBOL_SPIKE warning from analyze"
+              },
+              "help": {
+                "text": "fwmap reported SYMBOL_SPIKE with severity warn. Review the related entity and report context for the underlying evidence."
+              },
+              "helpUri": "/blob/main/README.md#symbol_spike"
             }
           ]
         }
@@ -174,7 +188,7 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12021140761502075759 (29977 bytes (29.27 KiB))"
+            "text": "Large symbol detected: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448 (29991 bytes (29.29 KiB))"
           },
           "locations": [
             {
@@ -191,14 +205,46 @@
             }
           ],
           "partialFingerprints": {
-            "fwmap/v1": "2c5215cec987fa31"
+            "fwmap/v1": "7314096cc912e720"
           },
           "properties": {
             "includePass": false,
-            "logicalIdentity": "function:src/ingest/dwarf/mod.rs:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12021140761502075759",
-            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12021140761502075759",
+            "logicalIdentity": "function:src/ingest/dwarf/mod.rs:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448",
+            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448",
             "source": "analyze",
-            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12021140761502075759"
+            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448"
+          }
+        },
+        {
+          "ruleId": "SYMBOL_SPIKE",
+          "level": "warning",
+          "kind": "fail",
+          "message": {
+            "text": "Symbol growth spike: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448 (+29991)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gimli-0.31.1/src/common.rs"
+                },
+                "region": {
+                  "startLine": 43,
+                  "endLine": 43,
+                  "startColumn": 17
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "fwmap/v1": "aa5f05482e6023ed"
+          },
+          "properties": {
+            "includePass": false,
+            "logicalIdentity": "function:src/ingest/dwarf/mod.rs:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448",
+            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448",
+            "source": "analyze",
+            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448"
           }
         }
       ]
