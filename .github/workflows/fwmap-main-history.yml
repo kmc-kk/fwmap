@@ -9,7 +9,7 @@ on:
     - cron: "17 18 * * *" # JST 03:17
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: fwmap-main-history
@@ -20,6 +20,7 @@ env:
   FWMAP_SITE_DIR: site
   FWMAP_HISTORY_DB: out/history/history.db
   FWMAP_MAP_PATH: ${{ github.workspace }}/target/release/fwmap.map
+  FWMAP_HISTORY_BRANCH: fwmap-history-data
 
 jobs:
   build-and-analyze:
@@ -43,6 +44,24 @@ jobs:
           cp target/release/fwmap bin/fwmap
           cp target/release/fwmap build/fwmap.elf
           cp "${FWMAP_MAP_PATH}" build/fwmap.map
+
+      - name: Restore persisted history database
+        run: |
+          mkdir -p history-state
+          if git ls-remote --exit-code --heads origin "$FWMAP_HISTORY_BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$FWMAP_HISTORY_BRANCH"
+            git worktree add history-state "origin/$FWMAP_HISTORY_BRANCH"
+            if [ -f "history-state/history.db" ]; then
+              cp "history-state/history.db" "$FWMAP_HISTORY_DB"
+            fi
+          else
+            git worktree add --detach history-state
+            (
+              cd history-state
+              git checkout --orphan "$FWMAP_HISTORY_BRANCH"
+              git rm -rf . >/dev/null 2>&1 || true
+            )
+          fi
 
       - name: Run fwmap analyze and save history
         run: |
@@ -95,6 +114,21 @@ jobs:
             '</ul>' \
             '</body></html>' \
             > "$FWMAP_SITE_DIR/index.html"
+
+      - name: Persist history database
+        if: github.ref == 'refs/heads/main'
+        run: |
+          cp "$FWMAP_HISTORY_DB" "history-state/history.db"
+          mkdir -p "history-state/site"
+          cp -r "$FWMAP_SITE_DIR"/. "history-state/site/"
+          (
+            cd history-state
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add history.db site
+            git commit -m "Update fwmap history for ${GITHUB_SHA}" || true
+            git push origin "HEAD:$FWMAP_HISTORY_BRANCH"
+          )
 
       - name: Write job summary
         run: |
