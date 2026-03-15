@@ -13,7 +13,7 @@
               "id": "DWARF_LINE_ZERO",
               "name": "DWARF_LINE_ZERO",
               "shortDescription": {
-                "text": "DWARF emitted 46131 line-0 ranges; these bytes were counted as unknown source"
+                "text": "DWARF emitted 46229 line-0 ranges; these bytes were counted as unknown source"
               },
               "fullDescription": {
                 "text": "DWARF_LINE_ZERO warning from elf"
@@ -41,7 +41,7 @@
               "id": "SYMBOL_SPIKE",
               "name": "SYMBOL_SPIKE",
               "shortDescription": {
-                "text": "Symbol growth spike: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448 (+29991)"
+                "text": "Symbol growth spike: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12071842304211225049 (+29642)"
               },
               "fullDescription": {
                 "text": "SYMBOL_SPIKE warning from analyze"
@@ -92,7 +92,7 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: _ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE (35608 bytes (34.77 KiB))"
+            "text": "Large symbol detected: _ZN5fwmap6report6render10build_html17h8e111d45adb8e9ceE (36215 bytes (35.37 KiB))"
           },
           "locations": [
             {
@@ -188,7 +188,7 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448 (29991 bytes (29.29 KiB))"
+            "text": "Large symbol detected: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12071842304211225049 (29642 bytes (28.95 KiB))"
           },
           "locations": [
             {
@@ -205,14 +205,14 @@
             }
           ],
           "partialFingerprints": {
-            "fwmap/v1": "7314096cc912e720"
+            "fwmap/v1": "e120994a2172372a"
           },
           "properties": {
             "includePass": false,
-            "logicalIdentity": "function:src/ingest/dwarf/mod.rs:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448",
-            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448",
+            "logicalIdentity": "function:src/ingest/dwarf/mod.rs:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12071842304211225049",
+            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12071842304211225049",
             "source": "analyze",
-            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448"
+            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12071842304211225049"
           }
         },
         {
@@ -220,7 +220,7 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Symbol growth spike: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448 (+29991)"
+            "text": "Symbol growth spike: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12071842304211225049 (+29642)"
           },
           "locations": [
             {
@@ -237,14 +237,14 @@
             }
           ],
           "partialFingerprints": {
-            "fwmap/v1": "aa5f05482e6023ed"
+            "fwmap/v1": "9f002ef1e9faf82f"
           },
           "properties": {
             "includePass": false,
-            "logicalIdentity": "function:src/ingest/dwarf/mod.rs:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448",
-            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448",
+            "logicalIdentity": "function:src/ingest/dwarf/mod.rs:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12071842304211225049",
+            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12071842304211225049",
             "source": "analyze",
-            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.16407631125028237448"
+            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12071842304211225049"
           }
         }
       ]
