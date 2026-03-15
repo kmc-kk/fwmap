@@ -76,19 +76,28 @@ cd apps/fwmap-desktop
 npm run build
 ```
 
-Phase D1 keeps the desktop surface intentionally small:
+Desktop support now covers two layers:
+
+- Phase D1: start analysis jobs, track job state, persist settings, and inspect recent runs
+- Phase D2: inspect history timeline, compare two recorded runs, query git-aware range diffs, and surface regression-origin results
+
+Desktop capabilities currently available:
 
 - Start analysis from local ELF / map / rule / Git repo paths
 - Track one-shot analysis jobs with Tauri events
 - Persist desktop settings and recent runs in a local SQLite app database
 - Record actual analysis history into the existing fwmap history database
-- Show a latest-run dashboard and a compact run detail view
+- Browse recent runs and a compact run detail view
+- Load commit timelines with branch / profile / target filters
+- Compare two recorded runs with section / object / source / symbol / Rust delta lists
+- Query git-aware range diffs and regression-origin summaries from the desktop UI
 
-Current limitations in D1:
+Current limitations:
 
 - Job cancellation is a placeholder and does not interrupt the analysis thread
-- Deep drill-down pages, charts, and rich editors are not part of this phase
-- The desktop app reuses existing fwmap core/report output instead of replacing the CLI
+- Desktop navigation uses lightweight in-app state rather than a full router
+- Deep charts, rich editors, and dense drill-down visualization are still future work
+- The desktop app reuses existing fwmap core/history logic instead of replacing the CLI
 
 ## Usage
 
