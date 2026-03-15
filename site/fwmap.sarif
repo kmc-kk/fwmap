@@ -36,20 +36,6 @@
                 "text": "fwmap reported LARGE_SYMBOL with severity warn. Review the related entity and report context for the underlying evidence."
               },
               "helpUri": "/blob/main/README.md#large_symbol"
-            },
-            {
-              "id": "SYMBOL_SPIKE",
-              "name": "SYMBOL_SPIKE",
-              "shortDescription": {
-                "text": "Symbol growth spike: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12071842304211225049 (+29642)"
-              },
-              "fullDescription": {
-                "text": "SYMBOL_SPIKE warning from analyze"
-              },
-              "help": {
-                "text": "fwmap reported SYMBOL_SPIKE with severity warn. Review the related entity and report context for the underlying evidence."
-              },
-              "helpUri": "/blob/main/README.md#symbol_spike"
             }
           ]
         }
@@ -206,38 +192,6 @@
           ],
           "partialFingerprints": {
             "fwmap/v1": "e120994a2172372a"
-          },
-          "properties": {
-            "includePass": false,
-            "logicalIdentity": "function:src/ingest/dwarf/mod.rs:_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12071842304211225049",
-            "related": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12071842304211225049",
-            "source": "analyze",
-            "symbol": "_ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12071842304211225049"
-          }
-        },
-        {
-          "ruleId": "SYMBOL_SPIKE",
-          "level": "warning",
-          "kind": "fail",
-          "message": {
-            "text": "Symbol growth spike: _ZN5fwmap6ingest5dwarf19parse_dwarf_enabled17hf446a0862b00e990E.llvm.12071842304211225049 (+29642)"
-          },
-          "locations": [
-            {
-              "physicalLocation": {
-                "artifactLocation": {
-                  "uri": "/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gimli-0.31.1/src/common.rs"
-                },
-                "region": {
-                  "startLine": 43,
-                  "endLine": 43,
-                  "startColumn": 17
-                }
-              }
-            }
-          ],
-          "partialFingerprints": {
-            "fwmap/v1": "9f002ef1e9faf82f"
           },
           "properties": {
             "includePass": false,
