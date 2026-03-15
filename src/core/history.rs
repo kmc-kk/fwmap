@@ -2056,8 +2056,15 @@ fn variant_key(build: &BuildRecord) -> String {
             .cloned()
             .unwrap_or_else(|| build.linker_family.clone()),
         build.metadata.get("target.id").cloned().unwrap_or_default(),
-        build.metadata.get("config.fingerprint").cloned().unwrap_or_default()
+        normalized_config_fingerprint(build.metadata.get("config.fingerprint"))
     )
+}
+
+fn normalized_config_fingerprint(value: Option<&String>) -> String {
+    let Some(value) = value else {
+        return String::new();
+    };
+    value.split('|').take(2).collect::<Vec<_>>().join("|")
 }
 
 fn build_timeline_row(repo_id: &str, commit: &GitCommit, build: &BuildRecord, diff: Option<&BuildMetricDiff>) -> CommitTimelineRow {
@@ -2546,7 +2553,8 @@ fn now_unix() -> i64 {
 mod tests {
     use super::{
         commit_timeline, list_builds, range_diff, record_build, regression_origin, show_build, trend_metric,
-        HistoryRecordInput, RegressionConfidence, RegressionDetector, RegressionMode, TrendFormat,
+        variant_key, BuildRecord, HistoryRecordInput, RegressionConfidence, RegressionDetector, RegressionMode,
+        TrendFormat,
     };
     use crate::git::{collect_git_metadata, CommitOrder, GitOptions};
     use crate::model::{
@@ -2890,6 +2898,36 @@ mod tests {
         metadata.insert("toolchain.id".to_string(), "gnu".to_string());
         metadata.insert("config.fingerprint".to_string(), "gnu|unknown|all".to_string());
         metadata
+    }
+
+    #[test]
+    fn variant_key_ignores_source_lines_component_in_config_fingerprint() {
+        let mut build_off = BuildRecord {
+            id: 1,
+            created_at: 0,
+            elf_path: "a.elf".to_string(),
+            arch: "ARM".to_string(),
+            linker_family: "gnu".to_string(),
+            map_format: "unknown".to_string(),
+            rom_bytes: 1,
+            ram_bytes: 1,
+            warning_count: 0,
+            error_count: 0,
+            metadata: BTreeMap::new(),
+            git: None,
+        };
+        build_off.metadata.insert("build.profile".to_string(), "release".to_string());
+        build_off.metadata.insert("toolchain.id".to_string(), "gnu".to_string());
+        build_off
+            .metadata
+            .insert("config.fingerprint".to_string(), "gnu|unknown|off".to_string());
+
+        let mut build_lines = build_off.clone();
+        build_lines
+            .metadata
+            .insert("config.fingerprint".to_string(), "gnu|unknown|lines".to_string());
+
+        assert_eq!(variant_key(&build_off), variant_key(&build_lines));
     }
 
     fn analysis_for_commit(rom: u64, ram: u64, git: &crate::model::GitMetadata) -> AnalysisResult {
