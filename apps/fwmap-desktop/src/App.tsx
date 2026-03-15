@@ -681,6 +681,89 @@ export default function App() {
   );
   const romRamTrend = dashboardSummary?.recentTrends.find((series) => series.key === "rom-ram") ?? dashboardSummary?.recentTrends[0] ?? null;
   const warningTrend = dashboardSummary?.recentTrends.find((series) => series.key === "warnings") ?? dashboardSummary?.recentTrends[1] ?? null;
+  const activeProjectName = activeProjectState?.activeProject?.name ?? "No active project";
+  const screenMeta: Record<ScreenKey, { eyebrow: string; title: string; description: string }> = {
+    dashboard: {
+      eyebrow: "Overview",
+      title: "Size posture at a glance",
+      description: "Track the latest build, history pressure, and the signals worth acting on next.",
+    },
+    runs: {
+      eyebrow: "Runs",
+      title: "Inspect individual analyses",
+      description: "Review the latest captured runs, inspect one in detail, and send it into a comparison flow.",
+    },
+    diff: {
+      eyebrow: "Diff",
+      title: "Compare two analysis snapshots",
+      description: "Contrast footprint deltas and identify which sections, objects, or symbols moved the build.",
+    },
+    history: {
+      eyebrow: "History",
+      title: "Read the timeline before a regression lands",
+      description: "Filter repository history, scan commit movement, then run range and regression queries.",
+    },
+    settings: {
+      eyebrow: "Workspace",
+      title: "Keep the desktop predictable",
+      description: "Manage project defaults, policies, and export destinations without losing local context.",
+    },
+  };
+  const stageMetrics = useMemo(() => {
+    switch (screen) {
+      case "dashboard":
+        return [
+          { label: "Active project", value: activeProjectName, detail: activeProjectState?.activeProject?.rootPath ?? "Select a project to reuse defaults." },
+          { label: "Latest run", value: latestRun ? `#${latestRun.runId}` : "No runs", detail: latestRun ? formatTime(latestRun.createdAt) : "Start an analysis to populate the timeline." },
+          { label: "Signals", value: `${dashboardSummary?.recentRegressions.length ?? 0}`, detail: `${timeline?.rows.length ?? 0} timeline rows loaded` },
+        ];
+      case "runs":
+        return [
+          { label: "Run count", value: String(runs.length), detail: latestRun ? `Latest: #${latestRun.runId}` : "No runs recorded yet." },
+          { label: "Selected run", value: selectedRunId ? `#${selectedRunId}` : "None", detail: runDetail?.run.gitRevision ?? runDetail?.elfPath ?? "Choose a run to inspect it." },
+          { label: "Warnings", value: runDetail ? String(runDetail.warnings.length) : "-", detail: runDetail ? `${runDetail.topSymbols.length} top symbols ready` : "Run detail appears here." },
+        ];
+      case "diff":
+        return [
+          { label: "Baseline", value: compareLeftRunId ? `#${compareLeftRunId}` : "Unset", detail: "The run you compare against." },
+          { label: "Candidate", value: compareRightRunId ? `#${compareRightRunId}` : "Unset", detail: "The run expected to change." },
+          { label: "ROM delta", value: compareResult ? signed(compareResult.summary.romDelta) : "-", detail: compareResult ? `RAM ${signed(compareResult.summary.ramDelta)}` : "Run a comparison to populate deltas." },
+        ];
+      case "history":
+        return [
+          { label: "Repo", value: historyFilters.repoPath ?? settings.defaultGitRepoPath ?? "Not set", detail: historyFilters.branch ?? "All branches" },
+          { label: "Timeline", value: `${timeline?.rows.length ?? 0}`, detail: `${historyItems.length} history items matched` },
+          { label: "Range", value: rangeResult ? signed(rangeResult.cumulativeRomDelta) : "Not run", detail: rangeResult ? `RAM ${signed(rangeResult.cumulativeRamDelta)}` : "Run range diff or regression from this workspace." },
+        ];
+      case "settings":
+        return [
+          { label: "Active project", value: activeProjectName, detail: activeProjectState?.activeProject?.rootPath ?? "Projects keep defaults and export locations together." },
+          { label: "Policy", value: policyValidation ? (policyValidation.ok ? "Ready" : "Needs attention") : "Not checked", detail: policyDocument.path ?? "Load or create a policy file." },
+          { label: "Recent exports", value: String(recentExports.length), detail: recentExports[0]?.destinationPath ?? "Exported snapshots will appear here." },
+        ];
+    }
+  }, [
+    activeProjectName,
+    activeProjectState?.activeProject?.rootPath,
+    compareLeftRunId,
+    compareResult,
+    compareRightRunId,
+    dashboardSummary?.recentRegressions.length,
+    historyFilters.branch,
+    historyFilters.repoPath,
+    historyItems.length,
+    latestRun,
+    policyDocument.path,
+    policyValidation,
+    rangeResult,
+    recentExports,
+    runDetail,
+    runs.length,
+    screen,
+    selectedRunId,
+    settings.defaultGitRepoPath,
+    timeline?.rows.length,
+  ]);
 
   return (
     <div className="app-shell">
@@ -697,28 +780,43 @@ export default function App() {
         </div>
       </Navbar>
 
-      <div className="app-grid wide">
-        <aside className="sidebar">
-          <Card className="sidebar-card">
-            <CardHeader className="section-header">Start Analysis</CardHeader>
-            <CardBody className="panel-stack">
-              <Input label="ELF path" value={request.elfPath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, elfPath: value || null }))} />
-              <Button variant="flat" onPress={() => void chooseFile("elfPath")}>Choose ELF</Button>
-              <Input label="Map path" value={request.mapPath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, mapPath: value || null }))} />
-              <Button variant="flat" onPress={() => void chooseFile("mapPath")}>Choose map</Button>
-              <Input label="Rule file" value={request.ruleFilePath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, ruleFilePath: value || null }))} />
-              <Button variant="flat" onPress={() => void chooseFile("ruleFilePath")}>Choose rule file</Button>
-              <Input label="Git repo" value={request.gitRepoPath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, gitRepoPath: value || null }))} />
-              <Button variant="flat" onPress={() => void chooseFile("gitRepoPath", true)}>Choose repo</Button>
-              <Input label="Label" value={request.label ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, label: value || null }))} />
-              <Button color="primary" isLoading={starting} onPress={() => void handleStartAnalysis()}>Start analysis</Button>
-              <Button variant="bordered" isDisabled={!job} onPress={() => void handleCancelJob()}>Cancel job</Button>
+      <div className="app-grid wide workstation-shell">
+        <aside className="sidebar operation-rail">
+          <section className="rail-brand">
+            <div className="rail-kicker">Command deck</div>
+            <h2>fwmap studio</h2>
+            <p>One place to start analysis, scan history, and keep local policy and exports aligned.</p>
+          </section>
+
+          <nav className="rail-nav" aria-label="Primary screens">
+            <ScreenButton active={screen === "dashboard"} label="Dashboard" detail="Live size posture" onPress={() => setScreen("dashboard")} />
+            <ScreenButton active={screen === "runs"} label="Runs" detail={`${runs.length} captured runs`} onPress={() => setScreen("runs")} />
+            <ScreenButton active={screen === "diff"} label="Diff" detail="Compare snapshots" onPress={() => setScreen("diff")} />
+            <ScreenButton active={screen === "history"} label="History" detail={`${timeline?.rows.length ?? 0} timeline rows`} onPress={() => setScreen("history")} />
+            <ScreenButton active={screen === "settings"} label="Workspace" detail="Projects, policy, exports" onPress={() => setScreen("settings")} />
+          </nav>
+
+          <Card className="sidebar-card action-panel compact-action-panel">
+            <CardHeader className="section-header">Start analysis</CardHeader>
+            <CardBody className="panel-stack compact-panel-stack">
+              <div className="compact-input-row"><Input label="ELF path" value={request.elfPath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, elfPath: value || null }))} /><Button size="sm" variant="flat" onPress={() => void chooseFile("elfPath")}>Browse</Button></div>
+              <div className="compact-input-row"><Input label="Map path" value={request.mapPath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, mapPath: value || null }))} /><Button size="sm" variant="flat" onPress={() => void chooseFile("mapPath")}>Browse</Button></div>
+              <div className="compact-input-row"><Input label="Rule file" value={request.ruleFilePath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, ruleFilePath: value || null }))} /><Button size="sm" variant="flat" onPress={() => void chooseFile("ruleFilePath")}>Browse</Button></div>
+              <div className="compact-input-row"><Input label="Git repo" value={request.gitRepoPath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, gitRepoPath: value || null }))} /><Button size="sm" variant="flat" onPress={() => void chooseFile("gitRepoPath", true)}>Browse</Button></div>
+              <Input label="Run label" value={request.label ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, label: value || null }))} />
+              <div className="button-row">
+                <Button color="primary" isLoading={starting} onPress={() => void handleStartAnalysis()}>Analyze build</Button>
+                <Button variant="bordered" isDisabled={!job} onPress={() => void handleCancelJob()}>Stop job</Button>
+              </div>
             </CardBody>
           </Card>
 
           <Card className="sidebar-card muted-card">
-            <CardHeader className="section-header">Repository</CardHeader>
+            <CardHeader className="section-header">Repository context</CardHeader>
             <CardBody className="panel-stack compact-text">
+              <div>Active project</div>
+              <div className="rail-context-value">{activeProjectName}</div>
+              <div className="rail-context-copy">{activeProjectState?.activeProject?.rootPath ?? "Choose a project in Workspace to reuse defaults."}</div>
               <div>Default repo</div>
               <code>{settings.defaultGitRepoPath ?? "-"}</code>
               <div className="badge-row">
@@ -732,26 +830,37 @@ export default function App() {
           </Card>
         </aside>
 
-        <main className="content">
+        <main className="content studio-stage">
+          <section className="stage-banner compact-stage-banner">
+            <div className="stage-banner-copy">
+              <div className="dashboard-kicker">{screenMeta[screen].eyebrow}</div>
+              <h1>{screenMeta[screen].title}</h1>
+              <p>{screenMeta[screen].description}</p>
+            </div>
+            <div className="hero-chip-row compact-hero-chip-row">
+              <Chip variant="flat">{activeProjectName}</Chip>
+              <Chip variant="flat">{dashboardSummary?.latestHistoryItem?.gitRevision ?? latestRun?.gitRevision ?? "No commit"}</Chip>
+              <Chip variant="flat">{dashboardSummary?.latestRun?.profile ?? latestRun?.profile ?? "profile -"}</Chip>
+            </div>
+          </section>
+
+          <section className="stage-metric-strip compact-stage-metric-strip">
+            {stageMetrics.map((item) => (
+              <article key={item.label} className="metric-slab">
+                <div className="metric-slab-label">{item.label}</div>
+                <div className="metric-slab-value">{item.value}</div>
+                <p>{item.detail}</p>
+              </article>
+            ))}
+          </section>
+
           <Tabs selectedKey={screen} onSelectionChange={(key) => setScreen(key as ScreenKey)} variant="underlined" className="main-tabs">
             <Tab key="dashboard" title="Dashboard">
               {busy ? <div className="loading-state"><Spinner label="Loading desktop state" /></div> : (
-                <div className="page-stack">
-                  <section className="dashboard-hero">
-                    <div>
-                      <div className="dashboard-kicker">Latest build posture</div>
-                      <h1>Track size movement before it turns into a regression.</h1>
-                      <p>Dashboard combines the latest run, Git-aware history, and recent warning pressure into one view.</p>
-                    </div>
-                    <div className="hero-chip-row">
-                      <Chip variant="flat">{dashboardSummary?.latestHistoryItem?.gitBranch ?? settings.defaultGitRepoPath ?? "No repo"}</Chip>
-                      <Chip variant="flat">{dashboardSummary?.latestHistoryItem?.gitRevision ?? "No commit"}</Chip>
-                      <Chip variant="flat">{dashboardSummary?.latestRun?.profile ?? "profile -"}</Chip>
-                    </div>
-                  </section>
+                <div className="page-stack dashboard-dense-stack">
                   <section className="stats-grid dashboard-card-grid">
-                    {dashboardSummary?.overviewCards.map((item) => <Card key={item.key} className={`stat-card metric-tone-${item.tone}`}><CardBody><div className="stat-label">{item.title}</div><div className="stat-value">{item.value}</div>{item.subtitle ? <div className="stat-subtitle">{item.subtitle}</div> : null}</CardBody></Card>)}
-                    {!dashboardSummary?.overviewCards?.length ? dashboardStats.map((item) => <Card key={item.label} className="stat-card"><CardBody><div className="stat-label">{item.label}</div><div className="stat-value">{item.value}</div></CardBody></Card>) : null}
+                    {dashboardSummary?.overviewCards.map((item) => <Card key={item.key} className={`stat-card metric-tone-${item.tone}`}><CardBody><div className="stat-card-content"><div className="stat-label">{item.title}</div><div className="stat-value">{item.value}</div>{item.subtitle ? <div className="stat-subtitle">{item.subtitle}</div> : null}</div></CardBody></Card>)}
+                    {!dashboardSummary?.overviewCards?.length ? dashboardStats.map((item) => <Card key={item.label} className="stat-card"><CardBody><div className="stat-card-content"><div className="stat-label">{item.label}</div><div className="stat-value">{item.value}</div></div></CardBody></Card>) : null}
                   </section>
                   <section className="dashboard-main-grid">
                     <Card className="feature-card feature-card-wide"><CardHeader className="feature-header"><div><div className="section-header">ROM / RAM trend</div><div className="section-subtitle">Recent analyzed builds with both footprints over time.</div></div>{loadingDashboard ? <Chip size="sm">refreshing</Chip> : null}</CardHeader><CardBody><div className="chart-frame"><MetricLineChart title="ROM / RAM" series={romRamTrend} /></div></CardBody></Card>
@@ -792,12 +901,60 @@ export default function App() {
 
             <Tab key="settings" title="Settings">
               <div className="page-stack">
-                <Card><CardHeader className="section-header">Desktop Settings</CardHeader><CardBody className="panel-stack"><Input label="History DB path" value={draftSettings.historyDbPath} onValueChange={(value) => setDraftSettings((current) => ({ ...current, historyDbPath: value }))} /><Button variant="flat" onPress={() => void chooseSettingsPath("historyDbPath")}>Choose history DB</Button><Input label="Default rule file" value={draftSettings.defaultRuleFilePath ?? ""} onValueChange={(value) => setDraftSettings((current) => ({ ...current, defaultRuleFilePath: value || null }))} /><Button variant="flat" onPress={() => void chooseSettingsPath("defaultRuleFilePath")}>Choose rule file</Button><Input label="Default Git repo" value={draftSettings.defaultGitRepoPath ?? ""} onValueChange={(value) => setDraftSettings((current) => ({ ...current, defaultGitRepoPath: value || null }))} /><Button variant="flat" onPress={() => void chooseSettingsPath("defaultGitRepoPath", true)}>Choose repo</Button><Textarea label="Notes" value="Phase D4 adds project workspace, policy editing, and export foundations on top of the D3 desktop shell." readOnly /><Button color="primary" isLoading={savingSettings} onPress={() => void handleSaveSettings()}>Save settings</Button></CardBody></Card>
-                <div className="two-column">
-                  <Card><CardHeader className="section-header">Workspace / Project</CardHeader><CardBody className="panel-stack compact-text"><div className="badge-row">{loadingProjects ? <Chip size="sm">loading</Chip> : null}{activeProjectState?.activeProject ? <Chip color="primary" variant="flat">Active: {activeProjectState.activeProject.name}</Chip> : <Chip variant="flat">No active project</Chip>}</div><select className="native-select" value={activeProjectState?.activeProjectId ?? ""} onChange={(event) => void handleSelectProject(event.target.value ? Number(event.target.value) : null)}><option value="">No active project</option>{projects.map((project) => <option key={project.projectId} value={project.projectId}>{project.name}</option>)}</select><Input label="Project name" value={projectDraft.name} onValueChange={(value) => setProjectDraft((current) => ({ ...current, name: value }))} /><Input label="Root path" value={projectDraft.rootPath} onValueChange={(value) => setProjectDraft((current) => ({ ...current, rootPath: value }))} /><Input label="Git repo path" value={projectDraft.gitRepoPath ?? ""} onValueChange={(value) => setProjectDraft((current) => ({ ...current, gitRepoPath: value || null }))} /><Input label="Default ELF" value={projectDraft.defaultElfPath ?? ""} onValueChange={(value) => setProjectDraft((current) => ({ ...current, defaultElfPath: value || null }))} /><Input label="Default map" value={projectDraft.defaultMapPath ?? ""} onValueChange={(value) => setProjectDraft((current) => ({ ...current, defaultMapPath: value || null }))} /><Input label="Default export dir" value={projectDraft.defaultExportDir ?? ""} onValueChange={(value) => setProjectDraft((current) => ({ ...current, defaultExportDir: value || null }))} /><div className="button-row"><Button color="primary" onPress={() => void handleSaveProject()}>Save project</Button><Button variant="flat" onPress={() => void handleCreateProject()}>Create new</Button><Button color="danger" variant="flat" isDisabled={!activeProjectState?.activeProjectId} onPress={() => void handleDeleteProject()}>Delete</Button></div></CardBody></Card>
-                  <Card><CardHeader className="section-header">Policy Editor</CardHeader><CardBody className="panel-stack compact-text"><Input label="Policy path" value={policyDocument.path ?? ""} onValueChange={(value) => setPolicyDocument((current) => ({ ...current, path: value || null }))} /><div><label>Format</label><select className="native-select" value={policyDocument.format} onChange={(event) => setPolicyDocument((current) => ({ ...current, format: event.target.value }))}><option value="toml">toml</option><option value="json">json</option></select></div><Textarea minRows={12} label="Policy content" value={policyDocument.content} onValueChange={(value) => setPolicyDocument((current) => ({ ...current, content: value, projectId: activeProjectState?.activeProjectId ?? null }))} /><div className="button-row"><Button variant="flat" isLoading={loadingPolicy} onPress={() => void handleLoadPolicy()}>Load</Button><Button variant="flat" onPress={() => void handleValidatePolicy()}>Validate</Button><Button color="primary" onPress={() => void handleSavePolicy()}>Save policy</Button></div>{policyValidation ? <div><strong>{policyValidation.ok ? "Validation passed" : "Validation issues"}</strong><ul className="warning-list">{policyValidation.issues.length === 0 ? <li>No issues</li> : null}{policyValidation.issues.map((issue, index) => <li key={`${issue.level}-${index}`}>{issue.level}: {issue.message}</li>)}</ul></div> : null}</CardBody></Card>
-                </div>
-                <Card><CardHeader className="section-header">Report Export</CardHeader><CardBody className="panel-stack compact-text"><div className="form-grid"><div><label>Target</label><select className="native-select" value={exportDraft.exportTarget} onChange={(event) => setExportDraft((current) => ({ ...current, exportTarget: event.target.value as ExportRequest["exportTarget"] }))}><option value="dashboard">dashboard</option><option value="run">run</option><option value="diff">diff</option><option value="history">history</option><option value="regression">regression</option></select></div><div><label>Format</label><select className="native-select" value={exportDraft.format} onChange={(event) => setExportDraft((current) => ({ ...current, format: event.target.value as ExportRequest["format"] }))}><option value="html">html</option><option value="json">json</option><option value="print-html">print-html</option></select></div><Input label="Destination path" value={exportDraft.destinationPath} onValueChange={(value) => setExportDraft((current) => ({ ...current, destinationPath: value }))} /></div><Input label="Title" value={exportDraft.title ?? ""} onValueChange={(value) => setExportDraft((current) => ({ ...current, title: value || null }))} /><div className="button-row"><Button color="primary" isLoading={exporting} onPress={() => void handleExport()}>Export</Button><Button variant="flat" onPress={() => void refreshProjects()}>Refresh projects/exports</Button></div><div><strong>Recent exports</strong><ul className="warning-list">{recentExports.length === 0 ? <li>No exports yet.</li> : null}{recentExports.slice(0, 8).map((item) => <li key={item.exportId}>{item.createdAt} / {item.exportTarget} / {item.destinationPath}</li>)}</ul></div></CardBody></Card>
+                <section className="three-column settings-overview-grid">
+                  <Card className="feature-card"><CardBody className="panel-stack compact-text"><div className="stat-label">Active project</div><div className="stat-value settings-stat-value">{activeProjectState?.activeProject?.name ?? "No project"}</div><div className="stat-subtitle">{activeProjectState?.activeProject?.rootPath ?? "Create or select a project to reuse defaults."}</div></CardBody></Card>
+                  <Card className="feature-card"><CardBody className="panel-stack compact-text"><div className="stat-label">Policy status</div><div className="stat-value settings-stat-value">{policyValidation ? (policyValidation.ok ? "Ready" : "Needs attention") : "Not checked"}</div><div className="stat-subtitle">{policyDocument.path ?? "No policy file selected."}</div></CardBody></Card>
+                  <Card className="feature-card"><CardBody className="panel-stack compact-text"><div className="stat-label">Recent exports</div><div className="stat-value settings-stat-value">{recentExports.length}</div><div className="stat-subtitle">{recentExports[0]?.destinationPath ?? "Nothing exported yet."}</div></CardBody></Card>
+                </section>
+                <Card className="feature-card">
+                  <CardHeader className="feature-header"><div><div className="section-header">Workspace Settings</div><div className="section-subtitle">Keep setup lightweight, predictable, and reusable across projects.</div></div></CardHeader>
+                  <CardBody>
+                    <Tabs variant="underlined" className="sub-tabs">
+                      <Tab key="desktop-settings" title="Desktop">
+                        <div className="panel-stack settings-panel compact-text">
+                          <Input label="History DB path" value={draftSettings.historyDbPath} onValueChange={(value) => setDraftSettings((current) => ({ ...current, historyDbPath: value }))} />
+                          <Button variant="flat" onPress={() => void chooseSettingsPath("historyDbPath")}>Choose history DB</Button>
+                          <Input label="Default rule file" value={draftSettings.defaultRuleFilePath ?? ""} onValueChange={(value) => setDraftSettings((current) => ({ ...current, defaultRuleFilePath: value || null }))} />
+                          <Button variant="flat" onPress={() => void chooseSettingsPath("defaultRuleFilePath")}>Choose rule file</Button>
+                          <Input label="Default Git repo" value={draftSettings.defaultGitRepoPath ?? ""} onValueChange={(value) => setDraftSettings((current) => ({ ...current, defaultGitRepoPath: value || null }))} />
+                          <Button variant="flat" onPress={() => void chooseSettingsPath("defaultGitRepoPath", true)}>Choose repo</Button>
+                          <Textarea label="Notes" value="Phase D4 adds project workspace, policy editing, and export foundations on top of the D3 desktop shell." readOnly />
+                          <div className="button-row"><Button color="primary" isLoading={savingSettings} onPress={() => void handleSaveSettings()}>Save desktop settings</Button></div>
+                        </div>
+                      </Tab>
+                      <Tab key="workspace-settings" title="Workspace">
+                        <div className="panel-stack settings-panel compact-text">
+                          <div className="badge-row">{loadingProjects ? <Chip size="sm">loading</Chip> : null}{activeProjectState?.activeProject ? <Chip color="primary" variant="flat">Active: {activeProjectState.activeProject.name}</Chip> : <Chip variant="flat">No active project</Chip>}</div>
+                          <div><label>Project switcher</label><select className="native-select" value={activeProjectState?.activeProjectId ?? ""} onChange={(event) => void handleSelectProject(event.target.value ? Number(event.target.value) : null)}><option value="">No active project</option>{projects.map((project) => <option key={project.projectId} value={project.projectId}>{project.name}</option>)}</select></div>
+                          <Input label="Project name" value={projectDraft.name} onValueChange={(value) => setProjectDraft((current) => ({ ...current, name: value }))} />
+                          <Input label="Root path" value={projectDraft.rootPath} onValueChange={(value) => setProjectDraft((current) => ({ ...current, rootPath: value }))} />
+                          <Input label="Git repo path" value={projectDraft.gitRepoPath ?? ""} onValueChange={(value) => setProjectDraft((current) => ({ ...current, gitRepoPath: value || null }))} />
+                          <Input label="Default ELF" value={projectDraft.defaultElfPath ?? ""} onValueChange={(value) => setProjectDraft((current) => ({ ...current, defaultElfPath: value || null }))} />
+                          <Input label="Default map" value={projectDraft.defaultMapPath ?? ""} onValueChange={(value) => setProjectDraft((current) => ({ ...current, defaultMapPath: value || null }))} />
+                          <Input label="Default export dir" value={projectDraft.defaultExportDir ?? ""} onValueChange={(value) => setProjectDraft((current) => ({ ...current, defaultExportDir: value || null }))} />
+                          <div className="button-row"><Button color="primary" onPress={() => void handleSaveProject()}>Save project</Button><Button variant="flat" onPress={() => void handleCreateProject()}>Create new</Button><Button color="danger" variant="light" isDisabled={!activeProjectState?.activeProjectId} onPress={() => void handleDeleteProject()}>Delete</Button></div>
+                        </div>
+                      </Tab>
+                      <Tab key="policy-settings" title="Policy">
+                        <div className="panel-stack settings-panel compact-text">
+                          <Input label="Policy path" value={policyDocument.path ?? ""} onValueChange={(value) => setPolicyDocument((current) => ({ ...current, path: value || null }))} />
+                          <div><label>Format</label><select className="native-select" value={policyDocument.format} onChange={(event) => setPolicyDocument((current) => ({ ...current, format: event.target.value }))}><option value="toml">toml</option><option value="json">json</option></select></div>
+                          <Textarea minRows={12} label="Policy content" value={policyDocument.content} onValueChange={(value) => setPolicyDocument((current) => ({ ...current, content: value, projectId: activeProjectState?.activeProjectId ?? null }))} />
+                          <div className="button-row"><Button variant="flat" isLoading={loadingPolicy} onPress={() => void handleLoadPolicy()}>Load</Button><Button variant="flat" onPress={() => void handleValidatePolicy()}>Validate</Button><Button color="primary" onPress={() => void handleSavePolicy()}>Save policy</Button></div>
+                          {policyValidation ? <div className="validation-panel"><strong>{policyValidation.ok ? "Validation passed" : "Validation issues"}</strong><ul className="warning-list">{policyValidation.issues.length === 0 ? <li>No issues</li> : null}{policyValidation.issues.map((issue, index) => <li key={`${issue.level}-${index}`}>{issue.level}: {issue.message}</li>)}</ul></div> : null}
+                        </div>
+                      </Tab>
+                      <Tab key="export-settings" title="Export">
+                        <div className="panel-stack settings-panel compact-text">
+                          <div className="form-grid"><div><label>Target</label><select className="native-select" value={exportDraft.exportTarget} onChange={(event) => setExportDraft((current) => ({ ...current, exportTarget: event.target.value as ExportRequest["exportTarget"] }))}><option value="dashboard">dashboard</option><option value="run">run</option><option value="diff">diff</option><option value="history">history</option><option value="regression">regression</option></select></div><div><label>Format</label><select className="native-select" value={exportDraft.format} onChange={(event) => setExportDraft((current) => ({ ...current, format: event.target.value as ExportRequest["format"] }))}><option value="html">html</option><option value="json">json</option><option value="print-html">print-html</option></select></div><Input label="Destination path" value={exportDraft.destinationPath} onValueChange={(value) => setExportDraft((current) => ({ ...current, destinationPath: value }))} /></div>
+                          <Input label="Title" value={exportDraft.title ?? ""} onValueChange={(value) => setExportDraft((current) => ({ ...current, title: value || null }))} />
+                          <div className="button-row"><Button color="primary" isLoading={exporting} onPress={() => void handleExport()}>Export snapshot</Button><Button variant="flat" onPress={() => void refreshProjects()}>Refresh list</Button></div>
+                          <div><strong>Recent exports</strong><ul className="warning-list">{recentExports.length === 0 ? <li>No exports yet.</li> : null}{recentExports.slice(0, 8).map((item) => <li key={item.exportId}>{item.createdAt} / {item.exportTarget} / {item.destinationPath}</li>)}</ul></div>
+                        </div>
+                      </Tab>
+                    </Tabs>
+                  </CardBody>
+                </Card>
               </div>
             </Tab>
           </Tabs>
@@ -806,6 +963,15 @@ export default function App() {
         </main>
       </div>
     </div>
+  );
+}
+
+function ScreenButton({ active, label, detail, onPress }: { active: boolean; label: string; detail: string; onPress: () => void }) {
+  return (
+    <button type="button" className={`screen-button ${active ? "active" : ""}`} onClick={onPress}>
+      <span className="screen-button-label">{label}</span>
+      <span className="screen-button-detail">{detail}</span>
+    </button>
   );
 }
 
@@ -838,7 +1004,7 @@ function signedOrDash(value: number | null): string {
 }
 
 function shorten(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}?`;
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
 }
 
 function deltaTone(value: number | null): string {
