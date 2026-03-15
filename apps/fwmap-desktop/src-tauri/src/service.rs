@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+﻿use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -19,14 +19,14 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::dto::{
-    ActiveProjectStateDto, AnalysisRequestDto, ChangedFilesSummaryDto, CreateInvestigationPackageRequestDto, CreateProjectRequestDto, DashboardQueryDto, DashboardSummaryDto, DeltaEntryDto, DesktopAppInfo,
-    DesktopSettingsDto, ExportRequestDto, ExportResultDto, ExtensionPointDto, FirstRuleViolationSummaryDto, GitRefDto, HistoryItemDto, HistoryQueryDto, InspectorBreakdownDto, InspectorDetailDto, InspectorHierarchyNodeDto, InspectorItemDto, InspectorQueryDto, InspectorSelectionDto, InspectorSummaryDto, InvestigationPackageItemDto, InvestigationPackageManifestDto, InvestigationPackageSummaryDto, JobEventDto, JobStatusDto,
+    ActiveProjectStateDto, AddInvestigationEvidenceRequestDto, AddInvestigationNoteRequestDto, AnalysisRequestDto, ChangedFilesSummaryDto, CreateInvestigationPackageRequestDto, CreateInvestigationRequestDto, CreateProjectRequestDto, DashboardQueryDto, DashboardSummaryDto, DeltaEntryDto, DesktopAppInfo,
+    DesktopSettingsDto, ExportInvestigationPackageRequestDto, ExportRequestDto, ExportResultDto, ExtensionPointDto, FirstRuleViolationSummaryDto, GitRefDto, HistoryItemDto, HistoryQueryDto, InspectorBreakdownDto, InspectorDetailDto, InspectorHierarchyNodeDto, InspectorItemDto, InspectorQueryDto, InspectorSelectionDto, InspectorSummaryDto, InvestigationDetailDto, InvestigationEvidenceDto, InvestigationNoteDto, InvestigationPackageItemDto, InvestigationPackageManifestDto, InvestigationPackageSummaryDto, InvestigationSummaryDto, InvestigationTimelineEventDto, InvestigationVerdictDto, JobEventDto, JobStatusDto,
     MetricSummaryDto, OpenInvestigationPackageResultDto, OverviewCardDto, PluginCapabilityDto, PluginDetailDto, PluginExecutionRequestDto, PluginExecutionResultDto, PluginOutputItemDto, PluginSummaryDto, PolicyDocumentDto, PolicyValidationIssueDto, PolicyValidationResultDto, ProjectDetailDto, ProjectSummaryDto, RangeDiffQueryDto, RangeDiffResultDto, RecentExportDto, RecentRegressionDto, RegionUsageDto,
     RegressionOriginPointDto, RegressionQueryDto, RegressionResultDto, RegressionWindowRowDto, RunCompareRequestDto,
-    RunCompareResultDto, RunDetailDto, RunSummaryDto, SourceContextDto, TimelineEntryDto, TimelineResultDto, TopGrowthEntryDto,
-    TrendPointDto, TrendSeriesDto, UpdateProjectRequestDto, WorstCommitSummaryDto,
+    RunCompareResultDto, RunDetailDto, RunSummaryDto, SetInvestigationVerdictRequestDto, SourceContextDto, TimelineEntryDto, TimelineResultDto, TopGrowthEntryDto,
+    TrendPointDto, TrendSeriesDto, UpdateInvestigationNoteRequestDto, UpdateInvestigationRequestDto, UpdateProjectRequestDto, WorstCommitSummaryDto,
 };
-use crate::storage::{DesktopStorage, InsertExportRecord, InsertPackageRecord, InsertPluginStateRecord, InsertProjectRecord, InsertRunRecord, StoredPackageRecord, StoredProjectRecord, StoredRunRecord, UpdateProjectRecord};
+use crate::storage::{DesktopStorage, InsertExportRecord, InsertInvestigationEvidenceRecord, InsertInvestigationNoteRecord, InsertInvestigationRecord, InsertInvestigationTimelineEventRecord, InsertInvestigationVerdictRecord, InsertPackageRecord, InsertPluginStateRecord, InsertProjectRecord, InsertRunRecord, StoredInvestigationEvidenceRecord, StoredInvestigationNoteRecord, StoredInvestigationRecord, StoredInvestigationTimelineEventRecord, StoredInvestigationVerdictRecord, StoredPackageRecord, StoredProjectRecord, StoredRunRecord, UpdateInvestigationRecord, UpdateProjectRecord};
 
 #[derive(Debug, Clone)]
 struct JobRecord {
@@ -336,6 +336,7 @@ impl DesktopState {
         let summary = summarize_package_manifest(None, &bundle.package_path, &bundle.manifest);
         self.storage.insert_recent_package(&InsertPackageRecord {
             project_id: summary.project_id,
+            investigation_id: None,
             created_at: summary.created_at.clone(),
             package_name: summary.package_name.clone(),
             package_path: summary.package_path.clone(),
@@ -367,6 +368,234 @@ impl DesktopState {
             .into_iter()
             .map(map_recent_package_summary)
             .collect())
+    }
+
+    pub fn list_investigations(&self, archived: bool) -> Result<Vec<InvestigationSummaryDto>, String> {
+        self.storage
+            .list_investigations(archived)?
+            .into_iter()
+            .map(map_investigation_summary)
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    pub fn create_investigation(&self, request: CreateInvestigationRequestDto) -> Result<InvestigationDetailDto, String> {
+        if request.title.trim().is_empty() {
+            return Err("investigation title must not be empty".to_string());
+        }
+        let now = now_rfc3339();
+        let investigation_id = self.storage.insert_investigation(&InsertInvestigationRecord {
+            title: request.title,
+            project_id: request.project_id.or(self.storage.get_active_project_id()?),
+            workspace_id: request.workspace_id,
+            baseline_ref_json: serde_json::to_string(&request.baseline_ref).map_err(|err| format!("failed to serialize baseline ref: {err}"))?,
+            target_ref_json: serde_json::to_string(&request.target_ref).map_err(|err| format!("failed to serialize target ref: {err}"))?,
+            status: request.status.unwrap_or_else(|| "open".to_string()),
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        })?;
+        self.record_investigation_event(investigation_id, "investigation-created", serde_json::json!({"title": self.storage.get_investigation(investigation_id)?.as_ref().map(|i| i.title.clone())}))?;
+        self.get_investigation(investigation_id)
+    }
+
+    pub fn get_investigation(&self, investigation_id: i64) -> Result<InvestigationDetailDto, String> {
+        let summary = self.storage.get_investigation(investigation_id)?.ok_or_else(|| format!("investigation {investigation_id} was not found"))?;
+        let evidence = self.storage.list_investigation_evidence(investigation_id)?.into_iter().map(map_investigation_evidence).collect::<Result<Vec<_>, _>>()?;
+        let notes = self.storage.list_investigation_notes(investigation_id)?.into_iter().map(map_investigation_note).collect::<Vec<_>>();
+        let timeline = self.storage.list_investigation_timeline(investigation_id)?.into_iter().map(map_investigation_timeline_event).collect::<Result<Vec<_>, _>>()?;
+        let verdict = self.storage.get_investigation_verdict(investigation_id)?.map(map_investigation_verdict).transpose()?;
+        let package_exports = self.storage.list_recent_packages(summary.project_id, 50)?.into_iter().filter(|item| item.investigation_id == Some(investigation_id)).map(map_recent_package_summary).collect::<Vec<_>>();
+        Ok(InvestigationDetailDto {
+            summary: map_investigation_summary(summary)?,
+            evidence,
+            notes,
+            timeline,
+            verdict,
+            package_exports,
+        })
+    }
+
+    pub fn update_investigation(&self, investigation_id: i64, patch: UpdateInvestigationRequestDto) -> Result<InvestigationDetailDto, String> {
+        self.storage.update_investigation(investigation_id, &UpdateInvestigationRecord {
+            title: patch.title.clone(),
+            baseline_ref_json: patch.baseline_ref.as_ref().map(serde_json::to_string).transpose().map_err(|err| format!("failed to serialize baseline ref: {err}"))?,
+            target_ref_json: patch.target_ref.as_ref().map(serde_json::to_string).transpose().map_err(|err| format!("failed to serialize target ref: {err}"))?,
+            status: patch.status.clone(),
+            updated_at: now_rfc3339(),
+            archived: patch.archived,
+        })?;
+        self.record_investigation_event(investigation_id, "investigation-updated", serde_json::json!({"title": patch.title, "status": patch.status, "archived": patch.archived}))?;
+        self.get_investigation(investigation_id)
+    }
+
+    pub fn delete_investigation(&self, investigation_id: i64) -> Result<(), String> {
+        self.storage.delete_investigation(investigation_id)
+    }
+
+    pub fn add_investigation_evidence(&self, investigation_id: i64, request: AddInvestigationEvidenceRequestDto) -> Result<InvestigationEvidenceDto, String> {
+        self.storage.get_investigation(investigation_id)?.ok_or_else(|| format!("investigation {investigation_id} was not found"))?;
+        let created_at = now_rfc3339();
+        let evidence_id = self.storage.insert_investigation_evidence(&InsertInvestigationEvidenceRecord {
+            investigation_id,
+            evidence_type: request.evidence_type.clone(),
+            title: request.title.clone(),
+            delta: request.delta,
+            severity: request.severity.clone().unwrap_or_else(|| "info".to_string()),
+            confidence: request.confidence.unwrap_or(0.5),
+            source_view: request.source_view.clone(),
+            linked_view: request.linked_view.clone(),
+            stable_ref_json: serde_json::to_string(&request.stable_ref).map_err(|err| format!("failed to serialize evidence stable ref: {err}"))?,
+            snapshot_json: serde_json::to_string(&request.snapshot).map_err(|err| format!("failed to serialize evidence snapshot: {err}"))?,
+            created_at: created_at.clone(),
+        })?;
+        self.record_investigation_event(investigation_id, "evidence-pinned", serde_json::json!({"evidenceId": evidence_id, "title": request.title, "type": request.evidence_type}))?;
+        let record = self.storage.list_investigation_evidence(investigation_id)?.into_iter().find(|item| item.evidence_id == evidence_id).ok_or_else(|| "created evidence was not found".to_string())?;
+        Ok(map_investigation_evidence(record)?)
+    }
+
+    pub fn remove_investigation_evidence(&self, investigation_id: i64, evidence_id: i64) -> Result<(), String> {
+        self.storage.remove_investigation_evidence(investigation_id, evidence_id)?;
+        self.record_investigation_event(investigation_id, "evidence-removed", serde_json::json!({"evidenceId": evidence_id}))?;
+        Ok(())
+    }
+
+    pub fn add_investigation_note(&self, investigation_id: i64, request: AddInvestigationNoteRequestDto) -> Result<InvestigationNoteDto, String> {
+        self.storage.get_investigation(investigation_id)?.ok_or_else(|| format!("investigation {investigation_id} was not found"))?;
+        if request.body.trim().is_empty() {
+            return Err("note body must not be empty".to_string());
+        }
+        let now = now_rfc3339();
+        let note_id = self.storage.insert_investigation_note(&InsertInvestigationNoteRecord {
+            investigation_id,
+            linked_entity_type: request.linked_entity_type.clone(),
+            linked_entity_id: request.linked_entity_id.clone(),
+            body: request.body.clone(),
+            created_at: now.clone(),
+            updated_at: now,
+        })?;
+        self.record_investigation_event(investigation_id, "note-added", serde_json::json!({"noteId": note_id, "linkedEntityType": request.linked_entity_type, "linkedEntityId": request.linked_entity_id}))?;
+        let record = self.storage.list_investigation_notes(investigation_id)?.into_iter().find(|item| item.note_id == note_id).ok_or_else(|| "created note was not found".to_string())?;
+        Ok(map_investigation_note(record))
+    }
+
+    pub fn update_investigation_note(&self, note_id: i64, request: UpdateInvestigationNoteRequestDto) -> Result<InvestigationNoteDto, String> {
+        if request.body.trim().is_empty() {
+            return Err("note body must not be empty".to_string());
+        }
+        let investigation_id = self.storage.list_investigations(true)?.into_iter().chain(self.storage.list_investigations(false)?).flat_map(|inv| self.storage.list_investigation_notes(inv.investigation_id).unwrap_or_default()).find(|note| note.note_id == note_id).map(|note| note.investigation_id).ok_or_else(|| format!("note {note_id} was not found"))?;
+        self.storage.update_investigation_note(note_id, &request.body, &now_rfc3339())?;
+        self.record_investigation_event(investigation_id, "note-updated", serde_json::json!({"noteId": note_id}))?;
+        let record = self.storage.list_investigation_notes(investigation_id)?.into_iter().find(|item| item.note_id == note_id).ok_or_else(|| format!("note {note_id} was not found after update"))?;
+        Ok(map_investigation_note(record))
+    }
+
+    pub fn list_investigation_timeline(&self, investigation_id: i64) -> Result<Vec<InvestigationTimelineEventDto>, String> {
+        self.storage.list_investigation_timeline(investigation_id)?.into_iter().map(map_investigation_timeline_event).collect::<Result<Vec<_>, _>>()
+    }
+
+    pub fn set_investigation_verdict(&self, investigation_id: i64, request: SetInvestigationVerdictRequestDto) -> Result<InvestigationVerdictDto, String> {
+        self.storage.get_investigation(investigation_id)?.ok_or_else(|| format!("investigation {investigation_id} was not found"))?;
+        self.storage.save_investigation_verdict(&InsertInvestigationVerdictRecord {
+            investigation_id,
+            verdict_type: request.verdict_type.clone(),
+            confidence: request.confidence,
+            summary: request.summary.clone(),
+            supporting_evidence_ids_json: serde_json::to_string(&request.supporting_evidence_ids).map_err(|err| format!("failed to serialize supporting evidence ids: {err}"))?,
+            unresolved_questions: request.unresolved_questions.clone(),
+            next_actions: request.next_actions.clone(),
+            updated_at: now_rfc3339(),
+        })?;
+        self.record_investigation_event(investigation_id, "verdict-updated", serde_json::json!({"verdictType": request.verdict_type, "confidence": request.confidence}))?;
+        let verdict = self.storage.get_investigation_verdict(investigation_id)?.ok_or_else(|| "saved verdict was not found".to_string())?;
+        map_investigation_verdict(verdict)
+    }
+
+    pub fn export_investigation_package(&self, request: ExportInvestigationPackageRequestDto) -> Result<InvestigationPackageSummaryDto, String> {
+        let detail = self.get_investigation(request.investigation_id)?;
+        if request.package_name.trim().is_empty() {
+            return Err("package name must not be empty".to_string());
+        }
+        if request.destination_path.trim().is_empty() {
+            return Err("destination path must not be empty".to_string());
+        }
+        let package_path = PathBuf::from(&request.destination_path);
+        let mut files = Vec::new();
+        let mut included_items = Vec::new();
+        let mut omitted_items = default_omitted_package_items();
+        add_package_json(&mut files, &mut included_items, "investigation.json", "investigation", "Investigation summary", &detail.summary)?;
+        if request.include_evidence_snapshots {
+            add_package_json(&mut files, &mut included_items, "investigation-evidence.json", "investigation", "Pinned evidence", &detail.evidence)?;
+        } else {
+            omitted_items.push(omitted_package_item("investigation-evidence.json", "investigation", "Pinned evidence", "Evidence snapshots were excluded from this export."));
+        }
+        if request.include_notes {
+            add_package_json(&mut files, &mut included_items, "investigation-notes.json", "investigation", "Investigation notes", &detail.notes)?;
+        } else {
+            omitted_items.push(omitted_package_item("investigation-notes.json", "investigation", "Investigation notes", "Notes were excluded from this export."));
+        }
+        if request.include_timeline {
+            add_package_json(&mut files, &mut included_items, "investigation-timeline.json", "investigation", "Investigation timeline", &detail.timeline)?;
+        } else {
+            omitted_items.push(omitted_package_item("investigation-timeline.json", "investigation", "Investigation timeline", "Timeline events were excluded from this export."));
+        }
+        if request.include_verdict {
+            if let Some(verdict) = detail.verdict.clone() {
+                add_package_json(&mut files, &mut included_items, "investigation-verdict.json", "investigation", "Verdict", &verdict)?;
+            } else {
+                omitted_items.push(omitted_package_item("investigation-verdict.json", "investigation", "Verdict", "No verdict was recorded for this investigation."));
+            }
+        } else {
+            omitted_items.push(omitted_package_item("investigation-verdict.json", "investigation", "Verdict", "Verdict data was excluded from this export."));
+        }
+        let manifest = InvestigationPackageManifestDto {
+            schema_version: INVESTIGATION_PACKAGE_SCHEMA_VERSION,
+            package_version: "1.0.0".to_string(),
+            package_name: request.package_name.clone(),
+            created_at: now_rfc3339(),
+            fwmap_version: env!("CARGO_PKG_VERSION").to_string(),
+            project_id: detail.summary.project_id,
+            project_name: detail.summary.project_id.and_then(|id| self.storage.get_project(id).ok().flatten()).map(|item| item.name),
+            source_context: "investigation".to_string(),
+            source_label: format!("{} -> {}", detail.summary.baseline_ref.label, detail.summary.target_ref.label),
+            related_run_ids: [detail.summary.baseline_ref.run_id, detail.summary.target_ref.run_id].into_iter().flatten().collect::<Vec<_>>(),
+            related_commit_refs: [detail.summary.baseline_ref.commit.clone(), detail.summary.target_ref.commit.clone()].into_iter().flatten().collect::<Vec<_>>(),
+            git_repo_path: detail.summary.project_id.and_then(|id| self.storage.get_project(id).ok().flatten()).and_then(|item| item.git_repo_path),
+            git_branch: None,
+            git_revision: detail.summary.target_ref.commit.clone().or(detail.summary.baseline_ref.commit.clone()),
+            included_items,
+            omitted_items,
+            export_provenance: vec![("investigationId".to_string(), request.investigation_id.to_string()), ("status".to_string(), detail.summary.status.clone())],
+            notes: if request.include_notes { None } else { Some("Notes excluded from export".to_string()) },
+            plugin_results: Vec::new(),
+            missing_resources: Vec::new(),
+        };
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|err| format!("failed to serialize package manifest: {err}"))?;
+        files.push(PackageFileEntry { relative_path: "manifest.json".to_string(), bytes: manifest_bytes });
+        let bundle = InvestigationPackageBundle { package_path: package_path.clone(), files, manifest };
+        write_investigation_package_bundle(&bundle)?;
+        let summary = summarize_package_manifest(None, &bundle.package_path, &bundle.manifest);
+        self.storage.insert_recent_package(&InsertPackageRecord {
+            project_id: summary.project_id,
+            investigation_id: Some(request.investigation_id),
+            created_at: summary.created_at.clone(),
+            package_name: summary.package_name.clone(),
+            package_path: summary.package_path.clone(),
+            source_context: summary.source_context.clone(),
+            schema_version: summary.schema_version,
+            fwmap_version: summary.fwmap_version.clone(),
+            note: summary.notes.clone(),
+        })?;
+        self.record_investigation_event(request.investigation_id, "package-exported", serde_json::json!({"packagePath": summary.package_path, "packageName": summary.package_name}))?;
+        Ok(summary)
+    }
+
+    fn record_investigation_event(&self, investigation_id: i64, event_type: &str, payload: serde_json::Value) -> Result<(), String> {
+        self.storage.insert_investigation_timeline_event(&InsertInvestigationTimelineEventRecord {
+            investigation_id,
+            event_type: event_type.to_string(),
+            payload_json: serde_json::to_string(&payload).map_err(|err| format!("failed to serialize investigation timeline payload: {err}"))?,
+            created_at: now_rfc3339(),
+        })?;
+        Ok(())
     }
 
     pub fn list_recent_runs(&self, limit: usize, offset: usize) -> Result<Vec<RunSummaryDto>, String> {
@@ -2992,6 +3221,74 @@ fn summarize_package_manifest(
     }
 }
 
+fn map_investigation_summary(item: StoredInvestigationRecord) -> Result<InvestigationSummaryDto, String> {
+    Ok(InvestigationSummaryDto {
+        investigation_id: item.investigation_id,
+        title: item.title,
+        project_id: item.project_id,
+        workspace_id: item.workspace_id,
+        baseline_ref: serde_json::from_str(&item.baseline_ref_json).map_err(|err| format!("failed to parse investigation baseline ref: {err}"))?,
+        target_ref: serde_json::from_str(&item.target_ref_json).map_err(|err| format!("failed to parse investigation target ref: {err}"))?,
+        status: item.status,
+        evidence_count: item.evidence_count.max(0) as usize,
+        note_count: item.note_count.max(0) as usize,
+        updated_at: item.updated_at,
+        archived: item.archived,
+    })
+}
+
+fn map_investigation_evidence(item: StoredInvestigationEvidenceRecord) -> Result<InvestigationEvidenceDto, String> {
+    Ok(InvestigationEvidenceDto {
+        evidence_id: item.evidence_id,
+        investigation_id: item.investigation_id,
+        evidence_type: item.evidence_type,
+        title: item.title,
+        delta: item.delta,
+        severity: item.severity,
+        confidence: item.confidence,
+        source_view: item.source_view,
+        linked_view: item.linked_view,
+        stable_ref: serde_json::from_str(&item.stable_ref_json).map_err(|err| format!("failed to parse evidence stable ref: {err}"))?,
+        snapshot: serde_json::from_str(&item.snapshot_json).map_err(|err| format!("failed to parse evidence snapshot: {err}"))?,
+        created_at: item.created_at,
+    })
+}
+
+fn map_investigation_note(item: StoredInvestigationNoteRecord) -> InvestigationNoteDto {
+    InvestigationNoteDto {
+        note_id: item.note_id,
+        investigation_id: item.investigation_id,
+        linked_entity_type: item.linked_entity_type,
+        linked_entity_id: item.linked_entity_id,
+        body: item.body,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+    }
+}
+
+fn map_investigation_timeline_event(item: StoredInvestigationTimelineEventRecord) -> Result<InvestigationTimelineEventDto, String> {
+    Ok(InvestigationTimelineEventDto {
+        event_id: item.event_id,
+        investigation_id: item.investigation_id,
+        event_type: item.event_type,
+        payload: serde_json::from_str(&item.payload_json).map_err(|err| format!("failed to parse investigation event payload: {err}"))?,
+        created_at: item.created_at,
+    })
+}
+
+fn map_investigation_verdict(item: StoredInvestigationVerdictRecord) -> Result<InvestigationVerdictDto, String> {
+    Ok(InvestigationVerdictDto {
+        investigation_id: item.investigation_id,
+        verdict_type: item.verdict_type,
+        confidence: item.confidence,
+        summary: item.summary,
+        supporting_evidence_ids: serde_json::from_str(&item.supporting_evidence_ids_json).map_err(|err| format!("failed to parse supporting evidence ids: {err}"))?,
+        unresolved_questions: item.unresolved_questions,
+        next_actions: item.next_actions,
+        updated_at: item.updated_at,
+    })
+}
+
 fn map_recent_package_summary(item: StoredPackageRecord) -> InvestigationPackageSummaryDto {
     InvestigationPackageSummaryDto {
         package_id: Some(item.package_id),
@@ -3033,6 +3330,7 @@ fn read_optional_json<T: for<'de> serde::Deserialize<'de>>(path: PathBuf) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dto::InvestigationRefDto;
     use fwmap::core::history::{HistoryRecordInput, record_build};
     use fwmap::core::model::{
         AnalysisResult, BinaryInfo, DebugArtifactInfo, DebugInfoSummary, MemorySummary, ObjectContribution, ObjectSourceKind,
@@ -3283,6 +3581,158 @@ mod tests {
     }
 
     #[test]
+    fn investigation_crud_pinning_and_verdict_flow_roundtrip() {
+        let base = temp_test_dir("desktop-investigation-flow");
+        let state = DesktopState::new(&base).unwrap();
+
+        let detail = state
+            .create_investigation(CreateInvestigationRequestDto {
+                title: "ROM regression in parser".to_string(),
+                project_id: None,
+                workspace_id: None,
+                baseline_ref: InvestigationRefDto {
+                    kind: "run".to_string(),
+                    run_id: Some(1),
+                    build_id: Some(10),
+                    commit: Some("abc1234".to_string()),
+                    label: "baseline run".to_string(),
+                },
+                target_ref: InvestigationRefDto {
+                    kind: "run".to_string(),
+                    run_id: Some(2),
+                    build_id: Some(11),
+                    commit: Some("def5678".to_string()),
+                    label: "target run".to_string(),
+                },
+                status: Some("open".to_string()),
+            })
+            .unwrap();
+
+        let evidence = state
+            .add_investigation_evidence(
+                detail.summary.investigation_id,
+                AddInvestigationEvidenceRequestDto {
+                    evidence_type: "Section Diff".to_string(),
+                    title: ".text".to_string(),
+                    delta: Some(1024),
+                    severity: Some("warning".to_string()),
+                    confidence: Some(0.9),
+                    source_view: "diff".to_string(),
+                    linked_view: Some("diff".to_string()),
+                    stable_ref: serde_json::json!({"section": ".text"}),
+                    snapshot: serde_json::json!({"delta": 1024, "leftRunId": 1, "rightRunId": 2}),
+                },
+            )
+            .unwrap();
+
+        let note = state
+            .add_investigation_note(
+                detail.summary.investigation_id,
+                AddInvestigationNoteRequestDto {
+                    linked_entity_type: Some("evidence".to_string()),
+                    linked_entity_id: Some(evidence.evidence_id.to_string()),
+                    body: "Parser table growth lines up with the .text increase.".to_string(),
+                },
+            )
+            .unwrap();
+
+        let verdict = state
+            .set_investigation_verdict(
+                detail.summary.investigation_id,
+                SetInvestigationVerdictRequestDto {
+                    verdict_type: "code change".to_string(),
+                    confidence: 0.85,
+                    summary: "The parser implementation added a larger lookup table.".to_string(),
+                    supporting_evidence_ids: vec![evidence.evidence_id],
+                    unresolved_questions: "Need to verify whether a compressed table would help.".to_string(),
+                    next_actions: "Compare a smaller generated table in the next build.".to_string(),
+                },
+            )
+            .unwrap();
+
+        let loaded = state.get_investigation(detail.summary.investigation_id).unwrap();
+        assert_eq!(loaded.summary.title, "ROM regression in parser");
+        assert_eq!(loaded.evidence.len(), 1);
+        assert_eq!(loaded.notes.len(), 1);
+        assert_eq!(loaded.notes[0].note_id, note.note_id);
+        assert_eq!(loaded.verdict.as_ref().unwrap().verdict_type, verdict.verdict_type);
+        assert!(loaded.timeline.iter().any(|item| item.event_type == "investigation-created"));
+        assert!(loaded.timeline.iter().any(|item| item.event_type == "evidence-pinned"));
+        assert!(loaded.timeline.iter().any(|item| item.event_type == "verdict-updated"));
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn investigation_export_package_writes_manifest_and_links_back() {
+        let base = temp_test_dir("desktop-investigation-package-export");
+        let state = DesktopState::new(&base).unwrap();
+
+        let detail = state
+            .create_investigation(CreateInvestigationRequestDto {
+                title: "History regression export".to_string(),
+                project_id: None,
+                workspace_id: None,
+                baseline_ref: InvestigationRefDto {
+                    kind: "commit".to_string(),
+                    run_id: None,
+                    build_id: Some(20),
+                    commit: Some("1111111".to_string()),
+                    label: "baseline commit".to_string(),
+                },
+                target_ref: InvestigationRefDto {
+                    kind: "commit".to_string(),
+                    run_id: None,
+                    build_id: Some(21),
+                    commit: Some("2222222".to_string()),
+                    label: "target commit".to_string(),
+                },
+                status: Some("open".to_string()),
+            })
+            .unwrap();
+
+        state
+            .add_investigation_evidence(
+                detail.summary.investigation_id,
+                AddInvestigationEvidenceRequestDto {
+                    evidence_type: "Regression Candidate".to_string(),
+                    title: "rom_total".to_string(),
+                    delta: Some(2048),
+                    severity: Some("warning".to_string()),
+                    confidence: Some(0.8),
+                    source_view: "regression".to_string(),
+                    linked_view: Some("history".to_string()),
+                    stable_ref: serde_json::json!({"metric": "rom_total"}),
+                    snapshot: serde_json::json!({"firstObservedBad": "2222222"}),
+                },
+            )
+            .unwrap();
+
+        let package_dir = base.join("history-regression.fwpkg");
+        let summary = state
+            .export_investigation_package(ExportInvestigationPackageRequestDto {
+                investigation_id: detail.summary.investigation_id,
+                package_name: "history-regression".to_string(),
+                destination_path: package_dir.to_string_lossy().to_string(),
+                include_notes: true,
+                include_timeline: true,
+                include_verdict: true,
+                include_evidence_snapshots: true,
+            })
+            .unwrap();
+
+        assert_eq!(summary.package_name, "history-regression");
+        assert!(package_dir.join("manifest.json").exists());
+        assert!(package_dir.join("investigation.json").exists());
+        assert!(package_dir.join("investigation-evidence.json").exists());
+
+        let reloaded = state.get_investigation(detail.summary.investigation_id).unwrap();
+        assert!(reloaded.package_exports.iter().any(|item| item.package_path == summary.package_path));
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
     fn invalid_package_manifest_is_reported_gracefully() {
         let base = temp_test_dir("desktop-invalid-package");
         let package_dir = base.join("broken.fwpkg");
@@ -3461,3 +3911,4 @@ mod tests {
         }
     }
 }
+

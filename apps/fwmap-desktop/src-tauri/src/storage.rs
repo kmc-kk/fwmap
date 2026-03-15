@@ -149,6 +149,7 @@ pub struct InsertPluginStateRecord {
 pub struct StoredPackageRecord {
     pub package_id: i64,
     pub project_id: Option<i64>,
+    pub investigation_id: Option<i64>,
     pub created_at: String,
     pub package_name: String,
     pub package_path: String,
@@ -158,9 +159,142 @@ pub struct StoredPackageRecord {
     pub note: Option<String>,
 }
 
+
+#[derive(Debug, Clone)]
+pub struct StoredInvestigationRecord {
+    pub investigation_id: i64,
+    pub title: String,
+    pub project_id: Option<i64>,
+    pub workspace_id: Option<String>,
+    pub baseline_ref_json: String,
+    pub target_ref_json: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub archived: bool,
+    pub evidence_count: i64,
+    pub note_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct InsertInvestigationRecord {
+    pub title: String,
+    pub project_id: Option<i64>,
+    pub workspace_id: Option<String>,
+    pub baseline_ref_json: String,
+    pub target_ref_json: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpdateInvestigationRecord {
+    pub title: Option<String>,
+    pub baseline_ref_json: Option<String>,
+    pub target_ref_json: Option<String>,
+    pub status: Option<String>,
+    pub updated_at: String,
+    pub archived: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredInvestigationEvidenceRecord {
+    pub evidence_id: i64,
+    pub investigation_id: i64,
+    pub evidence_type: String,
+    pub title: String,
+    pub delta: Option<i64>,
+    pub severity: String,
+    pub confidence: f64,
+    pub source_view: String,
+    pub linked_view: Option<String>,
+    pub stable_ref_json: String,
+    pub snapshot_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct InsertInvestigationEvidenceRecord {
+    pub investigation_id: i64,
+    pub evidence_type: String,
+    pub title: String,
+    pub delta: Option<i64>,
+    pub severity: String,
+    pub confidence: f64,
+    pub source_view: String,
+    pub linked_view: Option<String>,
+    pub stable_ref_json: String,
+    pub snapshot_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredInvestigationNoteRecord {
+    pub note_id: i64,
+    pub investigation_id: i64,
+    pub linked_entity_type: Option<String>,
+    pub linked_entity_id: Option<String>,
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct InsertInvestigationNoteRecord {
+    pub investigation_id: i64,
+    pub linked_entity_type: Option<String>,
+    pub linked_entity_id: Option<String>,
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredInvestigationTimelineEventRecord {
+    pub event_id: i64,
+    pub investigation_id: i64,
+    pub event_type: String,
+    pub payload_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct InsertInvestigationTimelineEventRecord {
+    pub investigation_id: i64,
+    pub event_type: String,
+    pub payload_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredInvestigationVerdictRecord {
+    pub investigation_id: i64,
+    pub verdict_type: String,
+    pub confidence: f64,
+    pub summary: String,
+    pub supporting_evidence_ids_json: String,
+    pub unresolved_questions: String,
+    pub next_actions: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct InsertInvestigationVerdictRecord {
+    pub investigation_id: i64,
+    pub verdict_type: String,
+    pub confidence: f64,
+    pub summary: String,
+    pub supporting_evidence_ids_json: String,
+    pub unresolved_questions: String,
+    pub next_actions: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct InsertPackageRecord {
     pub project_id: Option<i64>,
+    pub investigation_id: Option<i64>,
     pub created_at: String,
     pub package_name: String,
     pub package_path: String,
@@ -270,6 +404,7 @@ impl DesktopStorage {
             CREATE TABLE IF NOT EXISTS recent_packages (
                 package_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id INTEGER,
+                investigation_id INTEGER,
                 created_at TEXT NOT NULL,
                 package_name TEXT NOT NULL,
                 package_path TEXT NOT NULL,
@@ -278,11 +413,69 @@ impl DesktopStorage {
                 fwmap_version TEXT NOT NULL,
                 note TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS investigations (
+                investigation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                project_id INTEGER,
+                workspace_id TEXT,
+                baseline_ref_json TEXT NOT NULL,
+                target_ref_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS investigation_evidence (
+                evidence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                investigation_id INTEGER NOT NULL,
+                evidence_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                delta INTEGER,
+                severity TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                source_view TEXT NOT NULL,
+                linked_view TEXT,
+                stable_ref_json TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS investigation_notes (
+                note_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                investigation_id INTEGER NOT NULL,
+                linked_entity_type TEXT,
+                linked_entity_id TEXT,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS investigation_timeline_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                investigation_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS investigation_verdicts (
+                investigation_id INTEGER PRIMARY KEY,
+                verdict_type TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                summary TEXT NOT NULL,
+                supporting_evidence_ids_json TEXT NOT NULL,
+                unresolved_questions TEXT NOT NULL,
+                next_actions TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             ",
         )
         .map_err(|err| format!("failed to initialize desktop database: {err}"))?;
         ensure_column(&conn, "settings", "active_project_id", "INTEGER")?;
         ensure_column(&conn, "recent_runs", "project_id", "INTEGER")?;
+        ensure_column(&conn, "recent_packages", "investigation_id", "INTEGER")?;
         conn.execute(
             "INSERT INTO settings (id, history_db_path) VALUES (1, ?1) ON CONFLICT(id) DO NOTHING",
             params![self.paths.history_db_path.to_string_lossy().to_string()],
@@ -540,6 +733,10 @@ impl DesktopStorage {
             .map_err(|err| format!("failed to delete project exports: {err}"))?;
         conn.execute("UPDATE recent_runs SET project_id = NULL WHERE project_id = ?1", params![project_id])
             .map_err(|err| format!("failed to detach project runs: {err}"))?;
+        conn.execute("UPDATE recent_packages SET project_id = NULL WHERE project_id = ?1", params![project_id])
+            .map_err(|err| format!("failed to detach project packages: {err}"))?;
+        conn.execute("UPDATE investigations SET project_id = NULL WHERE project_id = ?1", params![project_id])
+            .map_err(|err| format!("failed to detach project investigations: {err}"))?;
         conn.execute("DELETE FROM projects WHERE project_id = ?1", params![project_id])
             .map_err(|err| format!("failed to delete project: {err}"))?;
         conn.execute("UPDATE settings SET active_project_id = NULL WHERE active_project_id = ?1", params![project_id])
@@ -669,10 +866,11 @@ impl DesktopStorage {
         let conn = self.open()?;
         conn.execute(
             "INSERT INTO recent_packages (
-                project_id, created_at, package_name, package_path, source_context, schema_version, fwmap_version, note
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                project_id, investigation_id, created_at, package_name, package_path, source_context, schema_version, fwmap_version, note
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 record.project_id,
+                record.investigation_id,
                 record.created_at,
                 record.package_name,
                 record.package_path,
@@ -689,10 +887,10 @@ impl DesktopStorage {
     pub fn list_recent_packages(&self, project_id: Option<i64>, limit: usize) -> Result<Vec<StoredPackageRecord>, String> {
         let conn = self.open()?;
         let sql = if project_id.is_some() {
-            "SELECT package_id, project_id, created_at, package_name, package_path, source_context, schema_version, fwmap_version, note
+            "SELECT package_id, project_id, investigation_id, created_at, package_name, package_path, source_context, schema_version, fwmap_version, note
              FROM recent_packages WHERE project_id = ?1 ORDER BY package_id DESC LIMIT ?2"
         } else {
-            "SELECT package_id, project_id, created_at, package_name, package_path, source_context, schema_version, fwmap_version, note
+            "SELECT package_id, project_id, investigation_id, created_at, package_name, package_path, source_context, schema_version, fwmap_version, note
              FROM recent_packages ORDER BY package_id DESC LIMIT ?1"
         };
         let mut stmt = conn
@@ -702,13 +900,14 @@ impl DesktopStorage {
             Ok(StoredPackageRecord {
                 package_id: row.get(0)?,
                 project_id: row.get(1)?,
-                created_at: row.get(2)?,
-                package_name: row.get(3)?,
-                package_path: row.get(4)?,
-                source_context: row.get(5)?,
-                schema_version: row.get(6)?,
-                fwmap_version: row.get(7)?,
-                note: row.get(8)?,
+                investigation_id: row.get(2)?,
+                created_at: row.get(3)?,
+                package_name: row.get(4)?,
+                package_path: row.get(5)?,
+                source_context: row.get(6)?,
+                schema_version: row.get(7)?,
+                fwmap_version: row.get(8)?,
+                note: row.get(9)?,
             })
         };
         let rows = if let Some(project_id) = project_id {
@@ -721,6 +920,234 @@ impl DesktopStorage {
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|err| format!("failed to collect recent packages: {err}"))
     }
+
+    pub fn insert_investigation(&self, record: &InsertInvestigationRecord) -> Result<i64, String> {
+        let conn = self.open()?;
+        conn.execute(
+            "INSERT INTO investigations (title, project_id, workspace_id, baseline_ref_json, target_ref_json, status, created_at, updated_at, archived) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0)",
+            params![record.title, record.project_id, record.workspace_id, record.baseline_ref_json, record.target_ref_json, record.status, record.created_at, record.updated_at],
+        ).map_err(|err| format!("failed to insert investigation: {err}"))?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_investigations(&self, archived: bool) -> Result<Vec<StoredInvestigationRecord>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn.prepare(
+            "SELECT i.investigation_id, i.title, i.project_id, i.workspace_id, i.baseline_ref_json, i.target_ref_json, i.status, i.created_at, i.updated_at, i.archived,
+                    (SELECT COUNT(*) FROM investigation_evidence e WHERE e.investigation_id = i.investigation_id) AS evidence_count,
+                    (SELECT COUNT(*) FROM investigation_notes n WHERE n.investigation_id = i.investigation_id) AS note_count
+             FROM investigations i
+             WHERE i.archived = ?1
+             ORDER BY i.updated_at DESC, i.investigation_id DESC"
+        ).map_err(|err| format!("failed to prepare investigations query: {err}"))?;
+        let rows = stmt.query_map(params![if archived { 1 } else { 0 }], |row| {
+            Ok(StoredInvestigationRecord {
+                investigation_id: row.get(0)?,
+                title: row.get(1)?,
+                project_id: row.get(2)?,
+                workspace_id: row.get(3)?,
+                baseline_ref_json: row.get(4)?,
+                target_ref_json: row.get(5)?,
+                status: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+                archived: row.get::<_, i64>(9)? != 0,
+                evidence_count: row.get(10)?,
+                note_count: row.get(11)?,
+            })
+        }).map_err(|err| format!("failed to query investigations: {err}"))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|err| format!("failed to collect investigations: {err}"))
+    }
+
+    pub fn get_investigation(&self, investigation_id: i64) -> Result<Option<StoredInvestigationRecord>, String> {
+        let conn = self.open()?;
+        conn.query_row(
+            "SELECT i.investigation_id, i.title, i.project_id, i.workspace_id, i.baseline_ref_json, i.target_ref_json, i.status, i.created_at, i.updated_at, i.archived,
+                    (SELECT COUNT(*) FROM investigation_evidence e WHERE e.investigation_id = i.investigation_id) AS evidence_count,
+                    (SELECT COUNT(*) FROM investigation_notes n WHERE n.investigation_id = i.investigation_id) AS note_count
+             FROM investigations i WHERE i.investigation_id = ?1",
+            params![investigation_id],
+            |row| {
+                Ok(StoredInvestigationRecord {
+                    investigation_id: row.get(0)?,
+                    title: row.get(1)?,
+                    project_id: row.get(2)?,
+                    workspace_id: row.get(3)?,
+                    baseline_ref_json: row.get(4)?,
+                    target_ref_json: row.get(5)?,
+                    status: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                    archived: row.get::<_, i64>(9)? != 0,
+                    evidence_count: row.get(10)?,
+                    note_count: row.get(11)?,
+                })
+            },
+        ).optional().map_err(|err| format!("failed to load investigation: {err}"))
+    }
+
+    pub fn update_investigation(&self, investigation_id: i64, patch: &UpdateInvestigationRecord) -> Result<(), String> {
+        let current = self.get_investigation(investigation_id)?.ok_or_else(|| format!("investigation {investigation_id} was not found"))?;
+        let conn = self.open()?;
+        conn.execute(
+            "UPDATE investigations SET title = ?2, baseline_ref_json = ?3, target_ref_json = ?4, status = ?5, updated_at = ?6, archived = ?7 WHERE investigation_id = ?1",
+            params![
+                investigation_id,
+                patch.title.as_ref().unwrap_or(&current.title),
+                patch.baseline_ref_json.as_ref().unwrap_or(&current.baseline_ref_json),
+                patch.target_ref_json.as_ref().unwrap_or(&current.target_ref_json),
+                patch.status.as_ref().unwrap_or(&current.status),
+                patch.updated_at,
+                patch.archived.map(|v| if v { 1 } else { 0 }).unwrap_or(if current.archived { 1 } else { 0 }),
+            ],
+        ).map_err(|err| format!("failed to update investigation: {err}"))?;
+        Ok(())
+    }
+
+    pub fn delete_investigation(&self, investigation_id: i64) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute("DELETE FROM investigation_verdicts WHERE investigation_id = ?1", params![investigation_id]).map_err(|err| format!("failed to delete investigation verdict: {err}"))?;
+        conn.execute("DELETE FROM investigation_timeline_events WHERE investigation_id = ?1", params![investigation_id]).map_err(|err| format!("failed to delete investigation timeline: {err}"))?;
+        conn.execute("DELETE FROM investigation_notes WHERE investigation_id = ?1", params![investigation_id]).map_err(|err| format!("failed to delete investigation notes: {err}"))?;
+        conn.execute("DELETE FROM investigation_evidence WHERE investigation_id = ?1", params![investigation_id]).map_err(|err| format!("failed to delete investigation evidence: {err}"))?;
+        conn.execute("UPDATE recent_packages SET investigation_id = NULL WHERE investigation_id = ?1", params![investigation_id]).map_err(|err| format!("failed to detach investigation packages: {err}"))?;
+        conn.execute("DELETE FROM investigations WHERE investigation_id = ?1", params![investigation_id]).map_err(|err| format!("failed to delete investigation: {err}"))?;
+        Ok(())
+    }
+
+    pub fn insert_investigation_evidence(&self, record: &InsertInvestigationEvidenceRecord) -> Result<i64, String> {
+        let conn = self.open()?;
+        conn.execute(
+            "INSERT INTO investigation_evidence (investigation_id, evidence_type, title, delta, severity, confidence, source_view, linked_view, stable_ref_json, snapshot_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![record.investigation_id, record.evidence_type, record.title, record.delta, record.severity, record.confidence, record.source_view, record.linked_view, record.stable_ref_json, record.snapshot_json, record.created_at],
+        ).map_err(|err| format!("failed to insert investigation evidence: {err}"))?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_investigation_evidence(&self, investigation_id: i64) -> Result<Vec<StoredInvestigationEvidenceRecord>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn.prepare(
+            "SELECT evidence_id, investigation_id, evidence_type, title, delta, severity, confidence, source_view, linked_view, stable_ref_json, snapshot_json, created_at
+             FROM investigation_evidence WHERE investigation_id = ?1 ORDER BY created_at DESC, evidence_id DESC"
+        ).map_err(|err| format!("failed to prepare evidence query: {err}"))?;
+        let rows = stmt.query_map(params![investigation_id], |row| {
+            Ok(StoredInvestigationEvidenceRecord {
+                evidence_id: row.get(0)?,
+                investigation_id: row.get(1)?,
+                evidence_type: row.get(2)?,
+                title: row.get(3)?,
+                delta: row.get(4)?,
+                severity: row.get(5)?,
+                confidence: row.get(6)?,
+                source_view: row.get(7)?,
+                linked_view: row.get(8)?,
+                stable_ref_json: row.get(9)?,
+                snapshot_json: row.get(10)?,
+                created_at: row.get(11)?,
+            })
+        }).map_err(|err| format!("failed to query evidence: {err}"))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|err| format!("failed to collect evidence: {err}"))
+    }
+
+    pub fn remove_investigation_evidence(&self, investigation_id: i64, evidence_id: i64) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute("DELETE FROM investigation_evidence WHERE investigation_id = ?1 AND evidence_id = ?2", params![investigation_id, evidence_id]).map_err(|err| format!("failed to remove evidence: {err}"))?;
+        Ok(())
+    }
+
+    pub fn insert_investigation_note(&self, record: &InsertInvestigationNoteRecord) -> Result<i64, String> {
+        let conn = self.open()?;
+        conn.execute(
+            "INSERT INTO investigation_notes (investigation_id, linked_entity_type, linked_entity_id, body, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![record.investigation_id, record.linked_entity_type, record.linked_entity_id, record.body, record.created_at, record.updated_at],
+        ).map_err(|err| format!("failed to insert investigation note: {err}"))?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_investigation_notes(&self, investigation_id: i64) -> Result<Vec<StoredInvestigationNoteRecord>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn.prepare(
+            "SELECT note_id, investigation_id, linked_entity_type, linked_entity_id, body, created_at, updated_at
+             FROM investigation_notes WHERE investigation_id = ?1 ORDER BY updated_at DESC, note_id DESC"
+        ).map_err(|err| format!("failed to prepare notes query: {err}"))?;
+        let rows = stmt.query_map(params![investigation_id], |row| {
+            Ok(StoredInvestigationNoteRecord {
+                note_id: row.get(0)?,
+                investigation_id: row.get(1)?,
+                linked_entity_type: row.get(2)?,
+                linked_entity_id: row.get(3)?,
+                body: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        }).map_err(|err| format!("failed to query notes: {err}"))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|err| format!("failed to collect notes: {err}"))
+    }
+
+    pub fn update_investigation_note(&self, note_id: i64, body: &str, updated_at: &str) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute("UPDATE investigation_notes SET body = ?2, updated_at = ?3 WHERE note_id = ?1", params![note_id, body, updated_at]).map_err(|err| format!("failed to update investigation note: {err}"))?;
+        Ok(())
+    }
+
+    pub fn insert_investigation_timeline_event(&self, record: &InsertInvestigationTimelineEventRecord) -> Result<i64, String> {
+        let conn = self.open()?;
+        conn.execute(
+            "INSERT INTO investigation_timeline_events (investigation_id, event_type, payload_json, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![record.investigation_id, record.event_type, record.payload_json, record.created_at],
+        ).map_err(|err| format!("failed to insert investigation timeline event: {err}"))?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_investigation_timeline(&self, investigation_id: i64) -> Result<Vec<StoredInvestigationTimelineEventRecord>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn.prepare(
+            "SELECT event_id, investigation_id, event_type, payload_json, created_at FROM investigation_timeline_events WHERE investigation_id = ?1 ORDER BY event_id DESC"
+        ).map_err(|err| format!("failed to prepare investigation timeline query: {err}"))?;
+        let rows = stmt.query_map(params![investigation_id], |row| {
+            Ok(StoredInvestigationTimelineEventRecord {
+                event_id: row.get(0)?,
+                investigation_id: row.get(1)?,
+                event_type: row.get(2)?,
+                payload_json: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        }).map_err(|err| format!("failed to query investigation timeline: {err}"))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|err| format!("failed to collect investigation timeline: {err}"))
+    }
+
+    pub fn save_investigation_verdict(&self, record: &InsertInvestigationVerdictRecord) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "INSERT INTO investigation_verdicts (investigation_id, verdict_type, confidence, summary, supporting_evidence_ids_json, unresolved_questions, next_actions, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(investigation_id) DO UPDATE SET verdict_type = excluded.verdict_type, confidence = excluded.confidence, summary = excluded.summary, supporting_evidence_ids_json = excluded.supporting_evidence_ids_json, unresolved_questions = excluded.unresolved_questions, next_actions = excluded.next_actions, updated_at = excluded.updated_at",
+            params![record.investigation_id, record.verdict_type, record.confidence, record.summary, record.supporting_evidence_ids_json, record.unresolved_questions, record.next_actions, record.updated_at],
+        ).map_err(|err| format!("failed to save investigation verdict: {err}"))?;
+        Ok(())
+    }
+
+    pub fn get_investigation_verdict(&self, investigation_id: i64) -> Result<Option<StoredInvestigationVerdictRecord>, String> {
+        let conn = self.open()?;
+        conn.query_row(
+            "SELECT investigation_id, verdict_type, confidence, summary, supporting_evidence_ids_json, unresolved_questions, next_actions, updated_at
+             FROM investigation_verdicts WHERE investigation_id = ?1",
+            params![investigation_id],
+            |row| {
+                Ok(StoredInvestigationVerdictRecord {
+                    investigation_id: row.get(0)?,
+                    verdict_type: row.get(1)?,
+                    confidence: row.get(2)?,
+                    summary: row.get(3)?,
+                    supporting_evidence_ids_json: row.get(4)?,
+                    unresolved_questions: row.get(5)?,
+                    next_actions: row.get(6)?,
+                    updated_at: row.get(7)?,
+                })
+            }
+        ).optional().map_err(|err| format!("failed to load investigation verdict: {err}"))
+    }
+
 }
 
 fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<(), String> {

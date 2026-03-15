@@ -687,3 +687,137 @@ export type OpenInvestigationPackageResult = {
   inspectorSourceContext: SourceContext | null;
   policyDocument: PolicyDocument | null;
 };
+
+
+export type InvestigationRef = {
+  kind: string;
+  runId: number | null;
+  buildId: number | null;
+  commit: string | null;
+  label: string;
+};
+
+export type InvestigationSummary = {
+  investigationId: number;
+  title: string;
+  projectId: number | null;
+  workspaceId: string | null;
+  baselineRef: InvestigationRef;
+  targetRef: InvestigationRef;
+  status: string;
+  evidenceCount: number;
+  noteCount: number;
+  updatedAt: string;
+  archived: boolean;
+};
+
+export type InvestigationEvidence = {
+  evidenceId: number;
+  investigationId: number;
+  evidenceType: string;
+  title: string;
+  delta: number | null;
+  severity: string;
+  confidence: number;
+  sourceView: string;
+  linkedView: string | null;
+  stableRef: Record<string, unknown>;
+  snapshot: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type InvestigationNote = {
+  noteId: number;
+  investigationId: number;
+  linkedEntityType: string | null;
+  linkedEntityId: string | null;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type InvestigationTimelineEvent = {
+  eventId: number;
+  investigationId: number;
+  eventType: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type InvestigationVerdict = {
+  investigationId: number;
+  verdictType: string;
+  confidence: number;
+  summary: string;
+  supportingEvidenceIds: number[];
+  unresolvedQuestions: string;
+  nextActions: string;
+  updatedAt: string;
+};
+
+export type InvestigationDetail = {
+  summary: InvestigationSummary;
+  evidence: InvestigationEvidence[];
+  notes: InvestigationNote[];
+  timeline: InvestigationTimelineEvent[];
+  verdict: InvestigationVerdict | null;
+  packageExports: InvestigationPackageSummary[];
+};
+
+export type CreateInvestigationRequest = {
+  title: string;
+  projectId: number | null;
+  workspaceId: string | null;
+  baselineRef: InvestigationRef;
+  targetRef: InvestigationRef;
+  status?: string | null;
+};
+
+export type UpdateInvestigationRequest = {
+  title?: string | null;
+  baselineRef?: InvestigationRef | null;
+  targetRef?: InvestigationRef | null;
+  status?: string | null;
+  archived?: boolean | null;
+};
+
+export type AddInvestigationEvidenceRequest = {
+  evidenceType: string;
+  title: string;
+  delta: number | null;
+  severity?: string | null;
+  confidence?: number | null;
+  sourceView: string;
+  linkedView?: string | null;
+  stableRef: Record<string, unknown>;
+  snapshot: Record<string, unknown>;
+};
+
+export type AddInvestigationNoteRequest = {
+  linkedEntityType?: string | null;
+  linkedEntityId?: string | null;
+  body: string;
+};
+
+export type UpdateInvestigationNoteRequest = {
+  body: string;
+};
+
+export type SetInvestigationVerdictRequest = {
+  verdictType: string;
+  confidence: number;
+  summary: string;
+  supportingEvidenceIds: number[];
+  unresolvedQuestions: string;
+  nextActions: string;
+};
+
+export type ExportInvestigationPackageRequest = {
+  investigationId: number;
+  packageName: string;
+  destinationPath: string;
+  includeNotes: boolean;
+  includeTimeline: boolean;
+  includeVerdict: boolean;
+  includeEvidenceSnapshots: boolean;
+};

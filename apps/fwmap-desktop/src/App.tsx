@@ -3,41 +3,57 @@ import { Button, Card, CardBody, CardHeader, Chip, Input, Navbar, NavbarBrand, S
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { BreakdownBarChart } from "./components/BreakdownBarChart";
+import { FwDataTable } from "./components/FwDataTable";
+import { FwEmptyState } from "./components/FwEmptyState";
+import { FwInspectorPanel } from "./components/FwInspectorPanel";
+import { FwToolbar } from "./components/FwToolbar";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MetricLineChart } from "./components/MetricLineChart";
 import {
+  addInvestigationEvidence,
+  addInvestigationNote,
   cancelJob,
   compareRuns,
+  createInvestigation,
   createProject,
+  deleteInvestigation,
   deleteProject,
   detectRegression,
   createInvestigationPackage,
+  exportInvestigationPackage,
   exportReport,
   getActiveProject,
   getAppInfo,
   getDashboardSummary,
+  getInvestigation,
   getRangeDiff,
   getPluginDetail,
   getRunDetail,
   getSettings,
   listExtensionPoints,
+  listInvestigations,
   listPlugins,
   listProjects,
   listRecentExports,
   listRecentPackages,
   loadPolicy,
+  listInvestigationTimeline,
   getTimeline,
   listBranches,
   listHistory,
   listRecentRuns,
   openInvestigationPackage,
+  removeInvestigationEvidence,
   runPlugin,
   savePolicy,
   setActiveProject,
+  setInvestigationVerdict,
   setPluginEnabled,
   listTags,
   saveSettings,
   startAnalysis,
+  updateInvestigation,
+  updateInvestigationNote,
   updateProject,
   validatePolicy,
 } from "./lib/api";
@@ -45,10 +61,14 @@ import { listenToJobEvents } from "./lib/events";
 import { formatBytes, formatTime, joinParts } from "./lib/format";
 import type {
   ActiveProjectState,
+  AddInvestigationEvidenceRequest,
+  AddInvestigationNoteRequest,
   AnalysisRequest,
+  CreateInvestigationRequest,
   CreateInvestigationPackageRequest,
   CreateProjectRequest,
   DashboardSummary,
+  ExportInvestigationPackageRequest,
   InspectorQuery,
   InspectorSelection,
   DesktopAppInfo,
@@ -60,6 +80,10 @@ import type {
   InvestigationPackageSummary,
   HistoryItem,
   HistoryQuery,
+  InvestigationDetail,
+  InvestigationNote,
+  InvestigationSummary,
+  InvestigationVerdict,
   JobEvent,
   JobStatus,
   OpenInvestigationPackageResult,
@@ -79,9 +103,10 @@ import type {
   RunDetail,
   RunSummary,
   TimelineResult,
+  UpdateInvestigationRequest,
 } from "./lib/types";
 
-type ScreenKey = "dashboard" | "runs" | "diff" | "history" | "inspector" | "plugins" | "packages" | "settings";
+type ScreenKey = "dashboard" | "investigations" | "runs" | "diff" | "history" | "inspector" | "plugins" | "packages" | "settings";
 
 const emptyRequest: AnalysisRequest = {
   elfPath: null,
@@ -175,6 +200,43 @@ const defaultPackageRequest: CreateInvestigationPackageRequest = {
   inspectorSelection: null,
 };
 
+
+const emptyInvestigationRef = {
+  kind: "run",
+  runId: null,
+  buildId: null,
+  commit: null,
+  label: "Not set",
+};
+
+const emptyInvestigationDraft: CreateInvestigationRequest = {
+  title: "",
+  projectId: null,
+  workspaceId: null,
+  baselineRef: emptyInvestigationRef,
+  targetRef: emptyInvestigationRef,
+  status: "open",
+};
+
+const emptyVerdictDraft: Omit<InvestigationVerdict, "investigationId" | "updatedAt"> = {
+  verdictType: "unknown",
+  confidence: 0.5,
+  summary: "",
+  supportingEvidenceIds: [],
+  unresolvedQuestions: "",
+  nextActions: "",
+};
+
+const defaultInvestigationPackageExport: ExportInvestigationPackageRequest = {
+  investigationId: 0,
+  packageName: "",
+  destinationPath: "",
+  includeNotes: true,
+  includeTimeline: true,
+  includeVerdict: true,
+  includeEvidenceSnapshots: true,
+};
+
 const defaultInspectorQuery: InspectorQuery = {
   runId: null,
   buildId: null,
@@ -240,6 +302,14 @@ export default function App() {
   const [packageDraft, setPackageDraft] = useState<CreateInvestigationPackageRequest>(defaultPackageRequest);
   const [recentPackages, setRecentPackages] = useState<InvestigationPackageSummary[]>([]);
   const [openedPackage, setOpenedPackage] = useState<OpenInvestigationPackageResult | null>(null);
+  const [investigations, setInvestigations] = useState<InvestigationSummary[]>([]);
+  const [selectedInvestigationId, setSelectedInvestigationId] = useState<number | null>(null);
+  const [investigationDetail, setInvestigationDetail] = useState<InvestigationDetail | null>(null);
+  const [investigationDraft, setInvestigationDraft] = useState<CreateInvestigationRequest>(emptyInvestigationDraft);
+  const [investigationNoteDraft, setInvestigationNoteDraft] = useState<string>("");
+  const [investigationVerdictDraft, setInvestigationVerdictDraft] = useState<Omit<InvestigationVerdict, "investigationId" | "updatedAt">>(emptyVerdictDraft);
+  const [investigationExportDraft, setInvestigationExportDraft] = useState<ExportInvestigationPackageRequest>(defaultInvestigationPackageExport);
+  const [showArchivedInvestigations, setShowArchivedInvestigations] = useState(false);
   const [compareLeftRunId, setCompareLeftRunId] = useState<number | null>(null);
   const [compareRightRunId, setCompareRightRunId] = useState<number | null>(null);
   const [compareResult, setCompareResult] = useState<RunCompareResult | null>(null);
@@ -263,6 +333,8 @@ export default function App() {
   const [loadingPolicy, setLoadingPolicy] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [loadingPlugins, setLoadingPlugins] = useState(false);
+  const [loadingInvestigations, setLoadingInvestigations] = useState(false);
+  const [savingInvestigation, setSavingInvestigation] = useState(false);
   const [packaging, setPackaging] = useState(false);
   const [openingPackage, setOpeningPackage] = useState(false);
   const [loadingRefs, setLoadingRefs] = useState(false);
@@ -288,6 +360,12 @@ export default function App() {
       if (Number.isFinite(right)) {
         setCompareRightRunId(right);
       }
+    } else if (first === "investigations") {
+      setScreen("investigations");
+      const parsed = Number(second);
+      if (Number.isFinite(parsed)) {
+        setSelectedInvestigationId(parsed);
+      }
     } else if (first === "history") {
       setScreen("history");
     } else if (first === "inspector") {
@@ -304,19 +382,21 @@ export default function App() {
   useEffect(() => {
     if (screen === "runs" && selectedRunId) {
       window.location.hash = `runs/${selectedRunId}`;
+    } else if (screen === "investigations" && selectedInvestigationId) {
+      window.location.hash = `investigations/${selectedInvestigationId}`;
     } else if (screen === "diff" && compareLeftRunId && compareRightRunId) {
       window.location.hash = `diff/${compareLeftRunId}/${compareRightRunId}`;
     } else {
       window.location.hash = screen;
     }
-  }, [screen, selectedRunId, compareLeftRunId, compareRightRunId]);
+  }, [screen, selectedRunId, selectedInvestigationId, compareLeftRunId, compareRightRunId]);
 
   useEffect(() => {
     let disposed = false;
     async function load() {
       setBusy(true);
       try {
-        const [info, loadedSettings, loadedRuns, loadedProjects, loadedActiveProject, loadedExports, loadedPlugins, loadedExtensionPoints, loadedPackages] = await Promise.all([
+        const [info, loadedSettings, loadedRuns, loadedProjects, loadedActiveProject, loadedExports, loadedPlugins, loadedExtensionPoints, loadedPackages, loadedInvestigations] = await Promise.all([
           getAppInfo(),
           getSettings(),
           listRecentRuns(30, 0),
@@ -326,6 +406,7 @@ export default function App() {
           listPlugins(),
           listExtensionPoints(),
           listRecentPackages(null, 12),
+          listInvestigations(false),
         ]);
         if (disposed) return;
         const projectRepoPath = loadedActiveProject.activeProject?.gitRepoPath ?? null;
@@ -353,12 +434,16 @@ export default function App() {
         setExtensionPoints(loadedExtensionPoints);
         setSelectedPluginId((current) => current ?? loadedPlugins[0]?.pluginId ?? null);
         setRecentPackages(loadedPackages);
+        setInvestigations(loadedInvestigations);
+        setSelectedInvestigationId((current) => current ?? loadedInvestigations[0]?.investigationId ?? null);
         setPackageDraft((current) => ({
           ...current,
           projectId: loadedActiveProject.activeProjectId,
           dashboardQuery: initialHistoryQuery,
           destinationPath: current.destinationPath || loadedActiveProject.activeProject?.defaultExportDir || "",
         }));
+        setInvestigationDraft((current) => ({ ...current, projectId: loadedActiveProject.activeProjectId }));
+        setInvestigationExportDraft((current) => ({ ...current, destinationPath: current.destinationPath || loadedActiveProject.activeProject?.defaultExportDir || "" }));
         setRuns(loadedRuns);
         const fallbackRunId = loadedRuns[0]?.runId ?? null;
         setSelectedRunId((current) => current ?? fallbackRunId);
@@ -408,6 +493,34 @@ export default function App() {
   }, [selectedRunId]);
 
   useEffect(() => {
+    if (!selectedInvestigationId) {
+      setInvestigationDetail(null);
+      return;
+    }
+    const investigationId = selectedInvestigationId;
+    let disposed = false;
+    async function loadInvestigationDetail() {
+      try {
+        const detail = await getInvestigation(investigationId);
+        if (disposed) return;
+        setInvestigationDetail(detail);
+        setInvestigationVerdictDraft(detail.verdict ?? emptyVerdictDraft);
+        setInvestigationExportDraft((current) => ({
+          ...current,
+          investigationId,
+          packageName: current.packageName || `${detail.summary.title.replace(/\s+/g, "-").toLowerCase()}-bundle`,
+        }));
+      } catch (loadError) {
+        if (!disposed) setError(String(loadError));
+      }
+    }
+    void loadInvestigationDetail();
+    return () => {
+      disposed = true;
+    };
+  }, [selectedInvestigationId]);
+
+  useEffect(() => {
     if (!selectedPluginId) {
       setPluginDetail(null);
       return;
@@ -427,6 +540,10 @@ export default function App() {
       disposed = true;
     };
   }, [selectedPluginId]);
+
+  useEffect(() => {
+    void refreshInvestigations(selectedInvestigationId);
+  }, [showArchivedInvestigations]);
 
   useEffect(() => {
     let unlisteners: Array<() => void> = [];
@@ -693,6 +810,225 @@ export default function App() {
     }
   }
 
+  async function refreshInvestigations(preferredId?: number | null) {
+    setLoadingInvestigations(true);
+    try {
+      const items = await listInvestigations(showArchivedInvestigations);
+      setInvestigations(items);
+      const nextId = preferredId ?? selectedInvestigationId ?? items[0]?.investigationId ?? null;
+      setSelectedInvestigationId(nextId);
+      if (nextId) {
+        setInvestigationDetail(await getInvestigation(nextId));
+      }
+    } catch (loadError) {
+      setError(String(loadError));
+    } finally {
+      setLoadingInvestigations(false);
+    }
+  }
+
+  function buildRunRef(runId: number | null): CreateInvestigationRequest["baselineRef"] {
+    const run = runs.find((item) => item.runId === runId);
+    return {
+      kind: "run",
+      runId,
+      buildId: run?.buildId ?? null,
+      commit: run?.gitRevision ?? null,
+      label: run ? `${run.label || `run #${run.runId}`} / ${formatBytes(run.romBytes)} ROM` : "Not set",
+    };
+  }
+
+  async function handleCreateInvestigation() {
+    if (!investigationDraft.title.trim()) {
+      setError("Investigation title is required.");
+      return;
+    }
+    setSavingInvestigation(true);
+    try {
+      const detail = await createInvestigation({
+        ...investigationDraft,
+        projectId: activeProjectState?.activeProjectId ?? investigationDraft.projectId,
+      });
+      setScreen("investigations");
+      setSelectedInvestigationId(detail.summary.investigationId);
+      setInvestigationDetail(detail);
+      await refreshInvestigations(detail.summary.investigationId);
+      setInvestigationDraft((current) => ({ ...current, title: "" }));
+      setNote(`Created investigation ${detail.summary.title}.`);
+    } catch (loadError) {
+      setError(String(loadError));
+    } finally {
+      setSavingInvestigation(false);
+    }
+  }
+
+  async function handleCreateInvestigationFromDiff() {
+    if (!compareLeftRunId || !compareRightRunId) {
+      setError("Choose both runs before creating an investigation.");
+      return;
+    }
+    try {
+      setInvestigationDraft((current) => ({
+        ...current,
+        title: current.title || `Diff ${compareLeftRunId} to ${compareRightRunId}`,
+        projectId: activeProjectState?.activeProjectId ?? null,
+        baselineRef: buildRunRef(compareLeftRunId),
+        targetRef: buildRunRef(compareRightRunId),
+        status: "open",
+      }));
+      const detail = await createInvestigation({
+        title: investigationDraft.title || `Diff ${compareLeftRunId} to ${compareRightRunId}`,
+        projectId: activeProjectState?.activeProjectId ?? null,
+        workspaceId: null,
+        baselineRef: buildRunRef(compareLeftRunId),
+        targetRef: buildRunRef(compareRightRunId),
+        status: "open",
+      });
+      if (compareResult) {
+        const topItems = compareResult.sectionDeltas.slice(0, 3);
+        for (const item of topItems) {
+          await addInvestigationEvidence(detail.summary.investigationId, {
+            evidenceType: "Section Diff",
+            title: item.name,
+            delta: item.delta,
+            severity: item.delta > 0 ? "warning" : "info",
+            confidence: 0.8,
+            sourceView: "diff",
+            linkedView: "diff",
+            stableRef: { section: item.name, leftRunId: compareResult.leftRun.runId, rightRunId: compareResult.rightRun.runId },
+            snapshot: { delta: item.delta, metric: "size", kind: "section" },
+          });
+        }
+      }
+      await refreshInvestigations(detail.summary.investigationId);
+      setScreen("investigations");
+      setNote(`Created investigation ${detail.summary.title} from the current diff.`);
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function handlePinRegressionEvidence() {
+    if (!selectedInvestigationId || !regressionResult) {
+      setError("Load a regression result and select an investigation first.");
+      return;
+    }
+    try {
+      await addInvestigationEvidence(selectedInvestigationId, {
+        evidenceType: "Regression Candidate",
+        title: regressionResult.firstObservedBad?.subject ?? regressionQuery.key,
+        delta: regressionResult.firstObservedBad?.value ?? null,
+        severity: regressionResult.confidence === "high" ? "warning" : "info",
+        confidence: regressionResult.confidence === "high" ? 0.9 : regressionResult.confidence === "medium" ? 0.7 : 0.5,
+        sourceView: "regression",
+        linkedView: "history",
+        stableRef: { key: regressionQuery.key, detectorType: regressionQuery.detectorType, commit: regressionResult.firstObservedBad?.commit ?? null },
+        snapshot: { reasoning: regressionResult.reasoning, confidence: regressionResult.confidence, lastGood: regressionResult.lastGood, firstObservedBad: regressionResult.firstObservedBad },
+      });
+      await refreshInvestigations(selectedInvestigationId);
+      setScreen("investigations");
+      setNote("Pinned regression evidence to the investigation.");
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function handlePinInspectorEvidence() {
+    if (!selectedInvestigationId || !inspectorSelection) {
+      setError("Select an investigation and an inspector item first.");
+      return;
+    }
+    try {
+      await addInvestigationEvidence(selectedInvestigationId, {
+        evidenceType: "Source Line",
+        title: `${inspectorSelection.kind}: ${inspectorSelection.stableId}`,
+        delta: null,
+        severity: "info",
+        confidence: 0.75,
+        sourceView: "inspector",
+        linkedView: "inspector",
+        stableRef: inspectorSelection,
+        snapshot: { query: inspectorQuery, selection: inspectorSelection },
+      });
+      await refreshInvestigations(selectedInvestigationId);
+      setScreen("investigations");
+      setNote("Pinned inspector evidence to the investigation.");
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function handleAddInvestigationNote() {
+    if (!selectedInvestigationId || !investigationNoteDraft.trim()) {
+      setError("Select an investigation and enter a note.");
+      return;
+    }
+    try {
+      await addInvestigationNote(selectedInvestigationId, { body: investigationNoteDraft, linkedEntityType: null, linkedEntityId: null });
+      setInvestigationNoteDraft("");
+      await refreshInvestigations(selectedInvestigationId);
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function handleSaveInvestigationVerdict() {
+    if (!selectedInvestigationId) {
+      setError("Select an investigation first.");
+      return;
+    }
+    try {
+      await setInvestigationVerdict(selectedInvestigationId, investigationVerdictDraft);
+      await refreshInvestigations(selectedInvestigationId);
+      setNote("Verdict saved.");
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function handleArchiveInvestigation(archived: boolean) {
+    if (!selectedInvestigationId) return;
+    try {
+      await updateInvestigation(selectedInvestigationId, { archived });
+      await refreshInvestigations(selectedInvestigationId);
+      setNote(archived ? "Investigation archived." : "Investigation restored.");
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function handleRemoveInvestigationEvidence(evidenceId: number) {
+    if (!selectedInvestigationId) return;
+    try {
+      await removeInvestigationEvidence(selectedInvestigationId, evidenceId);
+      await refreshInvestigations(selectedInvestigationId);
+    } catch (loadError) {
+      setError(String(loadError));
+    }
+  }
+
+  async function handleExportSelectedInvestigationPackage() {
+    if (!selectedInvestigationId) {
+      setError("Select an investigation first.");
+      return;
+    }
+    if (!investigationExportDraft.destinationPath.trim() || !investigationExportDraft.packageName.trim()) {
+      setError("Package name and destination are required.");
+      return;
+    }
+    setPackaging(true);
+    try {
+      await exportInvestigationPackage({ ...investigationExportDraft, investigationId: selectedInvestigationId });
+      await refreshInvestigations(selectedInvestigationId);
+      setRecentPackages(await listRecentPackages(activeProjectState?.activeProjectId ?? null, 12));
+      setNote("Investigation package exported.");
+    } catch (loadError) {
+      setError(String(loadError));
+    } finally {
+      setPackaging(false);
+    }
+  }
+
   async function handleSelectPlugin(pluginId: string) {
     setSelectedPluginId(pluginId);
     try {
@@ -744,6 +1080,7 @@ export default function App() {
     const value = await open({ directory: true, multiple: false });
     if (typeof value === "string") {
       setPackageDraft((current) => ({ ...current, destinationPath: value }));
+      setInvestigationExportDraft((current) => ({ ...current, destinationPath: value }));
     }
   }
 
@@ -979,6 +1316,11 @@ export default function App() {
       title: "Size posture at a glance",
       description: "Track the latest build, history pressure, and the signals worth acting on next.",
     },
+    investigations: {
+      eyebrow: "Investigations",
+      title: "Track a regression as a case",
+      description: "Set a baseline and target, pin evidence, keep notes, and carry the verdict through to export.",
+    },
     runs: {
       eyebrow: "Runs",
       title: "Inspect individual analyses",
@@ -1047,6 +1389,12 @@ export default function App() {
           { label: "Metric", value: inspectorQuery.metric, detail: inspectorQuery.runId ? `Run #${inspectorQuery.runId}` : inspectorQuery.leftRunId && inspectorQuery.rightRunId ? `Diff #${inspectorQuery.leftRunId} -> #${inspectorQuery.rightRunId}` : "Latest run" },
           { label: "Selection", value: inspectorSelection?.kind ?? "None", detail: inspectorSelection?.stableId ?? "Choose a node from the visualization or table." },
         ];
+      case "investigations":
+        return [
+          { label: "Open cases", value: String(investigations.length), detail: `${investigations.filter((item) => item.status === "open").length} still active` },
+          { label: "Selected", value: investigationDetail?.summary.title ?? "None", detail: investigationDetail ? `${investigationDetail.evidence.length} evidence / ${investigationDetail.notes.length} notes` : "Create an investigation to start collecting evidence." },
+          { label: "Verdict", value: investigationDetail?.verdict?.verdictType ?? "Unset", detail: investigationDetail?.verdict?.summary ?? "No structured conclusion saved yet." },
+        ];
       case "plugins":
         return [
           { label: "Installed", value: String(plugins.length), detail: `${plugins.filter((item) => item.enabled).length} enabled` },
@@ -1097,6 +1445,8 @@ export default function App() {
     settings.defaultGitRepoPath,
     timeline?.rows.length,
     extensionPoints,
+    investigations,
+    investigationDetail,
     openedPackage?.summary.includedCount,
     openedPackage?.summary.omittedCount,
     openedPackage?.summary.packageName,
@@ -1128,6 +1478,7 @@ export default function App() {
 
           <nav className="rail-nav" aria-label="Primary screens">
             <ScreenButton active={screen === "dashboard"} label="Dashboard" detail="Live size posture" onPress={() => setScreen("dashboard")} />
+            <ScreenButton active={screen === "investigations"} label="Investigations" detail={`${investigations.length} saved cases`} onPress={() => setScreen("investigations")} />
             <ScreenButton active={screen === "runs"} label="Runs" detail={`${runs.length} captured runs`} onPress={() => setScreen("runs")} />
             <ScreenButton active={screen === "diff"} label="Diff" detail="Compare snapshots" onPress={() => setScreen("diff")} />
             <ScreenButton active={screen === "history"} label="History" detail={`${timeline?.rows.length ?? 0} timeline rows`} onPress={() => setScreen("history")} />
@@ -1216,6 +1567,127 @@ export default function App() {
                   </section>
                 </div>
               )}
+            </Tab>
+
+            <Tab key="investigations" title="Investigations">
+              <div className="page-stack">
+                <Card>
+                  <CardHeader className="section-header">Investigation workspace</CardHeader>
+                  <CardBody className="page-stack compact-text">
+                    <FwToolbar>
+                      <div className="form-grid investigation-toolbar-grid">
+                        <Input label="Title" value={investigationDraft.title} onValueChange={(value) => setInvestigationDraft((current) => ({ ...current, title: value }))} />
+                        <Input label="Baseline" value={investigationDraft.baselineRef.label} readOnly />
+                        <Input label="Target" value={investigationDraft.targetRef.label} readOnly />
+                      </div>
+                      <div className="button-row compact-wrap">
+                        <Button variant="flat" onPress={() => setInvestigationDraft((current) => ({ ...current, baselineRef: buildRunRef(compareLeftRunId), targetRef: buildRunRef(compareRightRunId || selectedRunId) }))}>Use current diff refs</Button>
+                        <Button color="primary" isLoading={savingInvestigation} onPress={() => void handleCreateInvestigation()}>New investigation</Button>
+                        <Button variant="flat" onPress={() => void handleCreateInvestigationFromDiff()} isDisabled={!compareLeftRunId || !compareRightRunId}>Create from diff</Button>
+                        <Button variant="flat" onPress={() => setShowArchivedInvestigations((current) => !current)}>{showArchivedInvestigations ? "Hide archived" : "Show archived"}</Button>
+                      </div>
+                    </FwToolbar>
+                  </CardBody>
+                </Card>
+                <section className="investigation-layout">
+                  <Card>
+                    <CardHeader className="section-header">Investigation list</CardHeader>
+                    <CardBody className="page-stack compact-text">
+                      {loadingInvestigations ? <div className="loading-state"><Spinner label="Loading investigations" /></div> : investigations.length > 0 ? (
+                        <FwDataTable columns={[{ key: "title", label: "Title" }, { key: "baseline", label: "Baseline" }, { key: "target", label: "Target" }, { key: "status", label: "Status" }, { key: "evidence", label: "Evidence" }, { key: "updated", label: "Updated" }]}>
+                          {investigations.map((item) => (
+                            <tr key={item.investigationId} className={selectedInvestigationId === item.investigationId ? "table-row-selected" : ""} onClick={() => setSelectedInvestigationId(item.investigationId)}>
+                              <td><strong>{item.title}</strong></td>
+                              <td>{shorten(item.baselineRef.label, 26)}</td>
+                              <td>{shorten(item.targetRef.label, 26)}</td>
+                              <td><Chip size="sm" variant="flat">{item.status}</Chip></td>
+                              <td>{item.evidenceCount}</td>
+                              <td>{formatTime(item.updatedAt)}</td>
+                            </tr>
+                          ))}
+                        </FwDataTable>
+                      ) : <FwEmptyState title="No investigations yet" detail="Create one from the current diff, or start a blank case and pin evidence as you go." />}
+                    </CardBody>
+                  </Card>
+                  <Card>
+                    <CardHeader className="section-header">Investigation detail</CardHeader>
+                    <CardBody className="page-stack compact-text">
+                      {investigationDetail ? (
+                        <>
+                          <div className="button-row compact-wrap">
+                            <Chip variant="flat">{investigationDetail.summary.status}</Chip>
+                            <Chip variant="flat">{investigationDetail.summary.baselineRef.label}</Chip>
+                            <Chip variant="flat">{investigationDetail.summary.targetRef.label}</Chip>
+                            <Button size="sm" variant="flat" onPress={() => void handleArchiveInvestigation(!investigationDetail.summary.archived)}>{investigationDetail.summary.archived ? "Restore" : "Archive"}</Button>
+                          </div>
+                          <div className="investigation-detail-grid">
+                            <FwInspectorPanel title="Overview" subtitle="Quiet summary for the current case.">
+                              <div className="three-column package-summary-grid">
+                                <article className="metric-slab plugin-slab"><div className="metric-slab-label">Evidence</div><div className="metric-slab-value">{investigationDetail.evidence.length}</div><p>Pinned references and snapshots.</p></article>
+                                <article className="metric-slab plugin-slab"><div className="metric-slab-label">Notes</div><div className="metric-slab-value">{investigationDetail.notes.length}</div><p>Working context and follow-ups.</p></article>
+                                <article className="metric-slab plugin-slab"><div className="metric-slab-label">Verdict</div><div className="metric-slab-value">{investigationDetail.verdict?.verdictType ?? "unset"}</div><p>{investigationDetail.verdict?.summary ?? "No structured conclusion yet."}</p></article>
+                              </div>
+                            </FwInspectorPanel>
+                            <FwInspectorPanel title="Evidence" subtitle="Stable references with snapshots captured from diff, regression, or inspector views.">
+                              <div className="button-row compact-wrap">
+                                <Button size="sm" variant="flat" onPress={() => void handlePinRegressionEvidence()} isDisabled={!regressionResult}>Pin regression</Button>
+                                <Button size="sm" variant="flat" onPress={() => void handlePinInspectorEvidence()} isDisabled={!inspectorSelection}>Pin inspector item</Button>
+                              </div>
+                              {investigationDetail.evidence.length > 0 ? (
+                                <FwDataTable columns={[{ key: "type", label: "Type" }, { key: "title", label: "Title" }, { key: "delta", label: "Delta" }, { key: "severity", label: "Severity" }, { key: "source", label: "Source" }, { key: "added", label: "Added" }, { key: "action", label: "" }]}>
+                                  {investigationDetail.evidence.map((item) => (
+                                    <tr key={item.evidenceId}>
+                                      <td>{item.evidenceType}</td>
+                                      <td>{item.title}</td>
+                                      <td className={deltaTone(item.delta)}>{signedOrDash(item.delta)}</td>
+                                      <td><Chip size="sm" variant="flat">{item.severity}</Chip></td>
+                                      <td>{item.sourceView}</td>
+                                      <td>{formatTime(item.createdAt)}</td>
+                                      <td><Button size="sm" variant="light" onPress={() => void handleRemoveInvestigationEvidence(item.evidenceId)}>Remove</Button></td>
+                                    </tr>
+                                  ))}
+                                </FwDataTable>
+                              ) : <FwEmptyState title="No evidence pinned" detail="Pin section diffs, regression candidates, or inspector items to build the case." />}
+                            </FwInspectorPanel>
+                            <FwInspectorPanel title="Timeline" subtitle="The investigation keeps a readable log of what changed and why.">
+                              {investigationDetail.timeline.length > 0 ? <ul className="warning-list">{investigationDetail.timeline.map((item) => <li key={item.eventId}><strong>{item.eventType}</strong><div>{formatTime(item.createdAt)}</div></li>)}</ul> : <FwEmptyState title="No timeline events yet" detail="Events appear automatically as you pin evidence, add notes, and export packages." />}
+                            </FwInspectorPanel>
+                            <FwInspectorPanel title="Verdict" subtitle="Store the current conclusion and what still needs follow-up.">
+                              <div className="panel-stack compact-text">
+                                <div className="form-grid-inline">
+                                  <div><label>Verdict type</label><select className="native-select" value={investigationVerdictDraft.verdictType} onChange={(event) => setInvestigationVerdictDraft((current) => ({ ...current, verdictType: event.target.value }))}><option value="code change">code change</option><option value="compiler/codegen change">compiler/codegen change</option><option value="linker layout change">linker layout change</option><option value="dependency update">dependency update</option><option value="build/config change">build/config change</option><option value="mixed">mixed</option><option value="unknown">unknown</option></select></div>
+                                  <Input label="Confidence" type="number" value={String(investigationVerdictDraft.confidence)} onValueChange={(value) => setInvestigationVerdictDraft((current) => ({ ...current, confidence: Number(value) || 0 }))} />
+                                </div>
+                                <Textarea minRows={3} label="Summary" value={investigationVerdictDraft.summary} onValueChange={(value) => setInvestigationVerdictDraft((current) => ({ ...current, summary: value }))} />
+                                <Textarea minRows={3} label="Unresolved questions" value={investigationVerdictDraft.unresolvedQuestions} onValueChange={(value) => setInvestigationVerdictDraft((current) => ({ ...current, unresolvedQuestions: value }))} />
+                                <Textarea minRows={3} label="Next actions" value={investigationVerdictDraft.nextActions} onValueChange={(value) => setInvestigationVerdictDraft((current) => ({ ...current, nextActions: value }))} />
+                                <Button color="primary" onPress={() => void handleSaveInvestigationVerdict()}>Save verdict</Button>
+                              </div>
+                            </FwInspectorPanel>
+                            <FwInspectorPanel title="Notes and package" subtitle="Capture working notes, then export a shareable bundle for someone else to reopen.">
+                              <Textarea minRows={4} label="Add note" value={investigationNoteDraft} onValueChange={setInvestigationNoteDraft} />
+                              <div className="button-row compact-wrap">
+                                <Button variant="flat" onPress={() => void handleAddInvestigationNote()}>Add note</Button>
+                                <Button variant="flat" onPress={() => void choosePackageDestination()}>Choose package folder</Button>
+                              </div>
+                              <Input label="Package name" value={investigationExportDraft.packageName} onValueChange={(value) => setInvestigationExportDraft((current) => ({ ...current, packageName: value }))} />
+                              <Input label="Destination" value={investigationExportDraft.destinationPath} onValueChange={(value) => setInvestigationExportDraft((current) => ({ ...current, destinationPath: value }))} />
+                              <div className="badge-row compact-wrap">
+                                <button type="button" className={`chip-button ${investigationExportDraft.includeNotes ? "active-chip" : ""}`} onClick={() => setInvestigationExportDraft((current) => ({ ...current, includeNotes: !current.includeNotes }))}>notes</button>
+                                <button type="button" className={`chip-button ${investigationExportDraft.includeTimeline ? "active-chip" : ""}`} onClick={() => setInvestigationExportDraft((current) => ({ ...current, includeTimeline: !current.includeTimeline }))}>timeline</button>
+                                <button type="button" className={`chip-button ${investigationExportDraft.includeVerdict ? "active-chip" : ""}`} onClick={() => setInvestigationExportDraft((current) => ({ ...current, includeVerdict: !current.includeVerdict }))}>verdict</button>
+                                <button type="button" className={`chip-button ${investigationExportDraft.includeEvidenceSnapshots ? "active-chip" : ""}`} onClick={() => setInvestigationExportDraft((current) => ({ ...current, includeEvidenceSnapshots: !current.includeEvidenceSnapshots }))}>evidence</button>
+                              </div>
+                              <Button color="primary" isLoading={packaging} onPress={() => void handleExportSelectedInvestigationPackage()}>Export package</Button>
+                              {investigationDetail.notes.length > 0 ? <ul className="warning-list">{investigationDetail.notes.map((item) => <li key={item.noteId}>{item.body}</li>)}</ul> : null}
+                            </FwInspectorPanel>
+                          </div>
+                        </>
+                      ) : <FwEmptyState title="No investigation selected" detail="Select an investigation from the list, or create one from the current diff." />}
+                    </CardBody>
+                  </Card>
+                </section>
+              </div>
             </Tab>
 
             <Tab key="runs" title="Runs">

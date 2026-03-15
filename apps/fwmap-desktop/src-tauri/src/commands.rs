@@ -1,12 +1,12 @@
 use tauri::{AppHandle, State};
 
 use crate::dto::{
-    ActiveProjectStateDto, AnalysisRequestDto, CreateInvestigationPackageRequestDto, CreateProjectRequestDto, DashboardQueryDto, DashboardSummaryDto,
-    DesktopAppInfo, DesktopSettingsDto, ExportRequestDto, ExportResultDto, ExtensionPointDto, GitRefDto, HistoryItemDto,
-    HistoryQueryDto, InspectorBreakdownDto, InspectorDetailDto, InspectorHierarchyNodeDto, InspectorQueryDto, InspectorSelectionDto, InspectorSummaryDto, InvestigationPackageSummaryDto, JobStatusDto, OpenInvestigationPackageResultDto, PluginDetailDto, PluginExecutionRequestDto, PluginExecutionResultDto, PluginSummaryDto, PolicyDocumentDto, PolicyValidationResultDto, ProjectDetailDto,
+    ActiveProjectStateDto, AddInvestigationEvidenceRequestDto, AddInvestigationNoteRequestDto, AnalysisRequestDto, CreateInvestigationPackageRequestDto, CreateInvestigationRequestDto, CreateProjectRequestDto, DashboardQueryDto, DashboardSummaryDto,
+    DesktopAppInfo, DesktopSettingsDto, ExportInvestigationPackageRequestDto, ExportRequestDto, ExportResultDto, ExtensionPointDto, GitRefDto, HistoryItemDto,
+    HistoryQueryDto, InspectorBreakdownDto, InspectorDetailDto, InspectorHierarchyNodeDto, InspectorQueryDto, InspectorSelectionDto, InspectorSummaryDto, InvestigationDetailDto, InvestigationEvidenceDto, InvestigationNoteDto, InvestigationPackageSummaryDto, InvestigationSummaryDto, InvestigationTimelineEventDto, InvestigationVerdictDto, JobStatusDto, OpenInvestigationPackageResultDto, PluginDetailDto, PluginExecutionRequestDto, PluginExecutionResultDto, PluginSummaryDto, PolicyDocumentDto, PolicyValidationResultDto, ProjectDetailDto,
     ProjectSummaryDto, RangeDiffQueryDto, RangeDiffResultDto, RecentExportDto, RegressionQueryDto,
-    RegressionResultDto, RunCompareRequestDto, RunCompareResultDto, RunDetailDto, RunSummaryDto,
-    SourceContextDto, TimelineResultDto, UpdateProjectRequestDto,
+    RegressionResultDto, RunCompareRequestDto, RunCompareResultDto, RunDetailDto, RunSummaryDto, SetInvestigationVerdictRequestDto,
+    SourceContextDto, TimelineResultDto, UpdateInvestigationNoteRequestDto, UpdateInvestigationRequestDto, UpdateProjectRequestDto,
 };
 use crate::service::DesktopState;
 
@@ -244,4 +244,65 @@ pub fn desktop_list_recent_packages(
     limit: Option<usize>,
 ) -> Result<Vec<InvestigationPackageSummaryDto>, String> {
     state.list_recent_packages(project_id, limit.unwrap_or(20))
+}
+
+
+#[tauri::command]
+pub fn investigation_create(state: State<'_, DesktopState>, request: CreateInvestigationRequestDto) -> Result<InvestigationDetailDto, String> {
+    state.create_investigation(request)
+}
+
+#[tauri::command]
+pub fn investigation_list(state: State<'_, DesktopState>, archived: Option<bool>) -> Result<Vec<InvestigationSummaryDto>, String> {
+    state.list_investigations(archived.unwrap_or(false))
+}
+
+#[tauri::command]
+pub fn investigation_get(state: State<'_, DesktopState>, investigation_id: i64) -> Result<InvestigationDetailDto, String> {
+    state.get_investigation(investigation_id)
+}
+
+#[tauri::command]
+pub fn investigation_update(state: State<'_, DesktopState>, investigation_id: i64, patch: UpdateInvestigationRequestDto) -> Result<InvestigationDetailDto, String> {
+    state.update_investigation(investigation_id, patch)
+}
+
+#[tauri::command]
+pub fn investigation_delete(state: State<'_, DesktopState>, investigation_id: i64) -> Result<(), String> {
+    state.delete_investigation(investigation_id)
+}
+
+#[tauri::command]
+pub fn investigation_add_evidence(state: State<'_, DesktopState>, investigation_id: i64, request: AddInvestigationEvidenceRequestDto) -> Result<InvestigationEvidenceDto, String> {
+    state.add_investigation_evidence(investigation_id, request)
+}
+
+#[tauri::command]
+pub fn investigation_remove_evidence(state: State<'_, DesktopState>, investigation_id: i64, evidence_id: i64) -> Result<(), String> {
+    state.remove_investigation_evidence(investigation_id, evidence_id)
+}
+
+#[tauri::command]
+pub fn investigation_add_note(state: State<'_, DesktopState>, investigation_id: i64, request: AddInvestigationNoteRequestDto) -> Result<InvestigationNoteDto, String> {
+    state.add_investigation_note(investigation_id, request)
+}
+
+#[tauri::command]
+pub fn investigation_update_note(state: State<'_, DesktopState>, note_id: i64, request: UpdateInvestigationNoteRequestDto) -> Result<InvestigationNoteDto, String> {
+    state.update_investigation_note(note_id, request)
+}
+
+#[tauri::command]
+pub fn investigation_list_timeline(state: State<'_, DesktopState>, investigation_id: i64) -> Result<Vec<InvestigationTimelineEventDto>, String> {
+    state.list_investigation_timeline(investigation_id)
+}
+
+#[tauri::command]
+pub fn investigation_set_verdict(state: State<'_, DesktopState>, investigation_id: i64, request: SetInvestigationVerdictRequestDto) -> Result<InvestigationVerdictDto, String> {
+    state.set_investigation_verdict(investigation_id, request)
+}
+
+#[tauri::command]
+pub fn investigation_export_package(state: State<'_, DesktopState>, request: ExportInvestigationPackageRequestDto) -> Result<InvestigationPackageSummaryDto, String> {
+    state.export_investigation_package(request)
 }
