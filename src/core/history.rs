@@ -467,17 +467,24 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
         let mut source_stmt = tx
             .prepare(
                 "INSERT INTO source_file_metrics (
-                    build_id, path, display_path, directory, size_bytes, function_count, line_range_count
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    build_id, path, display_path, directory, path_text_id, display_path_text_id, directory_text_id,
+                    size_bytes, function_count, line_range_count
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             )
             .map_err(|err| format!("failed to prepare source file insert: {err}"))?;
         for source in &input.analysis.source_files {
+            let path_text_id = intern_text(&tx, &source.path)?;
+            let display_path_text_id = intern_text(&tx, &source.display_path)?;
+            let directory_text_id = intern_text(&tx, &source.directory)?;
             source_stmt
                 .execute(params![
                     build_id,
-                    source.path,
-                    source.display_path,
-                    source.directory,
+                    "",
+                    "",
+                    "",
+                    path_text_id,
+                    display_path_text_id,
+                    directory_text_id,
                     source.size as i64,
                     source.functions as i64,
                     source.line_ranges as i64
@@ -488,15 +495,19 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
 
     {
         let mut object_stmt = tx
-            .prepare("INSERT INTO object_metrics (build_id, object_path, size_bytes) VALUES (?1, ?2, ?3)")
+            .prepare(
+                "INSERT INTO object_metrics (build_id, object_path, object_path_text_id, size_bytes)
+                 VALUES (?1, ?2, ?3, ?4)",
+            )
             .map_err(|err| format!("failed to prepare object insert: {err}"))?;
         let mut object_totals = BTreeMap::<String, u64>::new();
         for object in &input.analysis.object_contributions {
             *object_totals.entry(object.object_path.clone()).or_default() += object.size;
         }
         for (object_path, size) in object_totals {
+            let object_path_text_id = intern_text(&tx, &object_path)?;
             object_stmt
-                .execute(params![build_id, object_path, size as i64])
+                .execute(params![build_id, "", object_path_text_id, size as i64])
                 .map_err(|err| format!("failed to insert object metric: {err}"))?;
         }
     }
@@ -505,8 +516,10 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
         let mut function_stmt = tx
             .prepare(
                 "INSERT INTO function_metrics (
-                    build_id, function_key, raw_name, demangled_name, path, size_bytes
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    build_id, function_key, raw_name, demangled_name, path,
+                    function_key_text_id, raw_name_text_id, demangled_name_text_id, path_text_id,
+                    size_bytes
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             )
             .map_err(|err| format!("failed to prepare function insert: {err}"))?;
         for function in &input.analysis.function_attributions {
@@ -514,13 +527,21 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
                 Some(path) => format!("{path}::{}", function.raw_name),
                 None => function.raw_name.clone(),
             };
+            let function_key_text_id = intern_text(&tx, &function_key)?;
+            let raw_name_text_id = intern_text(&tx, &function.raw_name)?;
+            let demangled_name_text_id = intern_optional_text(&tx, function.demangled_name.as_deref())?;
+            let path_text_id = intern_optional_text(&tx, function.path.as_deref())?;
             function_stmt
                 .execute(params![
                     build_id,
-                    function_key,
-                    function.raw_name,
-                    function.demangled_name,
-                    function.path,
+                    "",
+                    "",
+                    function.demangled_name.as_ref().map(|_| ""),
+                    function.path.as_ref().map(|_| ""),
+                    function_key_text_id,
+                    raw_name_text_id,
+                    demangled_name_text_id,
+                    path_text_id,
                     function.size as i64
                 ])
                 .map_err(|err| format!("failed to insert function metric: {err}"))?;
@@ -530,12 +551,23 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
     {
         let mut symbol_stmt = tx
             .prepare(
-                "INSERT INTO symbol_metrics (build_id, name, demangled_name, size_bytes) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO symbol_metrics (
+                    build_id, name, demangled_name, name_text_id, demangled_name_text_id, size_bytes
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )
             .map_err(|err| format!("failed to prepare symbol insert: {err}"))?;
         for symbol in &input.analysis.symbols {
+            let name_text_id = intern_text(&tx, &symbol.name)?;
+            let demangled_name_text_id = intern_optional_text(&tx, symbol.demangled_name.as_deref())?;
             symbol_stmt
-                .execute(params![build_id, symbol.name, symbol.demangled_name, symbol.size as i64])
+                .execute(params![
+                    build_id,
+                    "",
+                    symbol.demangled_name.as_ref().map(|_| ""),
+                    name_text_id,
+                    demangled_name_text_id,
+                    symbol.size as i64
+                ])
                 .map_err(|err| format!("failed to insert symbol metric: {err}"))?;
         }
     }
@@ -544,18 +576,28 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
         let mut why_stmt = tx
             .prepare(
                 "INSERT INTO why_linked_metrics (
-                    build_id, target, kind, confidence, summary, current_size
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    build_id, target, kind, confidence, summary,
+                    target_text_id, kind_text_id, confidence_text_id, summary_text_id,
+                    current_size
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             )
             .map_err(|err| format!("failed to prepare why-linked insert: {err}"))?;
         for record in collect_why_linked_records(&input.analysis, 20) {
+            let target_text_id = intern_text(&tx, &record.target)?;
+            let kind_text_id = intern_text(&tx, &record.kind)?;
+            let confidence_text_id = intern_text(&tx, &record.confidence)?;
+            let summary_text_id = intern_text(&tx, &record.summary)?;
             why_stmt
                 .execute(params![
                     build_id,
-                    record.target,
-                    record.kind,
-                    record.confidence,
-                    record.summary,
+                    "",
+                    "",
+                    "",
+                    "",
+                    target_text_id,
+                    kind_text_id,
+                    confidence_text_id,
+                    summary_text_id,
                     record.current_size as i64
                 ])
                 .map_err(|err| format!("failed to insert why-linked metric: {err}"))?;
@@ -565,18 +607,28 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
     {
         let mut warning_stmt = tx
             .prepare(
-                "INSERT INTO rule_results (build_id, code, level, related, message)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO rule_results (
+                    build_id, code, level, related, message,
+                    code_text_id, level_text_id, related_text_id, message_text_id
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )
             .map_err(|err| format!("failed to prepare rule insert: {err}"))?;
         for warning in &input.analysis.warnings {
+            let code_text_id = intern_text(&tx, &warning.code)?;
+            let level_text_id = intern_text(&tx, &warning.level.to_string())?;
+            let related_text_id = intern_optional_text(&tx, warning.related.as_deref())?;
+            let message_text_id = intern_text(&tx, &warning.message)?;
             warning_stmt
                 .execute(params![
                     build_id,
-                    warning.code,
-                    warning.level.to_string(),
-                    warning.related,
-                    warning.message
+                    "",
+                    "",
+                    warning.related.as_ref().map(|_| ""),
+                    "",
+                    code_text_id,
+                    level_text_id,
+                    related_text_id,
+                    message_text_id
                 ])
                 .map_err(|err| format!("failed to insert rule result: {err}"))?;
         }
@@ -585,41 +637,57 @@ pub fn record_build(db_path: &Path, input: HistoryRecordInput) -> Result<i64, St
     if let Some(rust_view) = input.analysis.rust_view.as_ref() {
         let mut rust_stmt = tx
             .prepare(
-                "INSERT INTO rust_aggregate_metrics (build_id, scope, name, size_bytes, symbol_count)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO rust_aggregate_metrics (
+                    build_id, scope, name, scope_text_id, name_text_id, size_bytes, symbol_count
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )
             .map_err(|err| format!("failed to prepare Rust aggregate insert: {err}"))?;
         for item in &rust_view.packages {
+            let scope_text_id = intern_text(&tx, "package")?;
+            let name_text_id = intern_text(&tx, &item.name)?;
             rust_stmt
-                .execute(params![build_id, "package", item.name, item.size as i64, item.symbol_count as i64])
+                .execute(params![build_id, "", "", scope_text_id, name_text_id, item.size as i64, item.symbol_count as i64])
                 .map_err(|err| format!("failed to insert Rust package aggregate: {err}"))?;
         }
         for item in &rust_view.targets {
+            let scope_text_id = intern_text(&tx, "target")?;
+            let name_text_id = intern_text(&tx, &item.name)?;
             rust_stmt
-                .execute(params![build_id, "target", item.name, item.size as i64, item.symbol_count as i64])
+                .execute(params![build_id, "", "", scope_text_id, name_text_id, item.size as i64, item.symbol_count as i64])
                 .map_err(|err| format!("failed to insert Rust target aggregate: {err}"))?;
         }
         for item in &rust_view.crates {
+            let scope_text_id = intern_text(&tx, "crate")?;
+            let name_text_id = intern_text(&tx, &item.name)?;
             rust_stmt
-                .execute(params![build_id, "crate", item.name, item.size as i64, item.symbol_count as i64])
+                .execute(params![build_id, "", "", scope_text_id, name_text_id, item.size as i64, item.symbol_count as i64])
                 .map_err(|err| format!("failed to insert Rust crate aggregate: {err}"))?;
         }
         for item in &rust_view.source_files {
+            let scope_text_id = intern_text(&tx, "source")?;
+            let name_text_id = intern_text(&tx, &item.name)?;
             rust_stmt
-                .execute(params![build_id, "source", item.name, item.size as i64, item.symbol_count as i64])
+                .execute(params![build_id, "", "", scope_text_id, name_text_id, item.size as i64, item.symbol_count as i64])
                 .map_err(|err| format!("failed to insert Rust source aggregate: {err}"))?;
         }
         for item in &rust_view.dependency_crates {
+            let scope_text_id = intern_text(&tx, "dependency")?;
+            let name_text_id = intern_text(&tx, &item.name)?;
             rust_stmt
-                .execute(params![build_id, "dependency", item.name, item.size as i64, item.symbol_count as i64])
+                .execute(params![build_id, "", "", scope_text_id, name_text_id, item.size as i64, item.symbol_count as i64])
                 .map_err(|err| format!("failed to insert Rust dependency aggregate: {err}"))?;
         }
         for item in &rust_view.grouped_families {
+            let scope = format!("family:{:?}", item.kind).to_lowercase();
+            let scope_text_id = intern_text(&tx, &scope)?;
+            let name_text_id = intern_text(&tx, &item.display_name)?;
             rust_stmt
                 .execute(params![
                     build_id,
-                    format!("family:{:?}", item.kind).to_lowercase(),
-                    item.display_name,
+                    "",
+                    "",
+                    scope_text_id,
+                    name_text_id,
                     item.size as i64,
                     item.symbol_count as i64
                 ])
@@ -767,11 +835,12 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
             .map_err(|err| format!("failed to collect region detail: {err}"))?
     };
     let top_source_files = {
+        let display_path_expr = resolved_text_expr("source_file_metrics", "display_path");
         let mut stmt = conn
-            .prepare(
-                "SELECT display_path, size_bytes, function_count, line_range_count
-                 FROM source_file_metrics WHERE build_id = ?1 ORDER BY size_bytes DESC, display_path ASC LIMIT 10",
-            )
+            .prepare(&format!(
+                "SELECT {display_path_expr}, size_bytes, function_count, line_range_count
+                 FROM source_file_metrics WHERE build_id = ?1 ORDER BY size_bytes DESC, {display_path_expr} ASC LIMIT 10",
+            ))
             .map_err(|err| format!("failed to prepare source file detail query: {err}"))?;
         let rows = stmt
             .query_map(params![build_id], |row| {
@@ -787,11 +856,14 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
             .map_err(|err| format!("failed to collect source file detail: {err}"))?
     };
     let top_functions = {
+        let demangled_name_expr = resolved_optional_text_expr("function_metrics", "demangled_name");
+        let raw_name_expr = resolved_text_expr("function_metrics", "raw_name");
+        let path_expr = resolved_optional_text_expr("function_metrics", "path");
         let mut stmt = conn
-            .prepare(
-                "SELECT COALESCE(demangled_name, raw_name), COALESCE(path, '-'), size_bytes
-                 FROM function_metrics WHERE build_id = ?1 ORDER BY size_bytes DESC, raw_name ASC LIMIT 10",
-            )
+            .prepare(&format!(
+                "SELECT COALESCE({demangled_name_expr}, {raw_name_expr}), COALESCE({path_expr}, '-'), size_bytes
+                 FROM function_metrics WHERE build_id = ?1 ORDER BY size_bytes DESC, {raw_name_expr} ASC LIMIT 10",
+            ))
             .map_err(|err| format!("failed to prepare function detail query: {err}"))?;
         let rows = stmt
             .query_map(params![build_id], |row| {
@@ -801,41 +873,20 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|err| format!("failed to collect function detail: {err}"))?
     };
-    let rust_packages = query_triple_i64(
-        &conn,
-        "SELECT name, size_bytes, symbol_count FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = 'package' ORDER BY size_bytes DESC, name ASC LIMIT 10",
-        build_id,
-    )?;
-    let rust_targets = query_triple_i64(
-        &conn,
-        "SELECT name, size_bytes, symbol_count FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = 'target' ORDER BY size_bytes DESC, name ASC LIMIT 10",
-        build_id,
-    )?;
-    let rust_crates = query_triple_i64(
-        &conn,
-        "SELECT name, size_bytes, symbol_count FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = 'crate' ORDER BY size_bytes DESC, name ASC LIMIT 10",
-        build_id,
-    )?;
-    let rust_dependencies = query_triple_i64(
-        &conn,
-        "SELECT name, size_bytes, symbol_count FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = 'dependency' ORDER BY size_bytes DESC, name ASC LIMIT 10",
-        build_id,
-    )?;
-    let rust_source_files = query_triple_i64(
-        &conn,
-        "SELECT name, size_bytes, symbol_count FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = 'source' ORDER BY size_bytes DESC, name ASC LIMIT 10",
-        build_id,
-    )?;
-    let rust_families = query_triple_i64(
-        &conn,
-        "SELECT name, size_bytes, symbol_count FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope LIKE 'family:%' ORDER BY size_bytes DESC, name ASC LIMIT 10",
-        build_id,
-    )?;
+    let rust_packages = query_rust_triples(&conn, build_id, "package", false)?;
+    let rust_targets = query_rust_triples(&conn, build_id, "target", false)?;
+    let rust_crates = query_rust_triples(&conn, build_id, "crate", false)?;
+    let rust_dependencies = query_rust_triples(&conn, build_id, "dependency", false)?;
+    let rust_source_files = query_rust_triples(&conn, build_id, "source", false)?;
+    let rust_families = query_rust_triples(&conn, build_id, "family:%", true)?;
     let warnings = {
+        let code_expr = resolved_text_expr("rule_results", "code");
+        let level_expr = resolved_text_expr("rule_results", "level");
+        let related_expr = resolved_optional_text_expr("rule_results", "related");
         let mut stmt = conn
-            .prepare(
-                "SELECT code, level, related FROM rule_results WHERE build_id = ?1 ORDER BY id ASC LIMIT 20",
-            )
+            .prepare(&format!(
+                "SELECT {code_expr}, {level_expr}, {related_expr} FROM rule_results WHERE build_id = ?1 ORDER BY id ASC LIMIT 20",
+            ))
             .map_err(|err| format!("failed to prepare rule detail query: {err}"))?;
         let rows = stmt
             .query_map(params![build_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
@@ -844,12 +895,16 @@ pub fn show_build(db_path: &Path, build_id: i64) -> Result<Option<BuildDetail>, 
             .map_err(|err| format!("failed to collect rule detail: {err}"))?
     };
     let why_linked = {
+        let target_expr = resolved_text_expr("why_linked_metrics", "target");
+        let kind_expr = resolved_text_expr("why_linked_metrics", "kind");
+        let confidence_expr = resolved_text_expr("why_linked_metrics", "confidence");
+        let summary_expr = resolved_text_expr("why_linked_metrics", "summary");
         let mut stmt = conn
-            .prepare(
-                "SELECT target, kind, confidence, summary, current_size
+            .prepare(&format!(
+                "SELECT {target_expr}, {kind_expr}, {confidence_expr}, {summary_expr}, current_size
                  FROM why_linked_metrics WHERE build_id = ?1
-                 ORDER BY current_size DESC, target ASC LIMIT 20",
-            )
+                 ORDER BY current_size DESC, {target_expr} ASC LIMIT 20",
+            ))
             .map_err(|err| format!("failed to prepare why-linked detail query: {err}"))?;
         let rows = stmt
             .query_map(params![build_id], |row| {
@@ -1570,17 +1625,20 @@ fn query_named_metric_value(
     build_id: i64,
     name: &str,
 ) -> Result<Option<i64>, String> {
-    let sql = format!(
-        "SELECT {value_column} FROM {table} WHERE build_id = ?1 AND {name_column} = ?2 LIMIT 1"
-    );
+    let name_expr = resolved_text_expr(table, name_column);
+    let sql = format!("SELECT {value_column} FROM {table} WHERE build_id = ?1 AND {name_expr} = ?2 LIMIT 1");
     conn.query_row(&sql, params![build_id, name], |row| row.get::<_, i64>(0))
         .optional()
         .map_err(|err| format!("failed to query {table} '{name}': {err}"))
 }
 
 fn query_rust_metric_value(conn: &Connection, build_id: i64, scope: &str, name: &str) -> Result<Option<i64>, String> {
+    let scope_expr = resolved_text_expr("rust_aggregate_metrics", "scope");
+    let name_expr = resolved_text_expr("rust_aggregate_metrics", "name");
     conn.query_row(
-        "SELECT size_bytes FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = ?2 AND name = ?3 LIMIT 1",
+        &format!(
+            "SELECT size_bytes FROM rust_aggregate_metrics WHERE build_id = ?1 AND {scope_expr} = ?2 AND {name_expr} = ?3 LIMIT 1"
+        ),
         params![build_id, scope, name],
         |row| row.get::<_, i64>(0),
     )
@@ -1589,8 +1647,12 @@ fn query_rust_metric_value(conn: &Connection, build_id: i64, scope: &str, name: 
 }
 
 fn query_rust_metric_value_like(conn: &Connection, build_id: i64, scope_pattern: &str, name: &str) -> Result<Option<i64>, String> {
+    let scope_expr = resolved_text_expr("rust_aggregate_metrics", "scope");
+    let name_expr = resolved_text_expr("rust_aggregate_metrics", "name");
     conn.query_row(
-        "SELECT SUM(size_bytes) FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope LIKE ?2 AND name = ?3 GROUP BY name LIMIT 1",
+        &format!(
+            "SELECT SUM(size_bytes) FROM rust_aggregate_metrics WHERE build_id = ?1 AND {scope_expr} LIKE ?2 AND {name_expr} = ?3 GROUP BY {name_expr} LIMIT 1"
+        ),
         params![build_id, scope_pattern, name],
         |row| row.get::<_, i64>(0),
     )
@@ -1808,19 +1870,21 @@ fn query_named_metric(
     format: TrendFormat,
     mode: NamedMetricMode,
 ) -> Result<Vec<TrendPoint>, String> {
+    let name_expr = resolved_text_expr(table, name_column);
+    let scope_expr = resolved_text_expr("rust_aggregate_metrics", "scope");
     let sql = match mode {
         NamedMetricMode::ByName => format!(
             "SELECT b.id, b.created_at, t.{value_column}
              FROM builds b
              JOIN {table} t ON t.build_id = b.id
-             WHERE t.{name_column} = ?1
+             WHERE {name_expr} = ?1
              ORDER BY b.id DESC LIMIT ?2"
         ),
         NamedMetricMode::ByNameAndScope(_) => format!(
             "SELECT b.id, b.created_at, t.{value_column}
              FROM builds b
              JOIN {table} t ON t.build_id = b.id
-             WHERE t.{name_column} = ?1 AND t.scope = ?2
+             WHERE {name_expr} = ?1 AND {scope_expr} = ?2
              ORDER BY b.id DESC LIMIT ?3"
         ),
     };
@@ -1862,15 +1926,17 @@ fn query_named_metric(
 }
 
 fn query_named_metric_like_scope(conn: &Connection, name: &str, scope_pattern: &str, last: usize) -> Result<Vec<TrendPoint>, String> {
+    let name_expr = resolved_text_expr("rust_aggregate_metrics", "name");
+    let scope_expr = resolved_text_expr("rust_aggregate_metrics", "scope");
     let mut stmt = conn
-        .prepare(
+        .prepare(&format!(
             "SELECT b.id, b.created_at, COALESCE(SUM(t.size_bytes), 0)
              FROM builds b
              JOIN rust_aggregate_metrics t ON t.build_id = b.id
-             WHERE t.name = ?1 AND t.scope LIKE ?2
+             WHERE {name_expr} = ?1 AND {scope_expr} LIKE ?2
              GROUP BY b.id, b.created_at
-             ORDER BY b.id DESC LIMIT ?3",
-        )
+             ORDER BY b.id DESC LIMIT ?3"
+        ))
         .map_err(|err| format!("failed to prepare Rust family trend query: {err}"))?;
     let rows = stmt
         .query_map(params![name, scope_pattern, last as i64], |row| {
@@ -1892,14 +1958,15 @@ fn query_named_metric_like_scope(conn: &Connection, name: &str, scope_pattern: &
 }
 
 fn query_directory_trend(conn: &Connection, directory: &str, last: usize) -> Result<Vec<TrendPoint>, String> {
+    let directory_expr = resolved_text_expr("source_file_metrics", "directory");
     let mut stmt = conn
-        .prepare(
+        .prepare(&format!(
             "SELECT b.id, b.created_at, COALESCE(SUM(s.size_bytes), 0)
              FROM builds b
-             LEFT JOIN source_file_metrics s ON s.build_id = b.id AND s.directory = ?1
+             LEFT JOIN source_file_metrics s ON s.build_id = b.id AND {directory_expr} = ?1
              GROUP BY b.id, b.created_at
-             ORDER BY b.id DESC LIMIT ?2",
-        )
+             ORDER BY b.id DESC LIMIT ?2"
+        ))
         .map_err(|err| format!("failed to prepare directory trend query: {err}"))?;
     let rows = stmt
         .query_map(params![directory, last as i64], |row| {
@@ -2638,7 +2705,8 @@ fn load_build_record(conn: &Connection, build_id: i64) -> Result<Option<BuildRec
 }
 
 fn load_metric_map(conn: &Connection, table: &str, name_column: &str, build_id: i64) -> Result<HashMap<String, i64>, String> {
-    let sql = format!("SELECT {name_column}, size_bytes FROM {table} WHERE build_id = ?1");
+    let name_expr = resolved_text_expr(table, name_column);
+    let sql = format!("SELECT {name_expr}, size_bytes FROM {table} WHERE build_id = ?1");
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|err| format!("failed to prepare metric query for {table}: {err}"))?;
@@ -2653,8 +2721,12 @@ fn load_metric_map(conn: &Connection, table: &str, name_column: &str, build_id: 
 }
 
 fn load_scoped_metric_map(conn: &Connection, scope: &str, build_id: i64) -> Result<HashMap<String, i64>, String> {
+    let name_expr = resolved_text_expr("rust_aggregate_metrics", "name");
+    let scope_expr = resolved_text_expr("rust_aggregate_metrics", "scope");
     let mut stmt = conn
-        .prepare("SELECT name, size_bytes FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope = ?2")
+        .prepare(&format!(
+            "SELECT {name_expr}, size_bytes FROM rust_aggregate_metrics WHERE build_id = ?1 AND {scope_expr} = ?2"
+        ))
         .map_err(|err| format!("failed to prepare scoped Rust metric query: {err}"))?;
     let rows = stmt
         .query_map(params![build_id, scope], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
@@ -2667,8 +2739,12 @@ fn load_scoped_metric_map(conn: &Connection, scope: &str, build_id: i64) -> Resu
 }
 
 fn load_like_scoped_metric_map(conn: &Connection, scope_pattern: &str, build_id: i64) -> Result<HashMap<String, i64>, String> {
+    let name_expr = resolved_text_expr("rust_aggregate_metrics", "name");
+    let scope_expr = resolved_text_expr("rust_aggregate_metrics", "scope");
     let mut stmt = conn
-        .prepare("SELECT name, SUM(size_bytes) FROM rust_aggregate_metrics WHERE build_id = ?1 AND scope LIKE ?2 GROUP BY name")
+        .prepare(&format!(
+            "SELECT {name_expr}, SUM(size_bytes) FROM rust_aggregate_metrics WHERE build_id = ?1 AND {scope_expr} LIKE ?2 GROUP BY {name_expr}"
+        ))
         .map_err(|err| format!("failed to prepare LIKE-scoped Rust metric query: {err}"))?;
     let rows = stmt
         .query_map(params![build_id, scope_pattern], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
@@ -2764,8 +2840,9 @@ fn load_rule_ids_for_build(db_path: &Path, build_id: i64) -> Result<Vec<String>,
         return Ok(Vec::new());
     }
     let conn = open_history_db(db_path)?;
+    let code_expr = resolved_text_expr("rule_results", "code");
     let mut stmt = conn
-        .prepare("SELECT code FROM rule_results WHERE build_id = ?1 ORDER BY id ASC")
+        .prepare(&format!("SELECT {code_expr} FROM rule_results WHERE build_id = ?1 ORDER BY id ASC"))
         .map_err(|err| format!("failed to prepare rule query: {err}"))?;
     let rows = stmt
         .query_map(params![build_id], |row| row.get::<_, String>(0))
@@ -2796,21 +2873,30 @@ fn query_pairs_i64(conn: &Connection, sql: &str, build_id: i64) -> Result<Vec<(S
         .map_err(|err| format!("failed to collect history pairs: {err}"))
 }
 
-fn query_triple_i64(conn: &Connection, sql: &str, build_id: i64) -> Result<Vec<(String, u64, usize)>, String> {
+fn query_rust_triples(conn: &Connection, build_id: i64, scope: &str, like_scope: bool) -> Result<Vec<(String, u64, usize)>, String> {
+    let name_expr = resolved_text_expr("rust_aggregate_metrics", "name");
+    let scope_expr = resolved_text_expr("rust_aggregate_metrics", "scope");
+    let comparator = if like_scope { "LIKE" } else { "=" };
+    let sql = format!(
+        "SELECT {name_expr}, size_bytes, symbol_count
+         FROM rust_aggregate_metrics
+         WHERE build_id = ?1 AND {scope_expr} {comparator} ?2
+         ORDER BY size_bytes DESC, {name_expr} ASC LIMIT 10"
+    );
     let mut stmt = conn
-        .prepare(sql)
-        .map_err(|err| format!("failed to prepare history triple query: {err}"))?;
+        .prepare(&sql)
+        .map_err(|err| format!("failed to prepare Rust triple query: {err}"))?;
     let rows = stmt
-        .query_map(params![build_id], |row| {
+        .query_map(params![build_id, scope], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, i64>(1)? as u64,
                 row.get::<_, i64>(2)? as usize,
             ))
         })
-        .map_err(|err| format!("failed to query history triples: {err}"))?;
+        .map_err(|err| format!("failed to query Rust triples: {err}"))?;
     rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|err| format!("failed to collect history triples: {err}"))
+        .map_err(|err| format!("failed to collect Rust triples: {err}"))
 }
 
 fn open_history_db(path: &Path) -> Result<Connection, String> {
@@ -2821,6 +2907,10 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "
         PRAGMA foreign_keys = ON;
+        CREATE TABLE IF NOT EXISTS text_pool (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            value TEXT NOT NULL UNIQUE
+        );
         CREATE TABLE IF NOT EXISTS builds (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at INTEGER NOT NULL,
@@ -2855,7 +2945,11 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             code TEXT NOT NULL,
             level TEXT NOT NULL,
             related TEXT,
-            message TEXT NOT NULL
+            message TEXT NOT NULL,
+            code_text_id INTEGER REFERENCES text_pool(id),
+            level_text_id INTEGER REFERENCES text_pool(id),
+            related_text_id INTEGER REFERENCES text_pool(id),
+            message_text_id INTEGER REFERENCES text_pool(id)
         );
         CREATE TABLE IF NOT EXISTS debug_metrics (
             build_id INTEGER PRIMARY KEY REFERENCES builds(id) ON DELETE CASCADE,
@@ -2871,6 +2965,9 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             path TEXT NOT NULL,
             display_path TEXT NOT NULL,
             directory TEXT NOT NULL,
+            path_text_id INTEGER REFERENCES text_pool(id),
+            display_path_text_id INTEGER REFERENCES text_pool(id),
+            directory_text_id INTEGER REFERENCES text_pool(id),
             size_bytes INTEGER NOT NULL,
             function_count INTEGER NOT NULL,
             line_range_count INTEGER NOT NULL
@@ -2879,6 +2976,7 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             build_id INTEGER NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
             object_path TEXT NOT NULL,
+            object_path_text_id INTEGER REFERENCES text_pool(id),
             size_bytes INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS function_metrics (
@@ -2888,6 +2986,10 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             raw_name TEXT NOT NULL,
             demangled_name TEXT,
             path TEXT,
+            function_key_text_id INTEGER REFERENCES text_pool(id),
+            raw_name_text_id INTEGER REFERENCES text_pool(id),
+            demangled_name_text_id INTEGER REFERENCES text_pool(id),
+            path_text_id INTEGER REFERENCES text_pool(id),
             size_bytes INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS symbol_metrics (
@@ -2895,6 +2997,8 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             build_id INTEGER NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
             name TEXT NOT NULL,
             demangled_name TEXT,
+            name_text_id INTEGER REFERENCES text_pool(id),
+            demangled_name_text_id INTEGER REFERENCES text_pool(id),
             size_bytes INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS why_linked_metrics (
@@ -2904,6 +3008,10 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             kind TEXT NOT NULL,
             confidence TEXT NOT NULL,
             summary TEXT NOT NULL,
+            target_text_id INTEGER REFERENCES text_pool(id),
+            kind_text_id INTEGER REFERENCES text_pool(id),
+            confidence_text_id INTEGER REFERENCES text_pool(id),
+            summary_text_id INTEGER REFERENCES text_pool(id),
             current_size INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS git_metadata (
@@ -2942,41 +3050,130 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             build_id INTEGER NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
             scope TEXT NOT NULL,
             name TEXT NOT NULL,
+            scope_text_id INTEGER REFERENCES text_pool(id),
+            name_text_id INTEGER REFERENCES text_pool(id),
             size_bytes INTEGER NOT NULL,
             symbol_count INTEGER NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_text_pool_value ON text_pool(value);
         CREATE TABLE IF NOT EXISTS schema_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-        INSERT INTO schema_meta(key, value) VALUES ('history_schema_version', '6')
+        INSERT INTO schema_meta(key, value) VALUES ('history_schema_version', '7')
         ON CONFLICT(key) DO UPDATE SET value = excluded.value;
         ",
     )
     .map_err(|err| format!("failed to initialize history database schema: {err}"))?;
     ensure_builds_column(conn, "linker_family", "TEXT NOT NULL DEFAULT 'unknown'")?;
     ensure_builds_column(conn, "map_format", "TEXT NOT NULL DEFAULT 'unknown'")?;
+    ensure_table_column(conn, "source_file_metrics", "path_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "source_file_metrics", "display_path_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "source_file_metrics", "directory_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "object_metrics", "object_path_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "function_metrics", "function_key_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "function_metrics", "raw_name_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "function_metrics", "demangled_name_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "function_metrics", "path_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "symbol_metrics", "name_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "symbol_metrics", "demangled_name_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "why_linked_metrics", "target_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "why_linked_metrics", "kind_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "why_linked_metrics", "confidence_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "why_linked_metrics", "summary_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "rule_results", "code_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "rule_results", "level_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "rule_results", "related_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "rule_results", "message_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "rust_aggregate_metrics", "scope_text_id", "INTEGER REFERENCES text_pool(id)")?;
+    ensure_table_column(conn, "rust_aggregate_metrics", "name_text_id", "INTEGER REFERENCES text_pool(id)")?;
     Ok(())
 }
 
 fn ensure_builds_column(conn: &Connection, name: &str, definition: &str) -> Result<(), String> {
+    ensure_table_column(conn, "builds", name, definition)
+}
+
+fn ensure_table_column(conn: &Connection, table: &str, name: &str, definition: &str) -> Result<(), String> {
     let mut stmt = conn
-        .prepare("PRAGMA table_info(builds)")
-        .map_err(|err| format!("failed to inspect builds schema: {err}"))?;
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|err| format!("failed to inspect {table} schema: {err}"))?;
     let columns = stmt
         .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|err| format!("failed to query builds schema: {err}"))?
+        .map_err(|err| format!("failed to query {table} schema: {err}"))?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| format!("failed to collect builds schema: {err}"))?;
+        .map_err(|err| format!("failed to collect {table} schema: {err}"))?;
     if columns.iter().any(|column| column == name) {
         return Ok(());
     }
     conn.execute(
-        &format!("ALTER TABLE builds ADD COLUMN {name} {definition}"),
+        &format!("ALTER TABLE {table} ADD COLUMN {name} {definition}"),
         [],
     )
-    .map_err(|err| format!("failed to migrate builds schema with column '{name}': {err}"))?;
+    .map_err(|err| format!("failed to migrate {table} schema with column '{name}': {err}"))?;
     Ok(())
+}
+
+fn intern_text(conn: &Connection, value: &str) -> Result<i64, String> {
+    conn.execute(
+        "INSERT INTO text_pool(value) VALUES (?1) ON CONFLICT(value) DO NOTHING",
+        params![value],
+    )
+    .map_err(|err| format!("failed to intern history text: {err}"))?;
+    conn.query_row(
+        "SELECT id FROM text_pool WHERE value = ?1",
+        params![value],
+        |row| row.get::<_, i64>(0),
+    )
+    .map_err(|err| format!("failed to resolve interned history text id: {err}"))
+}
+
+fn intern_optional_text(conn: &Connection, value: Option<&str>) -> Result<Option<i64>, String> {
+    value.map(|item| intern_text(conn, item)).transpose()
+}
+
+fn pooled_id_column(table: &str, column: &str) -> Option<&'static str> {
+    match (table, column) {
+        ("source_file_metrics", "path") => Some("path_text_id"),
+        ("source_file_metrics", "display_path") => Some("display_path_text_id"),
+        ("source_file_metrics", "directory") => Some("directory_text_id"),
+        ("object_metrics", "object_path") => Some("object_path_text_id"),
+        ("function_metrics", "function_key") => Some("function_key_text_id"),
+        ("function_metrics", "raw_name") => Some("raw_name_text_id"),
+        ("function_metrics", "demangled_name") => Some("demangled_name_text_id"),
+        ("function_metrics", "path") => Some("path_text_id"),
+        ("symbol_metrics", "name") => Some("name_text_id"),
+        ("symbol_metrics", "demangled_name") => Some("demangled_name_text_id"),
+        ("why_linked_metrics", "target") => Some("target_text_id"),
+        ("why_linked_metrics", "kind") => Some("kind_text_id"),
+        ("why_linked_metrics", "confidence") => Some("confidence_text_id"),
+        ("why_linked_metrics", "summary") => Some("summary_text_id"),
+        ("rule_results", "code") => Some("code_text_id"),
+        ("rule_results", "level") => Some("level_text_id"),
+        ("rule_results", "related") => Some("related_text_id"),
+        ("rule_results", "message") => Some("message_text_id"),
+        ("rust_aggregate_metrics", "scope") => Some("scope_text_id"),
+        ("rust_aggregate_metrics", "name") => Some("name_text_id"),
+        _ => None,
+    }
+}
+
+fn resolved_text_expr(table: &str, column: &str) -> String {
+    match pooled_id_column(table, column) {
+        Some(id_column) => format!(
+            "COALESCE(NULLIF({column}, ''), (SELECT value FROM text_pool WHERE id = {id_column}))"
+        ),
+        None => column.to_string(),
+    }
+}
+
+fn resolved_optional_text_expr(table: &str, column: &str) -> String {
+    match pooled_id_column(table, column) {
+        Some(id_column) => format!(
+            "COALESCE(NULLIF({column}, ''), (SELECT value FROM text_pool WHERE id = {id_column}))"
+        ),
+        None => column.to_string(),
+    }
 }
 
 fn parse_metadata(raw: String) -> BTreeMap<String, String> {
@@ -3095,14 +3292,18 @@ fn collect_why_linked_records(analysis: &AnalysisResult, limit: usize) -> Vec<Wh
 }
 
 fn query_why_linked_trend(conn: &Connection, target: &str, kind: &str, last: usize) -> Result<Vec<TrendPoint>, String> {
+    let target_expr = resolved_text_expr("why_linked_metrics", "target");
+    let kind_expr = resolved_text_expr("why_linked_metrics", "kind");
+    let confidence_expr = resolved_text_expr("why_linked_metrics", "confidence");
+    let summary_expr = resolved_text_expr("why_linked_metrics", "summary");
     let mut stmt = conn
-        .prepare(
-            "SELECT b.id, b.created_at, w.current_size, w.confidence, w.summary
+        .prepare(&format!(
+            "SELECT b.id, b.created_at, w.current_size, {confidence_expr}, {summary_expr}
              FROM builds b
              JOIN why_linked_metrics w ON w.build_id = b.id
-             WHERE w.target = ?1 AND w.kind = ?2
-             ORDER BY b.id DESC LIMIT ?3",
-        )
+             WHERE {target_expr} = ?1 AND {kind_expr} = ?2
+             ORDER BY b.id DESC LIMIT ?3"
+        ))
         .map_err(|err| format!("failed to prepare why-linked trend query: {err}"))?;
     let rows = stmt
         .query_map(params![target, kind, last as i64], |row| {
@@ -3406,6 +3607,308 @@ mod tests {
         assert_eq!(trend[0].value, 100);
         assert!(trend[0].note.as_deref().unwrap_or_default().contains("linked"));
         let _ = fs::remove_file(db);
+    }
+
+    #[test]
+    fn interns_repeated_history_strings_into_text_pool() {
+        let db = temp_db();
+        let mut first = sample_analysis(100, 10, 1);
+        first.source_files = vec![crate::model::SourceFile {
+            path: "src/main.cpp".to_string(),
+            display_path: "src/main.cpp".to_string(),
+            directory: "src".to_string(),
+            size: 100,
+            functions: 2,
+            line_ranges: 3,
+        }];
+        first.function_attributions = vec![crate::model::FunctionAttribution {
+            raw_name: "_Z4mainv".to_string(),
+            demangled_name: Some("main()".to_string()),
+            path: Some("src/main.cpp".to_string()),
+            size: 64,
+            ranges: Vec::new(),
+        }];
+        first.symbols = vec![SymbolInfo {
+            name: "_Z4mainv".to_string(),
+            demangled_name: Some("main()".to_string()),
+            section_name: Some(".text".to_string()),
+            object_path: Some("build/main.o".to_string()),
+            addr: 0,
+            size: 64,
+        }];
+        first.object_contributions = vec![ObjectContribution {
+            object_path: "build/main.o".to_string(),
+            source_kind: ObjectSourceKind::Object,
+            section_name: Some(".text".to_string()),
+            size: 100,
+        }];
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: first,
+                metadata: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+
+        let mut second = sample_analysis(120, 12, 1);
+        second.source_files = vec![crate::model::SourceFile {
+            path: "src/main.cpp".to_string(),
+            display_path: "src/main.cpp".to_string(),
+            directory: "src".to_string(),
+            size: 120,
+            functions: 2,
+            line_ranges: 3,
+        }];
+        second.function_attributions = vec![crate::model::FunctionAttribution {
+            raw_name: "_Z4mainv".to_string(),
+            demangled_name: Some("main()".to_string()),
+            path: Some("src/main.cpp".to_string()),
+            size: 80,
+            ranges: Vec::new(),
+        }];
+        second.symbols = vec![SymbolInfo {
+            name: "_Z4mainv".to_string(),
+            demangled_name: Some("main()".to_string()),
+            section_name: Some(".text".to_string()),
+            object_path: Some("build/main.o".to_string()),
+            addr: 0,
+            size: 80,
+        }];
+        second.object_contributions = vec![ObjectContribution {
+            object_path: "build/main.o".to_string(),
+            source_kind: ObjectSourceKind::Object,
+            section_name: Some(".text".to_string()),
+            size: 120,
+        }];
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: second,
+                metadata: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+
+        let conn = Connection::open(&db).unwrap();
+        let text_pool_size = conn
+            .query_row("SELECT COUNT(*) FROM text_pool", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+        let main_object_occurrences = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_pool WHERE value = 'build/main.o'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        let stored_object_paths = conn
+            .query_row(
+                "SELECT COUNT(*) FROM object_metrics WHERE object_path = '' AND object_path_text_id IS NOT NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert!(text_pool_size >= 4);
+        assert_eq!(main_object_occurrences, 1);
+        assert_eq!(stored_object_paths, 2);
+
+        let detail = show_build(&db, 2).unwrap().unwrap();
+        assert_eq!(detail.top_source_files[0].0, "src/main.cpp");
+        assert_eq!(detail.top_functions[0].0, "main()");
+        let symbol_trend = trend_metric(&db, "symbol:_Z4mainv.size", 10);
+        assert!(symbol_trend.is_err());
+        let source_trend = trend_metric(&db, "source:src/main.cpp", 10).unwrap();
+        assert_eq!(source_trend.len(), 2);
+        assert_eq!(source_trend[1].value, 120);
+        let _ = fs::remove_file(db);
+    }
+
+    #[test]
+    fn migrates_schema_v6_and_allows_pooled_and_legacy_rows_to_coexist() {
+        let db = temp_db();
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE builds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at INTEGER NOT NULL,
+                elf_path TEXT NOT NULL,
+                arch TEXT NOT NULL,
+                linker_family TEXT NOT NULL DEFAULT 'unknown',
+                map_format TEXT NOT NULL DEFAULT 'unknown',
+                rom_bytes INTEGER NOT NULL,
+                ram_bytes INTEGER NOT NULL,
+                warning_count INTEGER NOT NULL,
+                error_count INTEGER NOT NULL,
+                metadata_json TEXT NOT NULL
+            );
+            CREATE TABLE source_file_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                build_id INTEGER NOT NULL,
+                path TEXT NOT NULL,
+                display_path TEXT NOT NULL,
+                directory TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                function_count INTEGER NOT NULL,
+                line_range_count INTEGER NOT NULL
+            );
+            CREATE TABLE symbol_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                build_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                demangled_name TEXT,
+                size_bytes INTEGER NOT NULL
+            );
+            CREATE TABLE rule_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                build_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                level TEXT NOT NULL,
+                related TEXT,
+                message TEXT NOT NULL
+            );
+            CREATE TABLE schema_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT INTO builds (
+                id, created_at, elf_path, arch, linker_family, map_format, rom_bytes, ram_bytes, warning_count, error_count, metadata_json
+            ) VALUES (1, 1, 'legacy.elf', 'ARM', 'gnu', 'unknown', 10, 2, 1, 0, '{}');
+            INSERT INTO source_file_metrics (
+                build_id, path, display_path, directory, size_bytes, function_count, line_range_count
+            ) VALUES (1, 'src/legacy.cpp', 'src/legacy.cpp', 'src', 10, 1, 1);
+            INSERT INTO symbol_metrics (
+                build_id, name, demangled_name, size_bytes
+            ) VALUES (1, '_Z6legacyv', 'legacy()', 10);
+            INSERT INTO rule_results (
+                build_id, code, level, related, message
+            ) VALUES (1, 'LEGACY01', 'warn', NULL, 'legacy warning');
+            INSERT INTO schema_meta(key, value) VALUES ('history_schema_version', '6');
+            ",
+        )
+        .unwrap();
+        drop(conn);
+
+        let legacy_detail = show_build(&db, 1).unwrap().unwrap();
+        assert_eq!(legacy_detail.top_source_files[0].0, "src/legacy.cpp");
+        assert_eq!(legacy_detail.warnings[0].0, "LEGACY01");
+
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: sample_analysis(120, 20, 1),
+                metadata: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+
+        let builds = list_builds(&db).unwrap();
+        assert_eq!(builds.len(), 2);
+        let pooled_detail = show_build(&db, 2).unwrap().unwrap();
+        assert_eq!(pooled_detail.top_source_files[0].0, "src/main.cpp");
+        assert_eq!(pooled_detail.warnings.len(), 1);
+        let trend = trend_metric(&db, "source:src/legacy.cpp", 10).unwrap();
+        assert_eq!(trend.len(), 1);
+        assert_eq!(trend[0].value, 10);
+        let _ = fs::remove_file(db);
+    }
+
+    #[test]
+    fn pooled_strings_still_support_metric_diffs_and_regression_queries() {
+        let db = temp_db();
+        let repo = init_repo("pooled-history");
+        let commit_one = checkout_and_collect(&repo, "HEAD");
+        let mut first = analysis_for_commit(100, 20, &commit_one);
+        first.object_contributions = vec![ObjectContribution {
+            object_path: "build/main.o".to_string(),
+            source_kind: ObjectSourceKind::Object,
+            section_name: Some(".text".to_string()),
+            size: 100,
+        }];
+        first.symbols = vec![SymbolInfo {
+            name: "_Z4mainv".to_string(),
+            demangled_name: Some("main()".to_string()),
+            section_name: Some(".text".to_string()),
+            object_path: Some("build/main.o".to_string()),
+            addr: 0,
+            size: 100,
+        }];
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: first,
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+
+        fs::write(repo.join("src").join("main.cpp"), "hello 2\n").unwrap();
+        run_git(&repo, &["commit", "-am", "second commit"]);
+        let commit_two = checkout_and_collect(&repo, "HEAD");
+        let mut second = analysis_for_commit(160, 24, &commit_two);
+        second.object_contributions = vec![ObjectContribution {
+            object_path: "build/main.o".to_string(),
+            source_kind: ObjectSourceKind::Object,
+            section_name: Some(".text".to_string()),
+            size: 160,
+        }];
+        second.symbols = vec![SymbolInfo {
+            name: "_Z4mainv".to_string(),
+            demangled_name: Some("main()".to_string()),
+            section_name: Some(".text".to_string()),
+            object_path: Some("build/main.o".to_string()),
+            addr: 0,
+            size: 160,
+        }];
+        record_build(
+            &db,
+            HistoryRecordInput {
+                analysis: second,
+                metadata: metadata_for_profile("release"),
+            },
+        )
+        .unwrap();
+
+        let diff = super::build_metric_diff(&db, 2, 1).unwrap();
+        assert_eq!(diff.objects[0].name, "build/main.o");
+        assert_eq!(diff.objects[0].delta, 60);
+        assert_eq!(diff.symbols[0].name, "_Z4mainv");
+        assert_eq!(diff.symbols[0].delta, 60);
+
+        let timeline = commit_timeline(&db, Some(&repo), None, 10, Some("release"), None, None, CommitOrder::Ancestry).unwrap();
+        assert!(timeline.rows.iter().any(|row| row.rom_delta_vs_previous == Some(60)));
+
+        let range = range_diff(&db, Some(&repo), "HEAD~1..HEAD", CommitOrder::Ancestry, false, Some("release"), None, None).unwrap();
+        assert_eq!(range.analyzed_commits_count, 1);
+
+        let regression = regression_origin(
+            &db,
+            Some(&repo),
+            "HEAD~1..HEAD",
+            RegressionDetector::Entity,
+            "object:build/main.o",
+            RegressionMode::FirstPresence,
+            None,
+            None,
+            None,
+            CommitOrder::Ancestry,
+            false,
+            false,
+            false,
+            8,
+            None,
+            Some("release"),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            regression.origin.first_observed_bad.as_ref().map(|item| item.subject.as_str()),
+            Some("initial commit")
+        );
+
+        let _ = fs::remove_file(db);
+        let _ = fs::remove_dir_all(repo);
     }
 
     #[test]
