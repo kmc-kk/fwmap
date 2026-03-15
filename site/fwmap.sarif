@@ -127,7 +127,7 @@
           "level": "warning",
           "kind": "fail",
           "message": {
-            "text": "Large symbol detected: _ZN5fwmap6report6render10build_html17hac34121577da807fE (29813 bytes (29.11 KiB))"
+            "text": "Large symbol detected: _ZN5fwmap6report6render10build_html17hac34121577da807fE (30684 bytes (29.96 KiB))"
           },
           "locations": [
             {
