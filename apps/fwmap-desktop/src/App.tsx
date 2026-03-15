@@ -3,6 +3,7 @@ import { Button, Card, CardBody, CardHeader, Chip, Input, Navbar, NavbarBrand, S
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { BreakdownBarChart } from "./components/BreakdownBarChart";
+import { InspectorPanel } from "./components/InspectorPanel";
 import { MetricLineChart } from "./components/MetricLineChart";
 import {
   cancelJob,
@@ -39,6 +40,8 @@ import type {
   AnalysisRequest,
   CreateProjectRequest,
   DashboardSummary,
+  InspectorQuery,
+  InspectorSelection,
   DesktopAppInfo,
   DesktopSettings,
   ExportRequest,
@@ -63,7 +66,7 @@ import type {
   TimelineResult,
 } from "./lib/types";
 
-type ScreenKey = "dashboard" | "runs" | "diff" | "history" | "settings";
+type ScreenKey = "dashboard" | "runs" | "diff" | "history" | "inspector" | "settings";
 
 const emptyRequest: AnalysisRequest = {
   elfPath: null,
@@ -136,6 +139,23 @@ const defaultExportRequest: ExportRequest = {
   title: null,
 };
 
+
+const defaultInspectorQuery: InspectorQuery = {
+  runId: null,
+  buildId: null,
+  leftRunId: null,
+  rightRunId: null,
+  viewMode: "region-section",
+  groupBy: "section",
+  metric: "size",
+  search: null,
+  topN: 24,
+  thresholdMin: null,
+  onlyIncreased: false,
+  onlyDecreased: false,
+  debugInfoOnly: false,
+};
+
 const defaultRegressionQuery: RegressionQuery = {
   repoPath: null,
   spec: "HEAD~50..HEAD",
@@ -184,6 +204,8 @@ export default function App() {
   const [rangeResult, setRangeResult] = useState<RangeDiffResult | null>(null);
   const [regressionQuery, setRegressionQuery] = useState<RegressionQuery>(defaultRegressionQuery);
   const [regressionResult, setRegressionResult] = useState<RegressionResult | null>(null);
+  const [inspectorQuery, setInspectorQuery] = useState<InspectorQuery>(defaultInspectorQuery);
+  const [inspectorSelection, setInspectorSelection] = useState<InspectorSelection | null>(null);
   const [branches, setBranches] = useState<GitRef[]>([]);
   const [tags, setTags] = useState<GitRef[]>([]);
   const [busy, setBusy] = useState(true);
@@ -222,6 +244,8 @@ export default function App() {
       }
     } else if (first === "history") {
       setScreen("history");
+    } else if (first === "inspector") {
+      setScreen("inspector");
     } else if (first === "settings") {
       setScreen("settings");
     }
@@ -606,6 +630,44 @@ export default function App() {
     }
   }
 
+  function openRunInspector(runId: number) {
+    setInspectorQuery((current) => ({
+      ...current,
+      runId,
+      buildId: null,
+      leftRunId: null,
+      rightRunId: null,
+    }));
+    setInspectorSelection(null);
+    setScreen("inspector");
+  }
+
+  function openDiffInspector(leftRunId: number, rightRunId: number) {
+    setInspectorQuery((current) => ({
+      ...current,
+      runId: null,
+      buildId: null,
+      leftRunId,
+      rightRunId,
+      metric: "delta",
+    }));
+    setInspectorSelection(null);
+    setScreen("inspector");
+  }
+
+  function openHistoryInspector(buildId: number) {
+    setInspectorQuery((current) => ({
+      ...current,
+      runId: null,
+      buildId,
+      leftRunId: null,
+      rightRunId: null,
+      metric: "size",
+    }));
+    setInspectorSelection(null);
+    setScreen("inspector");
+  }
+
   async function chooseFile(field: keyof AnalysisRequest, directory = false) {
     const value = await open({ directory, multiple: false });
     if (typeof value === "string") {
@@ -703,6 +765,11 @@ export default function App() {
       title: "Read the timeline before a regression lands",
       description: "Filter repository history, scan commit movement, then run range and regression queries.",
     },
+    inspector: {
+      eyebrow: "Inspector",
+      title: "Investigate the build at source depth",
+      description: "Pivot the current run or diff through region, file, function, symbol, and Rust ownership views.",
+    },
     settings: {
       eyebrow: "Workspace",
       title: "Keep the desktop predictable",
@@ -735,6 +802,12 @@ export default function App() {
           { label: "Timeline", value: `${timeline?.rows.length ?? 0}`, detail: `${historyItems.length} history items matched` },
           { label: "Range", value: rangeResult ? signed(rangeResult.cumulativeRomDelta) : "Not run", detail: rangeResult ? `RAM ${signed(rangeResult.cumulativeRamDelta)}` : "Run range diff or regression from this workspace." },
         ];
+      case "inspector":
+        return [
+          { label: "View", value: inspectorQuery.viewMode, detail: inspectorQuery.groupBy },
+          { label: "Metric", value: inspectorQuery.metric, detail: inspectorQuery.runId ? `Run #${inspectorQuery.runId}` : inspectorQuery.leftRunId && inspectorQuery.rightRunId ? `Diff #${inspectorQuery.leftRunId} -> #${inspectorQuery.rightRunId}` : "Latest run" },
+          { label: "Selection", value: inspectorSelection?.kind ?? "None", detail: inspectorSelection?.stableId ?? "Choose a node from the visualization or table." },
+        ];
       case "settings":
         return [
           { label: "Active project", value: activeProjectName, detail: activeProjectState?.activeProject?.rootPath ?? "Projects keep defaults and export locations together." },
@@ -758,6 +831,13 @@ export default function App() {
     rangeResult,
     recentExports,
     runDetail,
+    inspectorQuery.groupBy,
+    inspectorQuery.metric,
+    inspectorQuery.runId,
+    inspectorQuery.leftRunId,
+    inspectorQuery.rightRunId,
+    inspectorQuery.viewMode,
+    inspectorSelection,
     runs.length,
     screen,
     selectedRunId,
@@ -793,6 +873,7 @@ export default function App() {
             <ScreenButton active={screen === "runs"} label="Runs" detail={`${runs.length} captured runs`} onPress={() => setScreen("runs")} />
             <ScreenButton active={screen === "diff"} label="Diff" detail="Compare snapshots" onPress={() => setScreen("diff")} />
             <ScreenButton active={screen === "history"} label="History" detail={`${timeline?.rows.length ?? 0} timeline rows`} onPress={() => setScreen("history")} />
+            <ScreenButton active={screen === "inspector"} label="Inspector" detail="Source-level drill-down" onPress={() => setScreen("inspector")} />
             <ScreenButton active={screen === "settings"} label="Workspace" detail="Projects, policy, exports" onPress={() => setScreen("settings")} />
           </nav>
 
@@ -879,24 +960,29 @@ export default function App() {
             <Tab key="runs" title="Runs">
               <div className="runs-layout">
                 <Card><CardHeader className="section-header">Recent Runs</CardHeader><CardBody className="list-stack">{runs.map((run) => <button key={run.runId} className={`run-row ${selectedRunId === run.runId ? "selected" : ""}`} onClick={() => setSelectedRunId(run.runId)} type="button"><div className="run-row-top"><strong>#{run.runId}</strong><Chip size="sm" variant="flat">{run.status}</Chip></div><div>{run.label || run.gitRevision || "Unnamed run"}</div><div className="run-meta"><span>{formatTime(run.createdAt)}</span><span>{formatBytes(run.romBytes)} ROM</span><span>{formatBytes(run.ramBytes)} RAM</span></div></button>)}{runs.length === 0 ? <div className="empty-state">No runs recorded yet.</div> : null}</CardBody></Card>
-                <Card><CardHeader className="section-header">Run Detail</CardHeader><CardBody className="page-stack compact-text">{runDetail ? <><div className="detail-grid"><div><strong>ELF</strong><br />{runDetail.elfPath || "-"}</div><div><strong>Arch</strong><br />{runDetail.arch || "-"}</div><div><strong>Linker</strong><br />{joinParts([runDetail.linkerFamily, runDetail.mapFormat]) || "-"}</div><div><strong>Git</strong><br />{joinParts([runDetail.run.gitRevision, runDetail.gitBranch, runDetail.gitDescribe]) || "-"}</div></div><div className="button-row"><Button size="sm" variant="flat" onPress={() => setCompareLeftRunId(runDetail.run.runId)}>Use as left</Button><Button size="sm" variant="flat" onPress={() => setCompareRightRunId(runDetail.run.runId)}>Use as right</Button><Button size="sm" color="primary" variant="flat" onPress={() => setScreen("diff")}>Open diff</Button></div><MetricList title="Top sections" items={runDetail.topSections.map(([name, value]) => ({ name, value }))} /><MetricList title="Top symbols" items={runDetail.topSymbols.map(([name, value]) => ({ name, value }))} /><div><strong>Rule warnings</strong><ul className="warning-list">{runDetail.warnings.length === 0 ? <li>No rule warnings recorded.</li> : null}{runDetail.warnings.slice(0, 8).map(([code, level, related], index) => <li key={`${code}-${index}`}>{level} / {code}{related ? ` / ${related}` : ""}</li>)}</ul></div></> : <div className="empty-state">Select a run to inspect it.</div>}</CardBody></Card>
+                <Card><CardHeader className="section-header">Run Detail</CardHeader><CardBody className="page-stack compact-text">{runDetail ? <><div className="detail-grid"><div><strong>ELF</strong><br />{runDetail.elfPath || "-"}</div><div><strong>Arch</strong><br />{runDetail.arch || "-"}</div><div><strong>Linker</strong><br />{joinParts([runDetail.linkerFamily, runDetail.mapFormat]) || "-"}</div><div><strong>Git</strong><br />{joinParts([runDetail.run.gitRevision, runDetail.gitBranch, runDetail.gitDescribe]) || "-"}</div></div><div className="button-row"><Button size="sm" variant="flat" onPress={() => setCompareLeftRunId(runDetail.run.runId)}>Use as left</Button><Button size="sm" variant="flat" onPress={() => setCompareRightRunId(runDetail.run.runId)}>Use as right</Button><Button size="sm" color="primary" variant="flat" onPress={() => setScreen("diff")}>Open diff</Button><Button size="sm" variant="flat" onPress={() => openRunInspector(runDetail.run.runId)}>Inspect run</Button></div><MetricList title="Top sections" items={runDetail.topSections.map(([name, value]) => ({ name, value }))} /><MetricList title="Top symbols" items={runDetail.topSymbols.map(([name, value]) => ({ name, value }))} /><div><strong>Rule warnings</strong><ul className="warning-list">{runDetail.warnings.length === 0 ? <li>No rule warnings recorded.</li> : null}{runDetail.warnings.slice(0, 8).map(([code, level, related], index) => <li key={`${code}-${index}`}>{level} / {code}{related ? ` / ${related}` : ""}</li>)}</ul></div></> : <div className="empty-state">Select a run to inspect it.</div>}</CardBody></Card>
               </div>
             </Tab>
 
             <Tab key="diff" title="Diff">
               <div className="page-stack">
                 <Card><CardHeader className="section-header">Run Compare</CardHeader><CardBody className="form-grid"><div><label>Left run</label><select className="native-select" value={compareLeftRunId ?? ""} onChange={(event) => setCompareLeftRunId(Number(event.target.value) || null)}>{runs.map((run) => <option key={run.runId} value={run.runId}>#{run.runId} {run.label || run.gitRevision || "run"}</option>)}</select></div><div><label>Right run</label><select className="native-select" value={compareRightRunId ?? ""} onChange={(event) => setCompareRightRunId(Number(event.target.value) || null)}>{runs.map((run) => <option key={run.runId} value={run.runId}>#{run.runId} {run.label || run.gitRevision || "run"}</option>)}</select></div><div className="button-row"><Button color="primary" isLoading={loadingCompare} onPress={() => void handleRunCompare()}>Compare runs</Button></div></CardBody></Card>
-                {compareResult ? <div className="two-column"><Card><CardHeader className="section-header">Summary</CardHeader><CardBody className="panel-stack compact-text"><div>Left: {compareResult.leftRun.label || compareResult.leftRun.gitRevision || `#${compareResult.leftRun.runId}`}</div><div>Right: {compareResult.rightRun.label || compareResult.rightRun.gitRevision || `#${compareResult.rightRun.runId}`}</div><div>ROM delta: <span className={deltaTone(compareResult.summary.romDelta)}>{signed(compareResult.summary.romDelta)}</span></div><div>RAM delta: <span className={deltaTone(compareResult.summary.ramDelta)}>{signed(compareResult.summary.ramDelta)}</span></div><div>Warning delta: <span className={deltaTone(compareResult.summary.warningDelta)}>{signed(compareResult.summary.warningDelta)}</span></div></CardBody></Card><Card><CardHeader className="section-header">Top deltas</CardHeader><CardBody className="page-stack compact-text"><DeltaList title="Sections" items={compareResult.sectionDeltas} /><DeltaList title="Objects" items={compareResult.objectDeltas} /><DeltaList title="Symbols" items={compareResult.symbolDeltas} /></CardBody></Card></div> : <div className="empty-state">Choose two runs to compare.</div>}
+                {compareResult ? <div className="two-column"><Card><CardHeader className="section-header">Summary</CardHeader><CardBody className="panel-stack compact-text"><div>Left: {compareResult.leftRun.label || compareResult.leftRun.gitRevision || `#${compareResult.leftRun.runId}`}</div><div>Right: {compareResult.rightRun.label || compareResult.rightRun.gitRevision || `#${compareResult.rightRun.runId}`}</div><div>ROM delta: <span className={deltaTone(compareResult.summary.romDelta)}>{signed(compareResult.summary.romDelta)}</span></div><div>RAM delta: <span className={deltaTone(compareResult.summary.ramDelta)}>{signed(compareResult.summary.ramDelta)}</span></div><div>Warning delta: <span className={deltaTone(compareResult.summary.warningDelta)}>{signed(compareResult.summary.warningDelta)}</span></div><div className="button-row"><Button size="sm" variant="flat" onPress={() => openDiffInspector(compareResult.leftRun.runId, compareResult.rightRun.runId)}>Inspect diff</Button></div></CardBody></Card><Card><CardHeader className="section-header">Top deltas</CardHeader><CardBody className="page-stack compact-text"><DeltaList title="Sections" items={compareResult.sectionDeltas} /><DeltaList title="Objects" items={compareResult.objectDeltas} /><DeltaList title="Symbols" items={compareResult.symbolDeltas} /></CardBody></Card></div> : <div className="empty-state">Choose two runs to compare.</div>}
               </div>
             </Tab>
 
             <Tab key="history" title="History">
               <div className="page-stack">
-                <Card><CardHeader className="section-header">Timeline Filters</CardHeader><CardBody className="form-grid"><Input label="Repo path" value={historyFilters.repoPath ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, repoPath: value || null }))} /><Input label="Branch" value={historyFilters.branch ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, branch: value || null }))} /><Input label="Profile" value={historyFilters.profile ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, profile: value || null }))} /><Input label="Target" value={historyFilters.target ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, target: value || null }))} /><div><label>Order</label><select className="native-select" value={historyFilters.order ?? "ancestry"} onChange={(event) => setHistoryFilters((current) => ({ ...current, order: event.target.value as "ancestry" | "timestamp" }))}><option value="ancestry">ancestry</option><option value="timestamp">timestamp</option></select></div><div className="button-row"><Button variant="flat" onPress={() => void refreshGitRefs(historyFilters.repoPath ?? settings.defaultGitRepoPath)}>Refresh refs</Button><Button color="primary" isLoading={loadingHistory} onPress={() => void Promise.all([refreshHistory(historyFilters), refreshTimeline(historyFilters), refreshDashboard(historyFilters)])}>Load timeline</Button></div></CardBody></Card>
+                <Card><CardHeader className="section-header">Timeline Filters</CardHeader><CardBody className="form-grid"><Input label="Repo path" value={historyFilters.repoPath ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, repoPath: value || null }))} /><Input label="Branch" value={historyFilters.branch ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, branch: value || null }))} /><Input label="Profile" value={historyFilters.profile ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, profile: value || null }))} /><Input label="Target" value={historyFilters.target ?? ""} onValueChange={(value) => setHistoryFilters((current) => ({ ...current, target: value || null }))} /><div><label>Order</label><select className="native-select" value={historyFilters.order ?? "ancestry"} onChange={(event) => setHistoryFilters((current) => ({ ...current, order: event.target.value as "ancestry" | "timestamp" }))}><option value="ancestry">ancestry</option><option value="timestamp">timestamp</option></select></div><div className="button-row"><Button variant="flat" onPress={() => void refreshGitRefs(historyFilters.repoPath ?? settings.defaultGitRepoPath)}>Refresh refs</Button><Button color="primary" isLoading={loadingHistory} onPress={() => void Promise.all([refreshHistory(historyFilters), refreshTimeline(historyFilters), refreshDashboard(historyFilters)])}>Load timeline</Button><Button variant="flat" onPress={() => { const buildId = historyItems[0]?.buildId; if (buildId) openHistoryInspector(buildId); }}>Inspect latest</Button></div></CardBody></Card>
                 <div className="three-column"><Card><CardHeader className="section-header">Available branches</CardHeader><CardBody className="compact-text badge-column">{branches.length === 0 ? <div>-</div> : branches.map((item) => <button key={item.name} className="chip-button" type="button" onClick={() => setHistoryFilters((current) => ({ ...current, branch: item.name }))}>{item.name}</button>)}</CardBody></Card><Card><CardHeader className="section-header">Available tags</CardHeader><CardBody className="compact-text badge-column">{tags.length === 0 ? <div>-</div> : tags.map((item) => <span key={item.name} className="chip-static">{item.name}</span>)}</CardBody></Card><Card><CardHeader className="section-header">History items</CardHeader><CardBody className="compact-text"><div>{historyItems.length} builds matched</div><div>{timeline?.rows.length ?? 0} timeline rows ready</div></CardBody></Card></div>
                 <Card><CardHeader className="section-header">Commit Timeline</CardHeader><CardBody>{loadingHistory ? <div className="loading-state"><Spinner label="Loading history" /></div> : timeline && timeline.rows.length > 0 ? <table className="data-table"><thead><tr><th>Commit</th><th>Subject</th><th>ROM</th><th>RAM</th><th>ROM delta</th><th>RAM delta</th></tr></thead><tbody>{timeline.rows.slice(0, 12).map((row) => <tr key={row.commit}><td>{row.shortCommit}</td><td>{row.subject}</td><td>{formatBytes(row.romTotal)}</td><td>{formatBytes(row.ramTotal)}</td><td><span className={deltaTone(row.romDeltaVsPrevious)}>{signedOrDash(row.romDeltaVsPrevious)}</span></td><td><span className={deltaTone(row.ramDeltaVsPrevious)}>{signedOrDash(row.ramDeltaVsPrevious)}</span></td></tr>)}</tbody></table> : <div className="empty-state">Load the timeline to inspect commit history.</div>}</CardBody></Card>
                 <div className="two-column"><Card><CardHeader className="section-header">Range Diff</CardHeader><CardBody className="panel-stack"><Input label="Range spec" value={rangeQuery.spec} onValueChange={(value) => setRangeQuery((current) => ({ ...current, spec: value }))} /><div><label>Order</label><select className="native-select" value={rangeQuery.order ?? "ancestry"} onChange={(event) => setRangeQuery((current) => ({ ...current, order: event.target.value as "ancestry" | "timestamp" }))}><option value="ancestry">ancestry</option><option value="timestamp">timestamp</option></select></div><Button color="primary" isLoading={loadingRange} onPress={() => void handleRangeDiff()}>Run range diff</Button>{rangeResult ? <div className="compact-text"><div>ROM: <span className={deltaTone(rangeResult.cumulativeRomDelta)}>{signed(rangeResult.cumulativeRomDelta)}</span></div><div>RAM: <span className={deltaTone(rangeResult.cumulativeRamDelta)}>{signed(rangeResult.cumulativeRamDelta)}</span></div><div>Worst commit: {rangeResult.worstCommitByRom?.commit ?? "-"}</div><DeltaList title="Changed sections" items={rangeResult.topChangedSections} /></div> : null}</CardBody></Card><Card><CardHeader className="section-header">Regression</CardHeader><CardBody className="panel-stack"><Input label="Metric / rule / entity key" value={regressionQuery.key} onValueChange={(value) => setRegressionQuery((current) => ({ ...current, key: value }))} /><Input label="Range spec" value={regressionQuery.spec} onValueChange={(value) => setRegressionQuery((current) => ({ ...current, spec: value }))} /><div className="form-grid-inline"><div><label>Detector</label><select className="native-select" value={regressionQuery.detectorType} onChange={(event) => setRegressionQuery((current) => ({ ...current, detectorType: event.target.value as RegressionQuery["detectorType"] }))}><option value="metric">metric</option><option value="rule">rule</option><option value="entity">entity</option></select></div><div><label>Mode</label><select className="native-select" value={regressionQuery.mode} onChange={(event) => setRegressionQuery((current) => ({ ...current, mode: event.target.value as RegressionQuery["mode"] }))}><option value="first-crossing">first-crossing</option><option value="first-jump">first-jump</option><option value="first-presence">first-presence</option><option value="first-violation">first-violation</option></select></div><div><label>Threshold</label><input className="native-select" value={regressionQuery.threshold ?? ""} onChange={(event) => setRegressionQuery((current) => ({ ...current, threshold: event.target.value ? Number(event.target.value) : null }))} /></div></div><Button color="primary" isLoading={loadingRegression} onPress={() => void handleRegression()}>Detect regression</Button>{regressionResult ? <div className="compact-text"><div>Confidence: {regressionResult.confidence}</div><div>Last good: {regressionResult.lastGood?.shortCommit ?? "-"}</div><div>First bad: {regressionResult.firstObservedBad?.shortCommit ?? "-"}</div><div>{regressionResult.reasoning}</div></div> : null}</CardBody></Card></div>
               </div>
+            </Tab>
+
+
+            <Tab key="inspector" title="Inspector">
+              <InspectorPanel query={inspectorQuery} onQueryChange={setInspectorQuery} selection={inspectorSelection} onSelectionChange={setInspectorSelection} />
             </Tab>
 
             <Tab key="settings" title="Settings">

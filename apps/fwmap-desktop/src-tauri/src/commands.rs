@@ -3,10 +3,10 @@ use tauri::{AppHandle, State};
 use crate::dto::{
     ActiveProjectStateDto, AnalysisRequestDto, CreateProjectRequestDto, DashboardQueryDto, DashboardSummaryDto,
     DesktopAppInfo, DesktopSettingsDto, ExportRequestDto, ExportResultDto, GitRefDto, HistoryItemDto,
-    HistoryQueryDto, JobStatusDto, PolicyDocumentDto, PolicyValidationResultDto, ProjectDetailDto,
+    HistoryQueryDto, InspectorBreakdownDto, InspectorDetailDto, InspectorHierarchyNodeDto, InspectorQueryDto, InspectorSelectionDto, InspectorSummaryDto, JobStatusDto, PolicyDocumentDto, PolicyValidationResultDto, ProjectDetailDto,
     ProjectSummaryDto, RangeDiffQueryDto, RangeDiffResultDto, RecentExportDto, RegressionQueryDto,
     RegressionResultDto, RunCompareRequestDto, RunCompareResultDto, RunDetailDto, RunSummaryDto,
-    TimelineResultDto, UpdateProjectRequestDto,
+    SourceContextDto, TimelineResultDto, UpdateProjectRequestDto,
 };
 use crate::service::DesktopState;
 
@@ -143,4 +143,38 @@ pub fn desktop_list_branches(state: State<'_, DesktopState>, repo_path: Option<S
 #[tauri::command]
 pub fn desktop_list_tags(state: State<'_, DesktopState>, repo_path: Option<String>) -> Result<Vec<GitRefDto>, String> {
     state.list_tags(repo_path)
+}
+
+
+#[tauri::command]
+pub fn desktop_get_inspector_summary(state: State<'_, DesktopState>, query: InspectorQueryDto) -> Result<InspectorSummaryDto, String> {
+    state.get_inspector_summary(query)
+}
+
+#[tauri::command]
+pub fn desktop_get_inspector_breakdown(state: State<'_, DesktopState>, query: InspectorQueryDto) -> Result<InspectorBreakdownDto, String> {
+    state.get_inspector_breakdown(query)
+}
+
+#[tauri::command]
+pub fn desktop_get_inspector_hierarchy(state: State<'_, DesktopState>, query: InspectorQueryDto) -> Result<Vec<InspectorHierarchyNodeDto>, String> {
+    state.get_inspector_hierarchy(query)
+}
+
+#[tauri::command]
+pub fn desktop_get_inspector_detail(
+    state: State<'_, DesktopState>,
+    query: InspectorQueryDto,
+    selection: InspectorSelectionDto,
+) -> Result<InspectorDetailDto, String> {
+    state.get_inspector_detail(query, selection)
+}
+
+#[tauri::command]
+pub fn desktop_get_source_context(
+    state: State<'_, DesktopState>,
+    query: InspectorQueryDto,
+    selection: InspectorSelectionDto,
+) -> Result<SourceContextDto, String> {
+    state.get_source_context(query, selection)
 }

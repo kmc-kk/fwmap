@@ -446,3 +446,92 @@ export type RecentExport = {
   destinationPath: string;
   title: string;
 };
+
+
+export type InspectorQuery = {
+  runId?: number | null;
+  buildId?: number | null;
+  leftRunId?: number | null;
+  rightRunId?: number | null;
+  viewMode: "region-section" | "source-file" | "function-symbol" | "crate-dependency";
+  groupBy: "region" | "section" | "file" | "directory" | "function" | "symbol" | "crate" | "dependency";
+  metric: "size" | "delta";
+  search?: string | null;
+  topN?: number | null;
+  thresholdMin?: number | null;
+  onlyIncreased?: boolean | null;
+  onlyDecreased?: boolean | null;
+  debugInfoOnly?: boolean | null;
+};
+
+export type InspectorSelection = {
+  stableId: string;
+  kind: string;
+};
+
+export type InspectorSummary = {
+  contextLabel: string;
+  sourceKind: string;
+  entityCount: number;
+  totalSizeBytes: number;
+  totalDeltaBytes: number;
+  debugInfoAvailable: boolean;
+  availableViews: string[];
+  availableVisualizations: string[];
+};
+
+export type InspectorItem = {
+  stableId: string;
+  displayLabel: string;
+  rawLabel: string;
+  kind: string;
+  sizeBytes: number;
+  deltaBytes: number;
+  percentage: number;
+  parentId: string | null;
+  hasChildren: boolean;
+  sourceAvailable: boolean;
+  metadata: Record<string, string>;
+};
+
+export type InspectorBreakdown = {
+  query: InspectorQuery;
+  items: InspectorItem[];
+};
+
+export type InspectorHierarchyNode = {
+  stableId: string;
+  label: string;
+  kind: string;
+  sizeBytes: number;
+  deltaBytes: number;
+  percentage: number;
+  sourceAvailable: boolean;
+  children: InspectorHierarchyNode[];
+};
+
+export type InspectorDetail = {
+  stableId: string;
+  label: string;
+  kind: string;
+  sizeBytes: number;
+  deltaBytes: number;
+  parentLabel: string | null;
+  sourceAvailable: boolean;
+  metadata: Record<string, string>;
+  relatedRuleViolations: string[];
+  relatedRegressionEvidence: string[];
+};
+
+export type SourceContext = {
+  path: string | null;
+  functionName: string | null;
+  lineStart: number | null;
+  lineEnd: number | null;
+  excerpt: string | null;
+  compileUnit: string | null;
+  crateName: string | null;
+  relatedSections: string[];
+  relatedRegions: string[];
+  availabilityReason: string | null;
+};

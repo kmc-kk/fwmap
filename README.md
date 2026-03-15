@@ -45,7 +45,7 @@ Run the full test suite:
 cargo test
 ```
 
-## Desktop App (Phase D1)
+## Desktop App
 
 A first Tauri desktop shell now lives under `apps/fwmap-desktop/`. It keeps the existing Rust core as the analysis source of truth and adds a local GUI for file picking, job status, recent runs, run detail, and desktop settings.
 
@@ -76,12 +76,13 @@ cd apps/fwmap-desktop
 npm run build
 ```
 
-Desktop support now covers two layers:
+The desktop app now covers the full local workflow:
 
-- Phase D1: start analysis jobs, track job state, persist settings, and inspect recent runs
-- Phase D2: inspect history timeline, compare two recorded runs, query git-aware range diffs, and surface regression-origin results
-- Phase D3: use a visual dashboard with trend charts, top growth contributors, region usage, and recent regression cards
-- Phase D4: manage desktop projects, edit policy files, and export dashboard/run/history snapshots
+- start analysis jobs, track progress, and review recent runs
+- inspect commit timelines, compare recorded runs, and query git-aware history
+- monitor ROM/RAM and warning trends in a visual dashboard
+- manage reusable projects, policy files, and export destinations
+- drill into regions, files, functions, symbols, crates, and dependencies from the Inspector
 
 Desktop capabilities currently available:
 
