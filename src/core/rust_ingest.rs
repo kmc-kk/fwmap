@@ -358,11 +358,7 @@ fn filter_candidates(candidates: &[RustArtifactCandidate], inputs: &RustInputs) 
                         .target_triple
                         .as_deref()
                         .map(|triple| triple == value)
-                        .unwrap_or_else(|| {
-                            candidate_paths(candidate)
-                                .iter()
-                                .any(|path| normalize_path_string(path).contains(value))
-                        })
+                        .unwrap_or(true)
                 })
                 .unwrap_or(true)
         })
@@ -830,6 +826,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resolved.resolved_elf.unwrap(), explicit);
+    }
+
+    #[test]
+    fn target_triple_filter_keeps_host_target_candidates_when_triple_is_unknown() {
+        let dir = std::env::temp_dir().join("fwmap-rust-host-triple");
+        let _ = fs::create_dir_all(&dir);
+        let build_json = dir.join("build.jsonl");
+        fs::write(&build_json, fixture("single_crate_build.jsonl").replace("/workspace/fwmap", &normalize(&dir))).unwrap();
+        let resolved = resolve_rust_inputs(
+            None,
+            &RustInputs {
+                cargo_build_json: Some(build_json),
+                cargo_target_name: Some("fwmap".to_string()),
+                cargo_target_triple: Some("x86_64-unknown-linux-gnu".to_string()),
+                resolve_artifact: ResolveRustArtifactMode::Auto,
+                ..RustInputs::default()
+            },
+        )
+        .unwrap();
+        assert!(resolved.resolved_elf.unwrap().ends_with("fwmap"));
     }
 
     #[test]

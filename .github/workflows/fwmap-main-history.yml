@@ -74,6 +74,7 @@ jobs:
       - name: Run fwmap analyze and save history
         run: |
           ANALYZE_ARGS=(
+            --elf build/fwmap.elf
             --cargo-build-json build/cargo-build.jsonl
             --cargo-metadata build/cargo-metadata.json
             --cargo-package fwmap
