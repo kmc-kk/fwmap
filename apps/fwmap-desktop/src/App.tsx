@@ -11,12 +11,21 @@ import { InspectorPanel } from "./components/InspectorPanel";
 import { MetricLineChart } from "./components/MetricLineChart";
 import { parseDesktopRoute, buildDesktopHash, type InvestigationWorkspaceTab } from "./app/routes";
 import { FwCommandPalette } from "./ui/overlays/FwCommandPalette";
+import { FwAppShell } from "./ui/shell/FwAppShell";
+import { FwSidebar } from "./ui/shell/FwSidebar";
+import { FwTopToolbar } from "./ui/shell/FwTopToolbar";
 import { FwSearchField } from "./ui/forms/FwSearchField";
 import { FwFilterBar } from "./ui/forms/FwFilterBar";
 import { FwLoadingState } from "./ui/feedback/FwLoadingState";
 import { FwErrorState } from "./ui/feedback/FwErrorState";
 import { FwTimeline } from "./ui/workspace/FwTimeline";
 import { FwVerdictEditor } from "./ui/workspace/FwVerdictEditor";
+import { FwDetailHeader } from "./ui/workspace/FwDetailHeader";
+import { FwSplitWorkspace } from "./ui/workspace/FwSplitWorkspace";
+import { HomePage } from "./screens/HomePage";
+import { InvestigationsPage } from "./screens/InvestigationsPage";
+import { ComparePage } from "./screens/ComparePage";
+import { PackagesPage } from "./screens/PackagesPage";
 import {
   addInvestigationEvidence,
   addInvestigationNote,
@@ -1437,6 +1446,116 @@ export default function App() {
       description: "Manage project defaults, policies, and export destinations without losing local context.",
     },
   };
+  function renderInvestigationWorkspacePrimary() {
+    if (!investigationDetail) {
+      return <FwEmptyState title="No investigation selected" detail="Select an investigation from the list, or create one from the current diff." />;
+    }
+
+    switch (investigationWorkspaceTab) {
+      case "overview":
+        return (
+          <FwInspectorPanel title="Overview" subtitle="Quiet summary for the current case.">
+            <div className="three-column package-summary-grid">
+              <article className="metric-slab plugin-slab"><div className="metric-slab-label">Evidence</div><div className="metric-slab-value">{investigationDetail.evidence.length}</div><p>Pinned references and snapshots.</p></article>
+              <article className="metric-slab plugin-slab"><div className="metric-slab-label">Notes</div><div className="metric-slab-value">{investigationDetail.notes.length}</div><p>Working context and follow-ups.</p></article>
+              <article className="metric-slab plugin-slab"><div className="metric-slab-label">Verdict</div><div className="metric-slab-value">{investigationDetail.verdict?.verdictType ?? "unset"}</div><p>{investigationDetail.verdict?.summary ?? "No structured conclusion yet."}</p></article>
+            </div>
+          </FwInspectorPanel>
+        );
+      case "evidence":
+        return (
+          <FwInspectorPanel title="Evidence" subtitle="Stable references with snapshots captured from diff, regression, or inspector views.">
+            <div className="button-row compact-wrap">
+              <Button size="sm" variant="flat" onPress={() => void handlePinRegressionEvidence()} isDisabled={!regressionResult}>Pin regression</Button>
+              <Button size="sm" variant="flat" onPress={() => void handlePinInspectorEvidence()} isDisabled={!inspectorSelection}>Pin inspector item</Button>
+            </div>
+            {investigationDetail.evidence.length > 0 ? (
+              <FwDataTable columns={[{ key: "type", label: "Type" }, { key: "title", label: "Title" }, { key: "delta", label: "Delta" }, { key: "severity", label: "Severity" }, { key: "source", label: "Source" }, { key: "added", label: "Added" }, { key: "action", label: "" }]}>
+                {investigationDetail.evidence.map((item) => (
+                  <tr key={item.evidenceId}>
+                    <td>{item.evidenceType}</td>
+                    <td>{item.title}</td>
+                    <td className={deltaTone(item.delta)}>{signedOrDash(item.delta)}</td>
+                    <td><Chip size="sm" variant="flat">{item.severity}</Chip></td>
+                    <td>{item.sourceView}</td>
+                    <td>{formatTime(item.createdAt)}</td>
+                    <td><Button size="sm" variant="light" onPress={() => void handleRemoveInvestigationEvidence(item.evidenceId)}>Remove</Button></td>
+                  </tr>
+                ))}
+              </FwDataTable>
+            ) : <FwEmptyState title="No evidence pinned" detail="Pin section diffs, regression candidates, or inspector items to build the case." />}
+          </FwInspectorPanel>
+        );
+      case "compare":
+        return (
+          <FwInspectorPanel title="Compare context" subtitle="Carry the current baseline and target through evidence pinning.">
+            <div className="detail-grid">
+              <div><strong>Baseline</strong><br />{investigationDetail.summary.baselineRef.label}</div>
+              <div><strong>Target</strong><br />{investigationDetail.summary.targetRef.label}</div>
+            </div>
+            <div className="button-row compact-wrap">
+              <Button variant="flat" onPress={() => setScreen("diff")}>Open compare view</Button>
+              <Button variant="flat" onPress={() => setInvestigationDraft((current) => ({ ...current, baselineRef: buildRunRef(compareLeftRunId), targetRef: buildRunRef(compareRightRunId || selectedRunId) }))}>Refresh from current diff</Button>
+            </div>
+            {compareResult ? <DeltaList title="Top symbols" items={compareResult.symbolDeltas} /> : <FwEmptyState title="No compare result loaded" detail="Run a compare to review concrete deltas in this case." />}
+          </FwInspectorPanel>
+        );
+      case "timeline":
+        return (
+          <FwInspectorPanel title="Timeline" subtitle="The investigation keeps a readable log of what changed and why.">
+            {investigationDetail.timeline.length > 0 ? <FwTimeline events={investigationDetail.timeline} /> : <FwEmptyState title="No timeline events yet" detail="Events appear automatically as you pin evidence, add notes, and export packages." />}
+          </FwInspectorPanel>
+        );
+      case "verdict":
+        return (
+          <FwInspectorPanel title="Verdict" subtitle="Store the current conclusion and what still needs follow-up.">
+            <FwVerdictEditor value={investigationVerdictDraft} onChange={setInvestigationVerdictDraft} onSave={() => void handleSaveInvestigationVerdict()} />
+          </FwInspectorPanel>
+        );
+      case "package":
+        return (
+          <FwInspectorPanel title="Notes and package" subtitle="Capture working notes, then export a shareable bundle for someone else to reopen.">
+            <Textarea minRows={4} label="Add note" value={investigationNoteDraft} onValueChange={setInvestigationNoteDraft} />
+            <div className="button-row compact-wrap">
+              <Button variant="flat" onPress={() => void handleAddInvestigationNote()}>Add note</Button>
+              <Button variant="flat" onPress={() => void choosePackageDestination()}>Choose package folder</Button>
+            </div>
+            <Input label="Package name" value={investigationExportDraft.packageName} onValueChange={(value) => setInvestigationExportDraft((current) => ({ ...current, packageName: value }))} />
+            <Input label="Destination" value={investigationExportDraft.destinationPath} onValueChange={(value) => setInvestigationExportDraft((current) => ({ ...current, destinationPath: value }))} />
+            <div className="badge-row compact-wrap">
+              <button type="button" className={`chip-button ${investigationExportDraft.includeNotes ? "active-chip" : ""}`} onClick={() => setInvestigationExportDraft((current) => ({ ...current, includeNotes: !current.includeNotes }))}>notes</button>
+              <button type="button" className={`chip-button ${investigationExportDraft.includeTimeline ? "active-chip" : ""}`} onClick={() => setInvestigationExportDraft((current) => ({ ...current, includeTimeline: !current.includeTimeline }))}>timeline</button>
+              <button type="button" className={`chip-button ${investigationExportDraft.includeVerdict ? "active-chip" : ""}`} onClick={() => setInvestigationExportDraft((current) => ({ ...current, includeVerdict: !current.includeVerdict }))}>verdict</button>
+              <button type="button" className={`chip-button ${investigationExportDraft.includeEvidenceSnapshots ? "active-chip" : ""}`} onClick={() => setInvestigationExportDraft((current) => ({ ...current, includeEvidenceSnapshots: !current.includeEvidenceSnapshots }))}>evidence</button>
+            </div>
+            <Button color="primary" isLoading={packaging} onPress={() => void handleExportSelectedInvestigationPackage()}>Export package</Button>
+            {investigationDetail.notes.length > 0 ? <ul className="warning-list">{investigationDetail.notes.map((item) => <li key={item.noteId}>{item.body}</li>)}</ul> : null}
+          </FwInspectorPanel>
+        );
+    }
+  }
+
+  function renderInvestigationWorkspaceInspector() {
+    if (!investigationDetail) {
+      return <FwEmptyState title="No case summary" detail="Select a case to inspect its current baseline, target, and activity." />;
+    }
+
+    return (
+      <FwInspectorPanel title="Case summary" subtitle="The workspace keeps the current case readable while you switch tabs.">
+        <div className="panel-stack compact-text">
+          <div><strong>Baseline</strong><br />{investigationDetail.summary.baselineRef.label}</div>
+          <div><strong>Target</strong><br />{investigationDetail.summary.targetRef.label}</div>
+          <div><strong>Status</strong><br />{investigationDetail.summary.status}</div>
+          <div><strong>Packages</strong><br />{investigationDetail.packageExports.length} exports</div>
+          <div className="button-row compact-wrap">
+            <Button size="sm" variant="flat" onPress={() => setInvestigationWorkspaceTab("overview")}>Overview</Button>
+            <Button size="sm" variant="flat" onPress={() => setInvestigationWorkspaceTab("package")}>Package</Button>
+          </div>
+        </div>
+      </FwInspectorPanel>
+    );
+  }
+
   const stageMetrics = useMemo(() => {
     switch (screen) {
       case "dashboard":
@@ -1534,103 +1653,117 @@ export default function App() {
   ]);
 
   return (
-    <div className="app-shell">
-      <Navbar maxWidth="full" className="topbar">
-        <NavbarBrand>
-          <div>
-            <div className="brand-title">fwmap desktop</div>
-            <div className="brand-subtitle">Visual dashboard for binary size, history, and regressions</div>
-          </div>
-        </NavbarBrand>
-        <div className="topbar-meta">
-          <Button size="sm" variant="flat" onPress={() => setCommandPaletteOpen(true)}>Search / Jump</Button>
-          <Chip variant="flat">CLI {appInfo?.cliVersion ?? "-"}</Chip>
-          <Chip variant="flat">History {timeline?.repoId ? "git-aware" : "local"}</Chip>
-        </div>
-      </Navbar>
-
-      <div className="app-grid wide workstation-shell">
-        <aside className="sidebar operation-rail">
-          <section className="rail-brand">
-            <div className="rail-kicker">Command deck</div>
-            <h2>fwmap studio</h2>
-            <p>One place to start analysis, scan history, and keep local policy and exports aligned.</p>
-          </section>
-
-          <nav className="rail-nav" aria-label="Primary screens">
-            <ScreenButton active={screen === "dashboard"} label="Dashboard" detail="Live size posture" onPress={() => setScreen("dashboard")} />
-            <ScreenButton active={screen === "investigations"} label="Investigations" detail={`${investigations.length} saved cases`} onPress={() => setScreen("investigations")} />
-            <ScreenButton active={screen === "runs"} label="Runs" detail={`${runs.length} captured runs`} onPress={() => setScreen("runs")} />
-            <ScreenButton active={screen === "diff"} label="Diff" detail="Compare snapshots" onPress={() => setScreen("diff")} />
-            <ScreenButton active={screen === "history"} label="History" detail={`${timeline?.rows.length ?? 0} timeline rows`} onPress={() => setScreen("history")} />
-            <ScreenButton active={screen === "inspector"} label="Inspector" detail="Source-level drill-down" onPress={() => setScreen("inspector")} />
-            <ScreenButton active={screen === "plugins"} label="Plugins" detail={`${plugins.filter((item) => item.enabled).length} active plugins`} onPress={() => setScreen("plugins")} />
-            <ScreenButton active={screen === "packages"} label="Packages" detail={`${recentPackages.length} recent bundles`} onPress={() => setScreen("packages")} />
-            <ScreenButton active={screen === "settings"} label="Workspace" detail="Projects, policy, exports" onPress={() => setScreen("settings")} />
-          </nav>
-
-          <Card className="sidebar-card action-panel compact-action-panel">
-            <CardHeader className="section-header">Start analysis</CardHeader>
-            <CardBody className="panel-stack compact-panel-stack">
-              <div className="compact-input-row"><Input label="ELF path" value={request.elfPath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, elfPath: value || null }))} /><Button size="sm" variant="flat" onPress={() => void chooseFile("elfPath")}>Browse</Button></div>
-              <div className="compact-input-row"><Input label="Map path" value={request.mapPath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, mapPath: value || null }))} /><Button size="sm" variant="flat" onPress={() => void chooseFile("mapPath")}>Browse</Button></div>
-              <div className="compact-input-row"><Input label="Rule file" value={request.ruleFilePath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, ruleFilePath: value || null }))} /><Button size="sm" variant="flat" onPress={() => void chooseFile("ruleFilePath")}>Browse</Button></div>
-              <div className="compact-input-row"><Input label="Git repo" value={request.gitRepoPath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, gitRepoPath: value || null }))} /><Button size="sm" variant="flat" onPress={() => void chooseFile("gitRepoPath", true)}>Browse</Button></div>
-              <Input label="Run label" value={request.label ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, label: value || null }))} />
-              <div className="button-row">
-                <Button color="primary" isLoading={starting} onPress={() => void handleStartAnalysis()}>Analyze build</Button>
-                <Button variant="bordered" isDisabled={!job} onPress={() => void handleCancelJob()}>Stop job</Button>
-              </div>
-            </CardBody>
-          </Card>
-
-          <Card className="sidebar-card muted-card">
-            <CardHeader className="section-header">Repository context</CardHeader>
-            <CardBody className="panel-stack compact-text">
-              <div>Active project</div>
-              <div className="rail-context-value">{activeProjectName}</div>
-              <div className="rail-context-copy">{activeProjectState?.activeProject?.rootPath ?? "Choose a project in Workspace to reuse defaults."}</div>
-              <div>Default repo</div>
-              <code>{settings.defaultGitRepoPath ?? "-"}</code>
-              <div className="badge-row">
-                {loadingRefs ? <Chip size="sm">loading refs</Chip> : null}
-                {branches.slice(0, 4).map((item) => <Chip key={item.name} size="sm" variant="flat">{item.name}</Chip>)}
-              </div>
-              <div className="badge-row">
-                {tags.slice(0, 4).map((item) => <Chip key={item.name} size="sm" variant="flat">{item.name}</Chip>)}
-              </div>
-            </CardBody>
-          </Card>
-        </aside>
-
-        <main className="content studio-stage">
-          <section className="stage-banner compact-stage-banner">
-            <div className="stage-banner-copy">
-              <div className="dashboard-kicker">{screenMeta[screen].eyebrow}</div>
-              <h1>{screenMeta[screen].title}</h1>
-              <p>{screenMeta[screen].description}</p>
+    <FwAppShell
+      topbar={(
+        <Navbar maxWidth="full" className="topbar">
+          <NavbarBrand>
+            <div>
+              <div className="brand-title">fwmap desktop</div>
+              <div className="brand-subtitle">Visual dashboard for binary size, history, and regressions</div>
             </div>
-            <div className="hero-chip-row compact-hero-chip-row">
+          </NavbarBrand>
+          <div className="topbar-meta">
+            <Button size="sm" variant="flat" onPress={() => setCommandPaletteOpen(true)}>Search / Jump</Button>
+            <Chip variant="flat">CLI {appInfo?.cliVersion ?? "-"}</Chip>
+            <Chip variant="flat">History {timeline?.repoId ? "git-aware" : "local"}</Chip>
+          </div>
+        </Navbar>
+      )}
+      sidebar={(
+        <FwSidebar
+          brand={(
+            <>
+              <div className="rail-kicker">Command deck</div>
+              <h2>fwmap studio</h2>
+              <p>One place to start analysis, scan history, and keep local policy and exports aligned.</p>
+            </>
+          )}
+          nav={(
+            <>
+              <ScreenButton active={screen === "dashboard"} label="Dashboard" detail="Live size posture" onPress={() => setScreen("dashboard")} />
+              <ScreenButton active={screen === "investigations"} label="Investigations" detail={`${investigations.length} saved cases`} onPress={() => setScreen("investigations")} />
+              <ScreenButton active={screen === "runs"} label="Runs" detail={`${runs.length} captured runs`} onPress={() => setScreen("runs")} />
+              <ScreenButton active={screen === "diff"} label="Compare" detail="Compare snapshots" onPress={() => setScreen("diff")} />
+              <ScreenButton active={screen === "history"} label="History" detail={`${timeline?.rows.length ?? 0} timeline rows`} onPress={() => setScreen("history")} />
+              <ScreenButton active={screen === "inspector"} label="Inspector" detail="Source-level drill-down" onPress={() => setScreen("inspector")} />
+              <ScreenButton active={screen === "plugins"} label="Plugins" detail={`${plugins.filter((item) => item.enabled).length} active plugins`} onPress={() => setScreen("plugins")} />
+              <ScreenButton active={screen === "packages"} label="Packages" detail={`${recentPackages.length} recent bundles`} onPress={() => setScreen("packages")} />
+              <ScreenButton active={screen === "settings"} label="Workspace" detail="Projects, policy, exports" onPress={() => setScreen("settings")} />
+            </>
+          )}
+          actions={(
+            <Card className="sidebar-card action-panel compact-action-panel">
+              <CardHeader className="section-header">Start analysis</CardHeader>
+              <CardBody className="panel-stack compact-panel-stack">
+                <div className="compact-input-row"><Input label="ELF path" value={request.elfPath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, elfPath: value || null }))} /><Button size="sm" variant="flat" onPress={() => void chooseFile("elfPath")}>Browse</Button></div>
+                <div className="compact-input-row"><Input label="Map path" value={request.mapPath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, mapPath: value || null }))} /><Button size="sm" variant="flat" onPress={() => void chooseFile("mapPath")}>Browse</Button></div>
+                <div className="compact-input-row"><Input label="Rule file" value={request.ruleFilePath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, ruleFilePath: value || null }))} /><Button size="sm" variant="flat" onPress={() => void chooseFile("ruleFilePath")}>Browse</Button></div>
+                <div className="compact-input-row"><Input label="Git repo" value={request.gitRepoPath ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, gitRepoPath: value || null }))} /><Button size="sm" variant="flat" onPress={() => void chooseFile("gitRepoPath", true)}>Browse</Button></div>
+                <Input label="Run label" value={request.label ?? ""} onValueChange={(value) => setRequest((current) => ({ ...current, label: value || null }))} />
+                <div className="button-row">
+                  <Button color="primary" isLoading={starting} onPress={() => void handleStartAnalysis()}>Analyze build</Button>
+                  <Button variant="bordered" isDisabled={!job} onPress={() => void handleCancelJob()}>Stop job</Button>
+                </div>
+              </CardBody>
+            </Card>
+          )}
+          context={(
+            <Card className="sidebar-card muted-card">
+              <CardHeader className="section-header">Repository context</CardHeader>
+              <CardBody className="panel-stack compact-text">
+                <div>Active project</div>
+                <div className="rail-context-value">{activeProjectName}</div>
+                <div className="rail-context-copy">{activeProjectState?.activeProject?.rootPath ?? "Choose a project in Workspace to reuse defaults."}</div>
+                <div>Default repo</div>
+                <code>{settings.defaultGitRepoPath ?? "-"}</code>
+                <div className="badge-row">
+                  {loadingRefs ? <Chip size="sm">loading refs</Chip> : null}
+                  {branches.slice(0, 4).map((item) => <Chip key={item.name} size="sm" variant="flat">{item.name}</Chip>)}
+                </div>
+                <div className="badge-row">
+                  {tags.slice(0, 4).map((item) => <Chip key={item.name} size="sm" variant="flat">{item.name}</Chip>)}
+                </div>
+              </CardBody>
+            </Card>
+          )}
+        />
+      )}
+      banner={(
+        <FwTopToolbar
+          eyebrow={screenMeta[screen].eyebrow}
+          title={screenMeta[screen].title}
+          description={screenMeta[screen].description}
+          chips={(
+            <>
               <Chip variant="flat">{activeProjectName}</Chip>
               <Chip variant="flat">{dashboardSummary?.latestHistoryItem?.gitRevision ?? latestRun?.gitRevision ?? "No commit"}</Chip>
               <Chip variant="flat">{dashboardSummary?.latestRun?.profile ?? latestRun?.profile ?? "profile -"}</Chip>
-            </div>
-          </section>
-
-          <section className="stage-metric-strip compact-stage-metric-strip">
-            {stageMetrics.map((item) => (
-              <article key={item.label} className="metric-slab">
-                <div className="metric-slab-label">{item.label}</div>
-                <div className="metric-slab-value">{item.value}</div>
-                <p>{item.detail}</p>
-              </article>
-            ))}
-          </section>
-
-          <Tabs selectedKey={screen} onSelectionChange={(key) => setScreen(key as ScreenKey)} variant="underlined" className="main-tabs">
+            </>
+          )}
+        />
+      )}
+      metrics={(
+        <section className="stage-metric-strip compact-stage-metric-strip">
+          {stageMetrics.map((item) => (
+            <article key={item.label} className="metric-slab">
+              <div className="metric-slab-label">{item.label}</div>
+              <div className="metric-slab-value">{item.value}</div>
+              <p>{item.detail}</p>
+            </article>
+          ))}
+        </section>
+      )}
+      footer={(
+        <>
+          <section className="message-strip">{note ? <Card className="message-card success"><CardBody>{note}</CardBody></Card> : null}{error ? <Card className="message-card error"><CardBody>{error}</CardBody></Card> : null}</section>
+          <FwCommandPalette open={commandPaletteOpen} items={commandPaletteItems} onClose={() => setCommandPaletteOpen(false)} />
+        </>
+      )}
+    >
+      <Tabs selectedKey={screen} onSelectionChange={(key) => setScreen(key as ScreenKey)} variant="underlined" className="main-tabs">
             <Tab key="dashboard" title="Dashboard">
               {busy ? <div className="loading-state"><Spinner label="Loading desktop state" /></div> : (
-                <div className="page-stack dashboard-dense-stack">
+                <HomePage>
                   <div className="button-row compact-wrap"><Button variant="flat" onPress={() => preparePackageFromContext("dashboard")}>Bundle dashboard</Button><Button variant="flat" onPress={() => void handleRunPlugin("timeline-signal-adapter")}>Run signal adapter</Button></div>
                   <section className="stats-grid dashboard-card-grid">
                     {dashboardSummary?.overviewCards.map((item) => <Card key={item.key} className={`stat-card metric-tone-${item.tone}`}><CardBody><div className="stat-card-content"><div className="stat-label">{item.title}</div><div className="stat-value">{item.value}</div>{item.subtitle ? <div className="stat-subtitle">{item.subtitle}</div> : null}</div></CardBody></Card>)}
@@ -1646,31 +1779,32 @@ export default function App() {
                     <Card className="feature-card"><CardHeader className="feature-header"><div><div className="section-header">Recent regressions</div><div className="section-subtitle">Latest warning-bearing or suspicious builds surfaced from desktop history.</div></div></CardHeader><CardBody className="panel-stack compact-text">{(dashboardSummary?.recentRegressions ?? []).map((item) => <div key={`${item.commit}-${item.key}`} className="regression-row"><div className="regression-row-top"><strong>{item.commit}</strong><Chip size="sm" variant="flat" color={item.confidence === "high" ? "danger" : "warning"}>{item.confidence}</Chip></div><div>{item.subject}</div><div className="regression-meta">{item.reasoning}</div></div>)}{(dashboardSummary?.recentRegressions ?? []).length === 0 ? <div className="empty-state compact-empty">No recent regressions detected.</div> : null}</CardBody></Card>
                     <Card className="feature-card"><CardHeader className="feature-header"><div><div className="section-header">Current job</div><div className="section-subtitle">Live analysis state from the local desktop service.</div></div></CardHeader><CardBody className="panel-stack compact-text"><div>Status: <strong>{job?.status ?? "idle"}</strong></div><div>Message: {job?.progressMessage ?? "No active job"}</div><div>Updated: {formatTime(job?.updatedAt)}</div><div>Run count: {runs.length}</div></CardBody></Card>
                   </section>
-                </div>
+                </HomePage>
               )}
             </Tab>
 
             <Tab key="investigations" title="Investigations">
-              <div className="page-stack">
-                <Card>
-                  <CardHeader className="section-header">Investigation workspace</CardHeader>
-                  <CardBody className="page-stack compact-text">
-                    <FwToolbar>
-                      <div className="form-grid investigation-toolbar-grid">
-                        <Input label="Title" value={investigationDraft.title} onValueChange={(value) => setInvestigationDraft((current) => ({ ...current, title: value }))} />
-                        <Input label="Baseline" value={investigationDraft.baselineRef.label} readOnly />
-                        <Input label="Target" value={investigationDraft.targetRef.label} readOnly />
-                      </div>
-                      <div className="button-row compact-wrap">
-                        <Button variant="flat" onPress={() => setInvestigationDraft((current) => ({ ...current, baselineRef: buildRunRef(compareLeftRunId), targetRef: buildRunRef(compareRightRunId || selectedRunId) }))}>Use current diff refs</Button>
-                        <Button color="primary" isLoading={savingInvestigation} onPress={() => void handleCreateInvestigation()}>New investigation</Button>
-                        <Button variant="flat" onPress={() => void handleCreateInvestigationFromDiff()} isDisabled={!compareLeftRunId || !compareRightRunId}>Create from diff</Button>
-                        <Button variant="flat" onPress={() => setShowArchivedInvestigations((current) => !current)}>{showArchivedInvestigations ? "Hide archived" : "Show archived"}</Button>
-                      </div>
-                    </FwToolbar>
-                  </CardBody>
-                </Card>
-                <section className="investigation-layout">
+              <InvestigationsPage
+                toolbar={(
+                  <Card>
+                    <CardHeader className="section-header">Investigation workspace</CardHeader>
+                    <CardBody className="page-stack compact-text">
+                      <FwToolbar>
+                        <div className="form-grid investigation-toolbar-grid">
+                          <Input label="Title" value={investigationDraft.title} onValueChange={(value) => setInvestigationDraft((current) => ({ ...current, title: value }))} />
+                          <Input label="Baseline" value={investigationDraft.baselineRef.label} readOnly />
+                          <Input label="Target" value={investigationDraft.targetRef.label} readOnly />
+                        </div>
+                        <div className="button-row compact-wrap">
+                          <Button variant="flat" onPress={() => setInvestigationDraft((current) => ({ ...current, baselineRef: buildRunRef(compareLeftRunId), targetRef: buildRunRef(compareRightRunId || selectedRunId) }))}>Use current diff refs</Button>
+                          <Button color="primary" isLoading={savingInvestigation} onPress={() => void handleCreateInvestigation()}>New investigation</Button>
+                          <Button variant="flat" onPress={() => void handleCreateInvestigationFromDiff()} isDisabled={!compareLeftRunId || !compareRightRunId}>Create from diff</Button>
+                        </div>
+                      </FwToolbar>
+                    </CardBody>
+                  </Card>
+                )}
+                list={(
                   <Card>
                     <CardHeader className="section-header">Investigation list</CardHeader>
                     <CardBody className="page-stack compact-text">
@@ -1688,7 +1822,7 @@ export default function App() {
                       {loadingInvestigations ? <FwLoadingState label="Loading investigations" detail="Refreshing saved cases and workspace state." /> : filteredInvestigations.length > 0 ? (
                         <FwDataTable columns={[{ key: "title", label: "Title" }, { key: "baseline", label: "Baseline" }, { key: "target", label: "Target" }, { key: "status", label: "Status" }, { key: "evidence", label: "Evidence" }, { key: "updated", label: "Updated" }]}>
                           {filteredInvestigations.map((item) => (
-                            <tr key={item.investigationId} className={selectedInvestigationId === item.investigationId ? "table-row-selected" : ""} onClick={() => setSelectedInvestigationId(item.investigationId)}>
+                            <tr key={item.investigationId} className={selectedInvestigationId === item.investigationId ? "table-row-selected" : ""} onClick={() => setSelectedInvestigationId(item.investigationId)} onDoubleClick={() => setInvestigationWorkspaceTab("overview")}>
                               <td><strong>{item.title}</strong></td>
                               <td>{shorten(item.baselineRef.label, 26)}</td>
                               <td>{shorten(item.targetRef.label, 26)}</td>
@@ -1698,79 +1832,38 @@ export default function App() {
                             </tr>
                           ))}
                         </FwDataTable>
-                      ) : <FwEmptyState title="No investigations yet" detail="Create one from the current diff, or start a blank case and pin evidence as you go." />}
+                      ) : <FwEmptyState title="No matching investigations" detail="Adjust search or filters, or create a fresh investigation from the current compare context." />}
                     </CardBody>
                   </Card>
+                )}
+                detail={(
                   <Card>
                     <CardHeader className="section-header">Investigation detail</CardHeader>
                     <CardBody className="page-stack compact-text">
                       {investigationDetail ? (
                         <>
-                          <div className="button-row compact-wrap">
-                            <Chip variant="flat">{investigationDetail.summary.status}</Chip>
-                            <Chip variant="flat">{investigationDetail.summary.baselineRef.label}</Chip>
-                            <Chip variant="flat">{investigationDetail.summary.targetRef.label}</Chip>
-                            <Button size="sm" variant="flat" onPress={() => void handleArchiveInvestigation(!investigationDetail.summary.archived)}>{investigationDetail.summary.archived ? "Restore" : "Archive"}</Button>
-                          </div>
-                          <div className="investigation-detail-grid">
-                            <FwInspectorPanel title="Overview" subtitle="Quiet summary for the current case.">
-                              <div className="three-column package-summary-grid">
-                                <article className="metric-slab plugin-slab"><div className="metric-slab-label">Evidence</div><div className="metric-slab-value">{investigationDetail.evidence.length}</div><p>Pinned references and snapshots.</p></article>
-                                <article className="metric-slab plugin-slab"><div className="metric-slab-label">Notes</div><div className="metric-slab-value">{investigationDetail.notes.length}</div><p>Working context and follow-ups.</p></article>
-                                <article className="metric-slab plugin-slab"><div className="metric-slab-label">Verdict</div><div className="metric-slab-value">{investigationDetail.verdict?.verdictType ?? "unset"}</div><p>{investigationDetail.verdict?.summary ?? "No structured conclusion yet."}</p></article>
-                              </div>
-                            </FwInspectorPanel>
-                            <FwInspectorPanel title="Evidence" subtitle="Stable references with snapshots captured from diff, regression, or inspector views.">
-                              <div className="button-row compact-wrap">
-                                <Button size="sm" variant="flat" onPress={() => void handlePinRegressionEvidence()} isDisabled={!regressionResult}>Pin regression</Button>
-                                <Button size="sm" variant="flat" onPress={() => void handlePinInspectorEvidence()} isDisabled={!inspectorSelection}>Pin inspector item</Button>
-                              </div>
-                              {investigationDetail.evidence.length > 0 ? (
-                                <FwDataTable columns={[{ key: "type", label: "Type" }, { key: "title", label: "Title" }, { key: "delta", label: "Delta" }, { key: "severity", label: "Severity" }, { key: "source", label: "Source" }, { key: "added", label: "Added" }, { key: "action", label: "" }]}>
-                                  {investigationDetail.evidence.map((item) => (
-                                    <tr key={item.evidenceId}>
-                                      <td>{item.evidenceType}</td>
-                                      <td>{item.title}</td>
-                                      <td className={deltaTone(item.delta)}>{signedOrDash(item.delta)}</td>
-                                      <td><Chip size="sm" variant="flat">{item.severity}</Chip></td>
-                                      <td>{item.sourceView}</td>
-                                      <td>{formatTime(item.createdAt)}</td>
-                                      <td><Button size="sm" variant="light" onPress={() => void handleRemoveInvestigationEvidence(item.evidenceId)}>Remove</Button></td>
-                                    </tr>
-                                  ))}
-                                </FwDataTable>
-                              ) : <FwEmptyState title="No evidence pinned" detail="Pin section diffs, regression candidates, or inspector items to build the case." />}
-                            </FwInspectorPanel>
-                            <FwInspectorPanel title="Timeline" subtitle="The investigation keeps a readable log of what changed and why.">
-                              {investigationDetail.timeline.length > 0 ? <FwTimeline events={investigationDetail.timeline} /> : <FwEmptyState title="No timeline events yet" detail="Events appear automatically as you pin evidence, add notes, and export packages." />}
-                            </FwInspectorPanel>
-                            <FwInspectorPanel title="Verdict" subtitle="Store the current conclusion and what still needs follow-up.">
-                              <FwVerdictEditor value={investigationVerdictDraft} onChange={setInvestigationVerdictDraft} onSave={() => void handleSaveInvestigationVerdict()} />
-                            </FwInspectorPanel>
-                            <FwInspectorPanel title="Notes and package" subtitle="Capture working notes, then export a shareable bundle for someone else to reopen.">
-                              <Textarea minRows={4} label="Add note" value={investigationNoteDraft} onValueChange={setInvestigationNoteDraft} />
-                              <div className="button-row compact-wrap">
-                                <Button variant="flat" onPress={() => void handleAddInvestigationNote()}>Add note</Button>
-                                <Button variant="flat" onPress={() => void choosePackageDestination()}>Choose package folder</Button>
-                              </div>
-                              <Input label="Package name" value={investigationExportDraft.packageName} onValueChange={(value) => setInvestigationExportDraft((current) => ({ ...current, packageName: value }))} />
-                              <Input label="Destination" value={investigationExportDraft.destinationPath} onValueChange={(value) => setInvestigationExportDraft((current) => ({ ...current, destinationPath: value }))} />
-                              <div className="badge-row compact-wrap">
-                                <button type="button" className={`chip-button ${investigationExportDraft.includeNotes ? "active-chip" : ""}`} onClick={() => setInvestigationExportDraft((current) => ({ ...current, includeNotes: !current.includeNotes }))}>notes</button>
-                                <button type="button" className={`chip-button ${investigationExportDraft.includeTimeline ? "active-chip" : ""}`} onClick={() => setInvestigationExportDraft((current) => ({ ...current, includeTimeline: !current.includeTimeline }))}>timeline</button>
-                                <button type="button" className={`chip-button ${investigationExportDraft.includeVerdict ? "active-chip" : ""}`} onClick={() => setInvestigationExportDraft((current) => ({ ...current, includeVerdict: !current.includeVerdict }))}>verdict</button>
-                                <button type="button" className={`chip-button ${investigationExportDraft.includeEvidenceSnapshots ? "active-chip" : ""}`} onClick={() => setInvestigationExportDraft((current) => ({ ...current, includeEvidenceSnapshots: !current.includeEvidenceSnapshots }))}>evidence</button>
-                              </div>
-                              <Button color="primary" isLoading={packaging} onPress={() => void handleExportSelectedInvestigationPackage()}>Export package</Button>
-                              {investigationDetail.notes.length > 0 ? <ul className="warning-list">{investigationDetail.notes.map((item) => <li key={item.noteId}>{item.body}</li>)}</ul> : null}
-                            </FwInspectorPanel>
-                          </div>
+                          <FwDetailHeader
+                            title={investigationDetail.summary.title}
+                            subtitle={`Updated ${formatTime(investigationDetail.summary.updatedAt)}`}
+                            status={investigationDetail.summary.status}
+                            chips={[investigationDetail.summary.baselineRef.label, investigationDetail.summary.targetRef.label]}
+                            actions={<Button size="sm" variant="flat" onPress={() => void handleArchiveInvestigation(!investigationDetail.summary.archived)}>{investigationDetail.summary.archived ? "Restore" : "Archive"}</Button>}
+                          />
+                          <Tabs selectedKey={investigationWorkspaceTab} onSelectionChange={(key) => setInvestigationWorkspaceTab(key as InvestigationWorkspaceTab)} variant="underlined" className="sub-tabs">
+                            <Tab key="overview" title="Overview" />
+                            <Tab key="evidence" title="Evidence" />
+                            <Tab key="compare" title="Compare" />
+                            <Tab key="timeline" title="Timeline" />
+                            <Tab key="verdict" title="Verdict" />
+                            <Tab key="package" title="Package" />
+                          </Tabs>
+                          <FwSplitWorkspace primary={renderInvestigationWorkspacePrimary()} inspector={renderInvestigationWorkspaceInspector()} />
                         </>
                       ) : <FwEmptyState title="No investigation selected" detail="Select an investigation from the list, or create one from the current diff." />}
                     </CardBody>
                   </Card>
-                </section>
-              </div>
+                )}
+              />
             </Tab>
 
             <Tab key="runs" title="Runs">
@@ -1781,10 +1874,10 @@ export default function App() {
             </Tab>
 
             <Tab key="diff" title="Diff">
-              <div className="page-stack">
+              <ComparePage>
                 <Card><CardHeader className="section-header">Run Compare</CardHeader><CardBody className="form-grid"><div><label>Left run</label><select className="native-select" value={compareLeftRunId ?? ""} onChange={(event) => setCompareLeftRunId(Number(event.target.value) || null)}>{runs.map((run) => <option key={run.runId} value={run.runId}>#{run.runId} {run.label || run.gitRevision || "run"}</option>)}</select></div><div><label>Right run</label><select className="native-select" value={compareRightRunId ?? ""} onChange={(event) => setCompareRightRunId(Number(event.target.value) || null)}>{runs.map((run) => <option key={run.runId} value={run.runId}>#{run.runId} {run.label || run.gitRevision || "run"}</option>)}</select></div><div className="button-row"><Button color="primary" isLoading={loadingCompare} onPress={() => void handleRunCompare()}>Compare runs</Button></div></CardBody></Card>
                 {compareResult ? <div className="two-column"><Card><CardHeader className="section-header">Summary</CardHeader><CardBody className="panel-stack compact-text"><div>Left: {compareResult.leftRun.label || compareResult.leftRun.gitRevision || `#${compareResult.leftRun.runId}`}</div><div>Right: {compareResult.rightRun.label || compareResult.rightRun.gitRevision || `#${compareResult.rightRun.runId}`}</div><div>ROM delta: <span className={deltaTone(compareResult.summary.romDelta)}>{signed(compareResult.summary.romDelta)}</span></div><div>RAM delta: <span className={deltaTone(compareResult.summary.ramDelta)}>{signed(compareResult.summary.ramDelta)}</span></div><div>Warning delta: <span className={deltaTone(compareResult.summary.warningDelta)}>{signed(compareResult.summary.warningDelta)}</span></div><div className="button-row"><Button size="sm" variant="flat" onPress={() => openDiffInspector(compareResult.leftRun.runId, compareResult.rightRun.runId)}>Inspect diff</Button></div></CardBody></Card><Card><CardHeader className="section-header">Top deltas</CardHeader><CardBody className="page-stack compact-text"><DeltaList title="Sections" items={compareResult.sectionDeltas} /><DeltaList title="Objects" items={compareResult.objectDeltas} /><DeltaList title="Symbols" items={compareResult.symbolDeltas} /></CardBody></Card></div> : <div className="empty-state">Choose two runs to compare.</div>}
-              </div>
+              </ComparePage>
             </Tab>
 
             <Tab key="history" title="History">
@@ -1871,7 +1964,7 @@ export default function App() {
             </Tab>
 
             <Tab key="packages" title="Packages">
-              <div className="page-stack">
+              <PackagesPage>
                 <section className="package-layout">
                   <Card>
                     <CardHeader className="section-header">Create investigation package</CardHeader>
@@ -1939,7 +2032,7 @@ export default function App() {
                     ) : <div className="empty-state">Create or open a package to inspect its manifest and captured summaries.</div>}
                   </CardBody>
                 </Card>
-              </div>
+              </PackagesPage>
             </Tab>
 
             <Tab key="settings" title="Settings">
@@ -2000,13 +2093,8 @@ export default function App() {
                 </Card>
               </div>
             </Tab>
-          </Tabs>
-
-          <section className="message-strip">{note ? <Card className="message-card success"><CardBody>{note}</CardBody></Card> : null}{error ? <Card className="message-card error"><CardBody>{error}</CardBody></Card> : null}</section>
-        </main>
-      </div>
-      <FwCommandPalette open={commandPaletteOpen} items={commandPaletteItems} onClose={() => setCommandPaletteOpen(false)} />
-    </div>
+      </Tabs>
+    </FwAppShell>
   );
 }
 
