@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { Button, Card, CardBody, CardHeader, Chip, Input, Navbar, NavbarBrand, Spinner, Tab, Tabs, Textarea } from "@heroui/react";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -9,6 +9,14 @@ import { FwInspectorPanel } from "./components/FwInspectorPanel";
 import { FwToolbar } from "./components/FwToolbar";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MetricLineChart } from "./components/MetricLineChart";
+import { parseDesktopRoute, buildDesktopHash, type InvestigationWorkspaceTab } from "./app/routes";
+import { FwCommandPalette } from "./ui/overlays/FwCommandPalette";
+import { FwSearchField } from "./ui/forms/FwSearchField";
+import { FwFilterBar } from "./ui/forms/FwFilterBar";
+import { FwLoadingState } from "./ui/feedback/FwLoadingState";
+import { FwErrorState } from "./ui/feedback/FwErrorState";
+import { FwTimeline } from "./ui/workspace/FwTimeline";
+import { FwVerdictEditor } from "./ui/workspace/FwVerdictEditor";
 import {
   addInvestigationEvidence,
   addInvestigationNote,
@@ -310,6 +318,10 @@ export default function App() {
   const [investigationVerdictDraft, setInvestigationVerdictDraft] = useState<Omit<InvestigationVerdict, "investigationId" | "updatedAt">>(emptyVerdictDraft);
   const [investigationExportDraft, setInvestigationExportDraft] = useState<ExportInvestigationPackageRequest>(defaultInvestigationPackageExport);
   const [showArchivedInvestigations, setShowArchivedInvestigations] = useState(false);
+  const [investigationSearch, setInvestigationSearch] = useState("");
+  const [investigationStatusFilter, setInvestigationStatusFilter] = useState<"all" | "open" | "archived">("all");
+  const [investigationWorkspaceTab, setInvestigationWorkspaceTab] = useState<InvestigationWorkspaceTab>("overview");
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [compareLeftRunId, setCompareLeftRunId] = useState<number | null>(null);
   const [compareRightRunId, setCompareRightRunId] = useState<number | null>(null);
   const [compareResult, setCompareResult] = useState<RunCompareResult | null>(null);
@@ -342,54 +354,70 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const hash = window.location.hash.replace(/^#/, "");
-    const [first, second, third] = hash.split("/");
-    if (first === "runs" && second) {
-      setScreen("runs");
-      const parsed = Number(second);
-      if (Number.isFinite(parsed)) {
-        setSelectedRunId(parsed);
-      }
-    } else if (first === "diff") {
-      setScreen("diff");
-      const left = Number(second);
-      const right = Number(third);
-      if (Number.isFinite(left)) {
-        setCompareLeftRunId(left);
-      }
-      if (Number.isFinite(right)) {
-        setCompareRightRunId(right);
-      }
-    } else if (first === "investigations") {
-      setScreen("investigations");
-      const parsed = Number(second);
-      if (Number.isFinite(parsed)) {
-        setSelectedInvestigationId(parsed);
-      }
-    } else if (first === "history") {
-      setScreen("history");
-    } else if (first === "inspector") {
-      setScreen("inspector");
-    } else if (first === "plugins") {
-      setScreen("plugins");
-    } else if (first === "packages") {
-      setScreen("packages");
-    } else if (first === "settings") {
-      setScreen("settings");
+    const route = parseDesktopRoute(window.location.hash);
+    switch (route.screen) {
+      case "home":
+        setScreen("dashboard");
+        break;
+      case "runs":
+        setScreen("runs");
+        if (route.runId) {
+          setSelectedRunId(route.runId);
+        }
+        break;
+      case "compare":
+        setScreen("diff");
+        if (route.leftRunId) {
+          setCompareLeftRunId(route.leftRunId);
+        }
+        if (route.rightRunId) {
+          setCompareRightRunId(route.rightRunId);
+        }
+        break;
+      case "investigations":
+        setScreen("investigations");
+        if (route.investigationId) {
+          setSelectedInvestigationId(route.investigationId);
+        }
+        if (route.tab) {
+          setInvestigationWorkspaceTab(route.tab);
+        }
+        break;
+      case "history":
+      case "inspector":
+      case "plugins":
+      case "packages":
+      case "settings":
+        setScreen(route.screen);
+        break;
     }
   }, []);
 
   useEffect(() => {
-    if (screen === "runs" && selectedRunId) {
-      window.location.hash = `runs/${selectedRunId}`;
-    } else if (screen === "investigations" && selectedInvestigationId) {
-      window.location.hash = `investigations/${selectedInvestigationId}`;
-    } else if (screen === "diff" && compareLeftRunId && compareRightRunId) {
-      window.location.hash = `diff/${compareLeftRunId}/${compareRightRunId}`;
-    } else {
-      window.location.hash = screen;
+    let nextHash = "home";
+    switch (screen) {
+      case "dashboard":
+        nextHash = buildDesktopHash({ screen: "home" });
+        break;
+      case "runs":
+        nextHash = buildDesktopHash({ screen: "runs", runId: selectedRunId });
+        break;
+      case "investigations":
+        nextHash = buildDesktopHash({ screen: "investigations", investigationId: selectedInvestigationId, tab: investigationWorkspaceTab });
+        break;
+      case "diff":
+        nextHash = buildDesktopHash({ screen: "compare", leftRunId: compareLeftRunId, rightRunId: compareRightRunId });
+        break;
+      case "history":
+      case "inspector":
+      case "plugins":
+      case "packages":
+      case "settings":
+        nextHash = buildDesktopHash({ screen });
+        break;
     }
-  }, [screen, selectedRunId, selectedInvestigationId, compareLeftRunId, compareRightRunId]);
+    window.location.hash = nextHash;
+  }, [screen, selectedRunId, selectedInvestigationId, compareLeftRunId, compareRightRunId, investigationWorkspaceTab]);
 
   useEffect(() => {
     let disposed = false;
@@ -540,6 +568,17 @@ export default function App() {
       disposed = true;
     };
   }, [selectedPluginId]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setCommandPaletteOpen((current) => !current);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   useEffect(() => {
     void refreshInvestigations(selectedInvestigationId);
@@ -1310,6 +1349,47 @@ export default function App() {
   const romRamTrend = dashboardSummary?.recentTrends.find((series) => series.key === "rom-ram") ?? dashboardSummary?.recentTrends[0] ?? null;
   const warningTrend = dashboardSummary?.recentTrends.find((series) => series.key === "warnings") ?? dashboardSummary?.recentTrends[1] ?? null;
   const activeProjectName = activeProjectState?.activeProject?.name ?? "No active project";
+  const filteredInvestigations = useMemo(() => investigations.filter((item) => {
+    const matchesSearch = !investigationSearch.trim() || `${item.title} ${item.baselineRef.label} ${item.targetRef.label}`.toLowerCase().includes(investigationSearch.trim().toLowerCase());
+    const matchesStatus = investigationStatusFilter === "all"
+      ? true
+      : investigationStatusFilter === "archived"
+        ? item.archived
+        : item.status === "open" && !item.archived;
+    return matchesSearch && matchesStatus;
+  }), [investigationSearch, investigationStatusFilter, investigations]);
+  const commandPaletteItems = useMemo(() => {
+    const screenItems = [
+      { id: "cmd-home", title: "Home", subtitle: "Launch surface and dashboard", group: "Navigate", onSelect: () => setScreen("dashboard") },
+      { id: "cmd-investigations", title: "Investigations", subtitle: "Open the investigation list", group: "Navigate", onSelect: () => setScreen("investigations") },
+      { id: "cmd-compare", title: "Compare", subtitle: "Jump to run comparison", group: "Navigate", onSelect: () => setScreen("diff") },
+      { id: "cmd-history", title: "History", subtitle: "Review commit timeline and regressions", group: "Navigate", onSelect: () => setScreen("history") },
+      { id: "cmd-packages", title: "Packages", subtitle: "Open package export and reopen flows", group: "Navigate", onSelect: () => setScreen("packages") },
+      { id: "cmd-settings", title: "Settings", subtitle: "Project, policy, and export defaults", group: "Navigate", onSelect: () => setScreen("settings") },
+    ];
+    const investigationItems = investigations.slice(0, 10).map((item) => ({
+      id: `investigation-${item.investigationId}`,
+      title: item.title,
+      subtitle: `${item.baselineRef.label} -> ${item.targetRef.label}`,
+      group: "Investigations",
+      onSelect: () => {
+        setSelectedInvestigationId(item.investigationId);
+        setInvestigationWorkspaceTab("overview");
+        setScreen("investigations");
+      },
+    }));
+    const packageItems = recentPackages.slice(0, 6).map((item) => ({
+      id: `package-${item.packagePath}`,
+      title: item.packageName,
+      subtitle: item.packagePath,
+      group: "Packages",
+      onSelect: () => {
+        void handleOpenPackage(item.packagePath);
+        setScreen("packages");
+      },
+    }));
+    return [...screenItems, ...investigationItems, ...packageItems];
+  }, [investigations, recentPackages]);
   const screenMeta: Record<ScreenKey, { eyebrow: string; title: string; description: string }> = {
     dashboard: {
       eyebrow: "Overview",
@@ -1463,6 +1543,7 @@ export default function App() {
           </div>
         </NavbarBrand>
         <div className="topbar-meta">
+          <Button size="sm" variant="flat" onPress={() => setCommandPaletteOpen(true)}>Search / Jump</Button>
           <Chip variant="flat">CLI {appInfo?.cliVersion ?? "-"}</Chip>
           <Chip variant="flat">History {timeline?.repoId ? "git-aware" : "local"}</Chip>
         </div>
@@ -1593,9 +1674,20 @@ export default function App() {
                   <Card>
                     <CardHeader className="section-header">Investigation list</CardHeader>
                     <CardBody className="page-stack compact-text">
-                      {loadingInvestigations ? <div className="loading-state"><Spinner label="Loading investigations" /></div> : investigations.length > 0 ? (
+                      <FwFilterBar trailing={<Button variant="flat" onPress={() => setShowArchivedInvestigations((current) => !current)}>{showArchivedInvestigations ? "Hide archived" : "Show archived"}</Button>}>
+                        <FwSearchField label="Search" placeholder="Search title, baseline, or target" value={investigationSearch} onValueChange={setInvestigationSearch} />
+                        <div>
+                          <label>Status</label>
+                          <select className="native-select" value={investigationStatusFilter} onChange={(event) => setInvestigationStatusFilter(event.target.value as "all" | "open" | "archived")}>
+                            <option value="all">all</option>
+                            <option value="open">open</option>
+                            <option value="archived">archived</option>
+                          </select>
+                        </div>
+                      </FwFilterBar>
+                      {loadingInvestigations ? <FwLoadingState label="Loading investigations" detail="Refreshing saved cases and workspace state." /> : filteredInvestigations.length > 0 ? (
                         <FwDataTable columns={[{ key: "title", label: "Title" }, { key: "baseline", label: "Baseline" }, { key: "target", label: "Target" }, { key: "status", label: "Status" }, { key: "evidence", label: "Evidence" }, { key: "updated", label: "Updated" }]}>
-                          {investigations.map((item) => (
+                          {filteredInvestigations.map((item) => (
                             <tr key={item.investigationId} className={selectedInvestigationId === item.investigationId ? "table-row-selected" : ""} onClick={() => setSelectedInvestigationId(item.investigationId)}>
                               <td><strong>{item.title}</strong></td>
                               <td>{shorten(item.baselineRef.label, 26)}</td>
@@ -1650,19 +1742,10 @@ export default function App() {
                               ) : <FwEmptyState title="No evidence pinned" detail="Pin section diffs, regression candidates, or inspector items to build the case." />}
                             </FwInspectorPanel>
                             <FwInspectorPanel title="Timeline" subtitle="The investigation keeps a readable log of what changed and why.">
-                              {investigationDetail.timeline.length > 0 ? <ul className="warning-list">{investigationDetail.timeline.map((item) => <li key={item.eventId}><strong>{item.eventType}</strong><div>{formatTime(item.createdAt)}</div></li>)}</ul> : <FwEmptyState title="No timeline events yet" detail="Events appear automatically as you pin evidence, add notes, and export packages." />}
+                              {investigationDetail.timeline.length > 0 ? <FwTimeline events={investigationDetail.timeline} /> : <FwEmptyState title="No timeline events yet" detail="Events appear automatically as you pin evidence, add notes, and export packages." />}
                             </FwInspectorPanel>
                             <FwInspectorPanel title="Verdict" subtitle="Store the current conclusion and what still needs follow-up.">
-                              <div className="panel-stack compact-text">
-                                <div className="form-grid-inline">
-                                  <div><label>Verdict type</label><select className="native-select" value={investigationVerdictDraft.verdictType} onChange={(event) => setInvestigationVerdictDraft((current) => ({ ...current, verdictType: event.target.value }))}><option value="code change">code change</option><option value="compiler/codegen change">compiler/codegen change</option><option value="linker layout change">linker layout change</option><option value="dependency update">dependency update</option><option value="build/config change">build/config change</option><option value="mixed">mixed</option><option value="unknown">unknown</option></select></div>
-                                  <Input label="Confidence" type="number" value={String(investigationVerdictDraft.confidence)} onValueChange={(value) => setInvestigationVerdictDraft((current) => ({ ...current, confidence: Number(value) || 0 }))} />
-                                </div>
-                                <Textarea minRows={3} label="Summary" value={investigationVerdictDraft.summary} onValueChange={(value) => setInvestigationVerdictDraft((current) => ({ ...current, summary: value }))} />
-                                <Textarea minRows={3} label="Unresolved questions" value={investigationVerdictDraft.unresolvedQuestions} onValueChange={(value) => setInvestigationVerdictDraft((current) => ({ ...current, unresolvedQuestions: value }))} />
-                                <Textarea minRows={3} label="Next actions" value={investigationVerdictDraft.nextActions} onValueChange={(value) => setInvestigationVerdictDraft((current) => ({ ...current, nextActions: value }))} />
-                                <Button color="primary" onPress={() => void handleSaveInvestigationVerdict()}>Save verdict</Button>
-                              </div>
+                              <FwVerdictEditor value={investigationVerdictDraft} onChange={setInvestigationVerdictDraft} onSave={() => void handleSaveInvestigationVerdict()} />
                             </FwInspectorPanel>
                             <FwInspectorPanel title="Notes and package" subtitle="Capture working notes, then export a shareable bundle for someone else to reopen.">
                               <Textarea minRows={4} label="Add note" value={investigationNoteDraft} onValueChange={setInvestigationNoteDraft} />
@@ -1922,6 +2005,7 @@ export default function App() {
           <section className="message-strip">{note ? <Card className="message-card success"><CardBody>{note}</CardBody></Card> : null}{error ? <Card className="message-card error"><CardBody>{error}</CardBody></Card> : null}</section>
         </main>
       </div>
+      <FwCommandPalette open={commandPaletteOpen} items={commandPaletteItems} onClose={() => setCommandPaletteOpen(false)} />
     </div>
   );
 }
@@ -1981,3 +2065,4 @@ function MetricList({ title, items }: { title: string; items: Array<{ name: stri
 function DeltaList({ title, items }: { title: string; items: Array<{ name: string; delta: number }> }) {
   return <div><strong>{title}</strong><ul className="metric-list">{items.length === 0 ? <li><span>No data</span><span>-</span></li> : null}{items.slice(0, 6).map((item) => <li key={item.name}><span>{item.name}</span><span className={deltaTone(item.delta)}>{signed(item.delta)}</span></li>)}</ul></div>;
 }
+
